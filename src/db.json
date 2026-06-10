@@ -1,0 +1,350 @@
+{
+  "users": [
+    {
+      "name": "عصفور",
+      "role": "مدير",
+      "pass": "14014",
+      "active": "نعم",
+      "email": "asfour@friendplus.com",
+      "perms": "كاملة"
+    },
+    {
+      "name": "ابو ياسين",
+      "role": "مدير",
+      "pass": "361991",
+      "active": "نعم",
+      "email": "abuyassin@friendplus.com",
+      "perms": "كاملة"
+    },
+    {
+      "name": "ابو خديجه",
+      "role": "مشرف",
+      "pass": "14014",
+      "active": "نعم",
+      "email": "abukhadija@friendplus.com",
+      "perms": "توزيع ومتابعة"
+    },
+    {
+      "name": "أحمد المرتجعات",
+      "role": "مسؤول مرتجعات",
+      "pass": "222222",
+      "active": "نعم",
+      "email": "returns@friendplus.com",
+      "perms": "متابعة المرتجعات"
+    },
+    {
+      "name": "المحاسب أحمد",
+      "role": "محاسب",
+      "pass": "111111",
+      "active": "نعم",
+      "email": "accounting@friendplus.com",
+      "perms": "خزنة وحسابات وتقارير مالية"
+    },
+    {
+      "name": "محمد حمدى",
+      "role": "مندوب",
+      "pass": "500500",
+      "active": "نعم",
+      "email": "mohamed@friendplus.com",
+      "perms": "أوردرات المندوب وتحديث الحالات"
+    },
+    {
+      "name": "زياد",
+      "role": "مندوب",
+      "pass": "500500",
+      "active": "نعم",
+      "email": "ziad@friendplus.com",
+      "perms": "أوردرات المندوب وتحديث الحالات"
+    },
+    {
+      "name": "محل الأناقة",
+      "role": "مورد",
+      "pass": "333333",
+      "active": "نعم",
+      "email": "elegance@friendplus.com",
+      "perms": "إضافة أوردرات ورفع كشوفات"
+    },
+    {
+      "name": "صفوت العمليات",
+      "role": "موظف عمليات",
+      "pass": "444444",
+      "active": "نعم",
+      "email": "safwat@friendplus.com",
+      "perms": "متابعة حالات فقط"
+    }
+  ],
+  "couriers": [
+    {
+      "name": "محمد حمدى",
+      "phone": "01112345678",
+      "commission": 25,
+      "salary": 3000,
+      "region": "القاهرة"
+    },
+    {
+      "name": "زياد",
+      "phone": "01212345678",
+      "commission": 25,
+      "salary": 3000,
+      "region": "الجيزة"
+    }
+  ],
+  "suppliers": [
+    {
+      "name": "محل الأناقة",
+      "phone": "01055556666",
+      "price": 65,
+      "notes": "ملابس وموضة"
+    },
+    {
+      "name": "إلكترونيات السلام",
+      "phone": "01544443333",
+      "price": 60,
+      "notes": "أجهزة إلكترونية وإكسسوارات"
+    }
+  ],
+  "orders": [
+    {
+      "tracking": "FP-1001-26",
+      "createdAt": "2026-06-10 10:00",
+      "updatedAt": "2026-06-10 12:00",
+      "orderDate": "2026-06-10",
+      "supplier": "محل الأناقة",
+      "customer": "محسن علي",
+      "phone": "01011112222",
+      "phone2": "",
+      "gov": "القاهرة",
+      "region": "المعادي",
+      "address": "شارع 9 عمارة 4 أ",
+      "prodPrice": 200,
+      "shipPrice": 65,
+      "totalCOD": 265,
+      "shipCost": 65,
+      "courier": "محمد حمدى",
+      "status": "تم التسليم",
+      "notes": "تم التسليف بنجاح والتحصيل",
+      "delivDate": "2026-06-10 12:00",
+      "retDate": "",
+      "addedBy": "محل الأناقة",
+      "commission": 25,
+      "returnShippingType": "",
+      "returnQueueStatus": "",
+      "returnQueueAgent": ""
+    },
+    {
+      "tracking": "FP-1002-26",
+      "createdAt": "2026-06-10 10:15",
+      "updatedAt": "2026-06-10 12:30",
+      "orderDate": "2026-06-10",
+      "supplier": "محل الأناقة",
+      "customer": "خالد أحمد",
+      "phone": "01122223333",
+      "phone2": "",
+      "gov": "الجيزة",
+      "region": "المهندسين",
+      "address": "شارع البطل أحمد عبد العزيز",
+      "prodPrice": 300,
+      "shipPrice": 65,
+      "totalCOD": 365,
+      "shipCost": 65,
+      "courier": "زياد",
+      "status": "مرتجع",
+      "notes": "العميل دفع الشحن فقط ورجع المنتج",
+      "delivDate": "",
+      "retDate": "2026-06-10 12:30",
+      "addedBy": "محل الأناقة",
+      "commission": 25,
+      "returnShippingType": "paid",
+      "returnQueueStatus": "جاهز للتسليم للمورد",
+      "returnQueueAgent": "أحمد المرتجعات"
+    },
+    {
+      "tracking": "FP-1003-26",
+      "createdAt": "2026-06-10 10:30",
+      "updatedAt": "2026-06-10 10:30",
+      "orderDate": "2026-06-10",
+      "supplier": "محل الأناقة",
+      "customer": "عمر مصطفى",
+      "phone": "01233334444",
+      "phone2": "",
+      "gov": "الإسكندرية",
+      "region": "سموحة",
+      "address": "بجوار نادي سموحة",
+      "prodPrice": 150,
+      "shipPrice": 70,
+      "totalCOD": 220,
+      "shipCost": 70,
+      "courier": "",
+      "status": "جديد",
+      "notes": "يحتاج إسناد لمندوب",
+      "delivDate": "",
+      "retDate": "",
+      "addedBy": "عصفور",
+      "commission": 0,
+      "returnShippingType": "",
+      "returnQueueStatus": "",
+      "returnQueueAgent": ""
+    },
+    {
+      "tracking": "FP-1004-26",
+      "createdAt": "2026-06-10 11:00",
+      "updatedAt": "2026-06-10 11:15",
+      "orderDate": "2026-06-10",
+      "supplier": "إلكترونيات السلام",
+      "customer": "محمود حسن",
+      "phone": "01544445555",
+      "phone2": "",
+      "gov": "الشرقية",
+      "region": "الزقازيق",
+      "address": "شارع القومية",
+      "prodPrice": 400,
+      "shipPrice": 75,
+      "totalCOD": 475,
+      "shipCost": 75,
+      "courier": "محمد حمدى",
+      "status": "خارج مع المندوب",
+      "notes": "خارج للتسليم اليوم",
+      "delivDate": "",
+      "retDate": "",
+      "addedBy": "عصفور",
+      "commission": 25,
+      "returnShippingType": "",
+      "returnQueueStatus": "",
+      "returnQueueAgent": ""
+    },
+    {
+      "tracking": "FP-1005-26",
+      "createdAt": "2026-06-10 11:30",
+      "updatedAt": "2026-06-10 11:45",
+      "orderDate": "2026-06-10",
+      "supplier": "محل الأناقة",
+      "customer": "سعيد عبد الله",
+      "phone": "01077778888",
+      "phone2": "",
+      "gov": "القليوبية",
+      "region": "بنها",
+      "address": "بجوار محطة القطار",
+      "prodPrice": 250,
+      "shipPrice": 65,
+      "totalCOD": 315,
+      "shipCost": 65,
+      "courier": "محمد حمدى",
+      "status": "مرتجع",
+      "notes": "العميل رفض الاستلام ورفض دفع الشحن",
+      "delivDate": "",
+      "retDate": "2026-06-10 11:45",
+      "addedBy": "محل الأناقة",
+      "commission": 0,
+      "returnShippingType": "unpaid",
+      "returnQueueStatus": "مرتجع جديد",
+      "returnQueueAgent": "أحمد المرتجعات"
+    }
+  ],
+  "expenses": [
+    {
+      "date": "2026-06-10 09:00",
+      "cat": "إيجار",
+      "desc": "إيجار مكتب الفرع الرئيسي",
+      "amount": 1500,
+      "by": "المحاسب أحمد"
+    }
+  ],
+  "cashbox": [
+    {
+      "date": "2026-06-10 08:00",
+      "desc": "رأس مال ابتدائي لتسوية الخزنة",
+      "type": "وارد",
+      "amount": 10000,
+      "ref": "CAP-001",
+      "addedBy": "المحاسب أحمد"
+    },
+    {
+      "date": "2026-06-10 09:10",
+      "desc": "تحويل إلى حساب صادر لدفع المصاريف",
+      "type": "صادر",
+      "amount": 1500,
+      "ref": "EXP-REV-01",
+      "addedBy": "المحاسب أحمد"
+    }
+  ],
+  "statusHistory": [
+    {
+      "tracking": "FP-1001-26",
+      "oldStatus": "جديد",
+      "newStatus": "تم التسليم",
+      "updatedBy": "محمد حمدى",
+      "dateTime": "2026-06-10 12:00"
+    },
+    {
+      "tracking": "FP-1002-26",
+      "oldStatus": "جديد",
+      "newStatus": "مرتجع",
+      "updatedBy": "زياد",
+      "dateTime": "2026-06-10 12:30"
+    },
+    {
+      "tracking": "FP-1005-26",
+      "oldStatus": "جديد",
+      "newStatus": "مرتجع",
+      "updatedBy": "محمد حمدى",
+      "dateTime": "2026-06-10 11:45"
+    }
+  ],
+  "supplierLedger": [
+    {
+      "supplier": "محل الأناقة",
+      "date": "2026-06-10 10:00",
+      "type": "أوردر مستلم",
+      "tracking": "FP-1001-26",
+      "amount": 200,
+      "desc": "حق المورد لسعر المنتج للأوردر FP-1001-26"
+    },
+    {
+      "supplier": "محل الأناقة",
+      "date": "2026-06-10 11:45",
+      "type": "مرتجع",
+      "tracking": "FP-1005-26",
+      "amount": -250,
+      "desc": "تخفيض مرتجع FP-1005-26 رفض دفع الشحن"
+    },
+    {
+      "supplier": "محل الأناقة",
+      "date": "2026-06-10 12:30",
+      "type": "مرتجع",
+      "tracking": "FP-1002-26",
+      "amount": -300,
+      "desc": "تخفيض مرتجع FP-1002-26 دفع الشحن فقط"
+    }
+  ],
+  "courierLedger": [
+    {
+      "courier": "محمد حمدى",
+      "date": "2026-06-10 12:00",
+      "type": "تسليم",
+      "tracking": "FP-1001-26",
+      "amount": 25,
+      "desc": "عمولة تسليم الأوردر FP-1001-26"
+    },
+    {
+      "courier": "زياد",
+      "date": "2026-06-10 12:30",
+      "type": "مرتجع مدفوع الشحن",
+      "tracking": "FP-1002-26",
+      "amount": 25,
+      "desc": "عمولة مرتجع مدفوع الشحن FP-1002-26"
+    },
+    {
+      "courier": "محمد حمدى",
+      "date": "2026-06-10 11:45",
+      "type": "مرتجع غير مدفوع الشحن",
+      "tracking": "FP-1005-26",
+      "amount": 0,
+      "desc": "عمولة مرتجع غير مدفوع الشحن FP-1005-26"
+    }
+  ],
+  "settings": {
+    "COUNTER": 1005,
+    "COMPANY": "فريند بلس",
+    "VERSION": "5.1"
+  }
+}
