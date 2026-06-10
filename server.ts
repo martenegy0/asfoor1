@@ -12,14 +12,27 @@ app.use(express.json({ limit: "50mb" }));
 // Atomic Database Helper
 function readDB(): any {
   if (!fs.existsSync(DB_PATH)) {
-    throw new Error(`Database file not found at ${DB_PATH}. Run setup or build first.`);
+    console.warn(`Database file not found at ${DB_PATH}. Returning fallback structure.`);
+    return {
+      orders: [],
+      users: [],
+      settings: { COUNTER: 1000 },
+      couriers: [],
+      suppliers: []
+    };
   }
   try {
     const data = fs.readFileSync(DB_PATH, "utf-8");
     return JSON.parse(data);
   } catch (error) {
     console.error("Error reading database:", error);
-    return {};
+    return {
+      orders: [],
+      users: [],
+      settings: { COUNTER: 1000 },
+      couriers: [],
+      suppliers: []
+    };
   }
 }
 
