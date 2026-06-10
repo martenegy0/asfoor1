@@ -1,7 +1,6 @@
 import express, { Request, Response } from "express";
 import path from "path";
 import fs from "fs";
-import { createServer as createViteServer } from "vite";
 
 const app = express();
 const PORT = 3000;
@@ -92,6 +91,27 @@ app.post("/api", async (req: Request, res: Response) => {
     const d = req.body;
     if (!d || !d.action) {
       return err(res, "Missing action parameter");
+    }
+
+    // 🌐 Google Sheets Integration Web-App Proxy
+    // If GOOGLE_SCRIPT_URL is configured in environment variables (e.g., .env),
+    // we bypass local mock processing and forward the entire payload to the Google Sheet script directly.
+    // This allows Google Sheets to act as the live cloud database for our modern web application!
+    if (process.env.GOOGLE_SCRIPT_URL) {
+      try {
+        const response = await fetch(process.env.GOOGLE_SCRIPT_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(d)
+        });
+        const resData = await response.json();
+        return res.json(resData);
+      } catch (proxyError: any) {
+        console.error("Error proxying to Google Sheets Script URL:", proxyError);
+        return err(res, `خطأ في الاتصال بسكريبت جوجل شيت: ${proxyError.message || proxyError}`);
+      }
     }
 
     const db = readDB();
@@ -1293,6 +1313,7 @@ app.post("/api", async (req: Request, res: Response) => {
 // ─────────────────────────────────────────────────────────────
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa"
@@ -1311,4 +1332,8 @@ async function startServer() {
   });
 }
 
-startServer();
+export default app;
+
+if (!process.env.VERCEL) {
+  startServer();
+}
