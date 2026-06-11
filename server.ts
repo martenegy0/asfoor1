@@ -158,13 +158,37 @@ const tod = () => {
 const normalizeToDateString = (dateInput: any): string => {
   if (!dateInput) return "";
   const str = dateInput.toString().trim();
-  const match = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
-  if (match) {
-    const y = match[1];
-    const m = match[2].padStart(2, "0");
-    const d = match[3].padStart(2, "0");
+
+  // 1. Matches YYYY-MM-DD or YYYY/MM/DD (with optional time)
+  const matchYMD = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (matchYMD) {
+    const y = matchYMD[1];
+    const m = matchYMD[2].padStart(2, "0");
+    const d = matchYMD[3].padStart(2, "0");
     return `${y}-${m}-${d}`;
   }
+
+  // 2. Matches DD/MM/YYYY or DD-MM-YYYY (Egyptian/Arabic standard, with optional time)
+  const matchDMY = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+  if (matchDMY) {
+    const d = matchDMY[1].padStart(2, "0");
+    const m = matchDMY[2].padStart(2, "0");
+    const y = matchDMY[3];
+    return `${y}-${m}-${d}`;
+  }
+
+  // 3. Matches DD/MM or DD-MM (with optional time, missing year)
+  const matchDM = str.match(/^(\d{1,2})[-/](\d{1,2})/);
+  if (matchDM) {
+    const d = matchDM[1].padStart(2, "0");
+    const m = matchDM[2].padStart(2, "0");
+    let y = "2026";
+    try {
+      y = getCairoDateObj().getFullYear().toString();
+    } catch (e) {}
+    return `${y}-${m}-${d}`;
+  }
+
   try {
     const dateObj = new Date(str);
     if (!isNaN(dateObj.getTime())) {

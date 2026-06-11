@@ -304,13 +304,37 @@ function nowDay() {
 function normalizeToDateString(dateInput) {
   if (!dateInput) return "";
   var str = dateInput.toString().trim();
-  var match = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
-  if (match) {
-    var y = match[1];
-    var m = match[2].length === 1 ? "0" + match[2] : match[2];
-    var d = match[3].length === 1 ? "0" + match[3] : match[3];
+
+  // 1. Matches YYYY-MM-DD or YYYY/MM/DD (with optional time)
+  var matchYMD = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (matchYMD) {
+    var y = matchYMD[1];
+    var m = matchYMD[2].length === 1 ? "0" + matchYMD[2] : matchYMD[2];
+    var d = matchYMD[3].length === 1 ? "0" + matchYMD[3] : matchYMD[3];
     return y + "-" + m + "-" + d;
   }
+
+  // 2. Matches DD/MM/YYYY or DD-MM-YYYY (Egyptian/Arabic standard, with optional time)
+  var matchDMY = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+  if (matchDMY) {
+    var d = matchDMY[1].length === 1 ? "0" + matchDMY[1] : matchDMY[1];
+    var m = matchDMY[2].length === 1 ? "0" + matchDMY[2] : matchDMY[2];
+    var y = matchDMY[3];
+    return y + "-" + m + "-" + d;
+  }
+
+  // 3. Matches DD/MM or DD-MM (with optional time, missing year)
+  var matchDM = str.match(/^(\d{1,2})[-/](\d{1,2})/);
+  if (matchDM) {
+    var d = matchDM[1].length === 1 ? "0" + matchDM[1] : matchDM = matchDM[1];
+    var m = matchDM[2].length === 1 ? "0" + matchDM[2] : matchDM = matchDM[2];
+    var y = "2026";
+    try {
+      y = new Date().getFullYear().toString();
+    } catch (e) {}
+    return y + "-" + m + "-" + d;
+  }
+
   try {
     var dateObj = new Date(str);
     if (!isNaN(dateObj.getTime())) {
