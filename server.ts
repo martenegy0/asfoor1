@@ -445,52 +445,53 @@ app.post("/api", async (req: Request, res: Response) => {
 
         // New orders ALWAYS created with courier = "" per system rule:
         // "لا يتم اختيار مندوب أثناء إنشاء الأوردر. بعد ذلك فقط يقوم المشرف أو المدير بعملية الإسناد."
-        const id = generateID(db);
-        const tNow = now();
-        const prodPrice = Number(o.prodPrice) || 0;
-        const shipPrice = Number(o.shipPrice) || 60; // default 60
-        const totalCOD = prodPrice + shipPrice;
-
-        const newOrder = {
-          tracking: id,
-          createdAt: tNow,
-          updatedAt: tNow,
-          orderDate: tod(),
-          supplier: currentRole === "مورد" ? currentUser : (o.supplier || ""),
-          customer: o.customer || "",
-          phone: phoneClean,
-          phone2: fixPhone(o.phone2 || ""),
-          gov: o.gov || "",
-          region: o.region || "",
-          address: o.address || "",
-          prodPrice: prodPrice,
-          shipPrice: shipPrice,
-          totalCOD: totalCOD,
-          shipCost: shipPrice, // ship cost defaults to ship price
-          courier: "", // MUST BE EMPTY during creation
-          status: "جديد", // ALWAYS starts as "جديد"
-          notes: o.notes || "",
-          delivDate: "",
-          retDate: "",
-          addedBy: currentUser,
-          commission: 0,
-          returnShippingType: "",
-          returnQueueStatus: "",
-          returnQueueAgent: ""
-        };
-
-        db.orders.push(newOrder);
-
-        // Record Supplier Ledger (COD values tracking)
-        // Order addition adds product sum as supplier ledger row
-        db.supplierLedger.push({
-          supplier: newOrder.supplier,
-          date: tNow,
-          type: "أوردر مستلم",
-          tracking: id,
-          amount: prodPrice,
-          desc: `أوردر جديد مستلم من المورد: ${id}`
-        });
+         const id = generateID(db);
+         const tNow = now();
+         const shipPrice = Number(o.shipPrice || 60); // default 60
+         const totalCOD = Number(o.totalCOD || (Number(o.prodPrice || 0) + shipPrice));
+         // Formula: Supplier_Net_Balance = Total_Collected - Shipping_Fees
+         const prodPrice = totalCOD - shipPrice;
+ 
+         const newOrder = {
+           tracking: id,
+           createdAt: tNow,
+           updatedAt: tNow,
+           orderDate: tod(),
+           supplier: currentRole === "مورد" ? currentUser : (o.supplier || ""),
+           customer: o.customer || "",
+           phone: phoneClean,
+           phone2: fixPhone(o.phone2 || ""),
+           gov: o.gov || "",
+           region: o.region || "",
+           address: o.address || "",
+           prodPrice: prodPrice,
+           shipPrice: shipPrice,
+           totalCOD: totalCOD,
+           shipCost: shipPrice, // ship cost defaults to ship price
+           courier: "", // MUST BE EMPTY during creation
+           status: "جديد", // ALWAYS starts as "جديد"
+           notes: o.notes || "",
+           delivDate: "",
+           retDate: "",
+           addedBy: currentUser,
+           commission: 0,
+           returnShippingType: "",
+           returnQueueStatus: "",
+           returnQueueAgent: ""
+         };
+ 
+         db.orders.push(newOrder);
+ 
+         // Record Supplier Ledger (COD values tracking)
+         // Order addition adds product sum as supplier ledger row
+         db.supplierLedger.push({
+           supplier: newOrder.supplier,
+           date: tNow,
+           type: "أوردر مستلم",
+           tracking: id,
+           amount: prodPrice,
+           desc: `أوردر جديد مستلم من المورد: ${id} (صافي حساب المورد: ${prodPrice} = المطلوب تحصيله ${totalCOD} - مصاريف الشحن ${shipPrice})`
+         });
 
         // Add to audit trail
         db.statusHistory.push({
@@ -570,14 +571,14 @@ app.post("/api", async (req: Request, res: Response) => {
             pPrice = Number(rawProd);
           }
 
-          // Compute outstanding balance value for this merchant
+          // Enforce Formula: Supplier_Net_Balance = Total_Collected - Shipping_Fees
           if (tCOD > 0) {
-            if (pPrice === 0) {
-              pPrice = tCOD - sPrice;
-            } else if (sPrice === 60 && tCOD > pPrice) {
-              sPrice = tCOD - pPrice;
-            }
+            pPrice = tCOD - sPrice;
+          } else if (pPrice > 0) {
+            tCOD = pPrice + sPrice;
           } else {
+            // Fallbacks
+            pPrice = 200;
             tCOD = pPrice + sPrice;
           }
 
@@ -620,7 +621,7 @@ app.post("/api", async (req: Request, res: Response) => {
             type: "أوردر مستلم",
             tracking: id,
             amount: pPrice,
-            desc: `رفع أوردر مستلم جماعياً ${id} (سعر المنتج: ${pPrice} · الشحن: ${sPrice} · المجموع الكلي المطلوب: ${tCOD})`
+            desc: `رفع أوردر مستلم جماعياً ${id} (صافي حساب المورد: ${pPrice} = المطلوب تحصيله ${tCOD} - الشحن ${sPrice})`
           });
 
           // History Log
@@ -850,6 +851,13 @@ app.post("/api", async (req: Request, res: Response) => {
             order.shipPrice = newShip;
             order.totalCOD = newProd + newShip;
             order.shipCost = newShip;
+
+            // Also update the supplier ledger transaction to keep the supplier's balance in perfect sync
+            const ledgerTransaction = db.supplierLedger.find((l: any) => l.tracking === tracking && l.type === "أوردر مستلم");
+            if (ledgerTransaction) {
+              ledgerTransaction.amount = newProd;
+              ledgerTransaction.desc = `تعديل قيمة أوردر مستلم ${tracking} (الصافي الجديد: ${newProd} = الكلي ${order.totalCOD} - الشحن ${newShip})`;
+            }
 
             if (!db.auditLog) db.auditLog = [];
             db.auditLog.push({

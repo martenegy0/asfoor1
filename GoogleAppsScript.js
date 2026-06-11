@@ -361,9 +361,10 @@ function addOrder(sheets, d) {
     return { ok: false, error: "رقم التتبع المسجل مستخدم بالفعل لأوردر آخر" };
   }
 
-  const pPrice = Number(o.prodPrice || 0);
   const sPrice = Number(o.shipPrice || 60);
-  const tCOD = pPrice + sPrice;
+  const tCOD = Number(o.totalCOD || (Number(o.prodPrice || 0) + sPrice));
+  // Formula: Supplier_Net_Balance = Total_Collected - Shipping_Fees
+  const pPrice = tCOD - sPrice;
 
   const newOrder = {
     tracking: o.tracking,
@@ -403,7 +404,7 @@ function addOrder(sheets, d) {
     type: "أوردر مستلم",
     tracking: newOrder.tracking,
     amount: pPrice,
-    desc: `أوردر جديد مستلم من المورد: ${newOrder.tracking}`
+    desc: `أوردر جديد مستلم من المورد: ${newOrder.tracking} (صافي حساب المورد: ${pPrice} = المحصل ${tCOD} - الشحن ${sPrice})`
   });
 
   // Record Status History
@@ -488,14 +489,14 @@ function addBulk(sheets, d) {
         pPrice = Number(rawProd);
       }
 
-      // Compute outstanding balance value for this merchant
+      // Enforce Formula: Supplier_Net_Balance = Total_Collected - Shipping_Fees
       if (tCOD > 0) {
-        if (pPrice === 0) {
-          pPrice = tCOD - sPrice;
-        } else if (sPrice === 60 && tCOD > pPrice) {
-          sPrice = tCOD - pPrice;
-        }
+        pPrice = tCOD - sPrice;
+      } else if (pPrice > 0) {
+        tCOD = pPrice + sPrice;
       } else {
+        // Fallbacks
+        pPrice = 200;
         tCOD = pPrice + sPrice;
       }
 
@@ -536,7 +537,7 @@ function addBulk(sheets, d) {
         type: "أوردر مستلم",
         tracking: draft.tracking,
         amount: pPrice,
-        desc: `رفع أوردر مستلم جماعياً ${draft.tracking} (سعر المنتج: ${pPrice} · الشحن: ${sPrice} · المطلوب تحصيله: ${tCOD})`
+        desc: `رفع أوردر مستلم جماعياً ${draft.tracking} (صافي حساب المورد: ${pPrice} = المحصل ${tCOD} - الشحن ${sPrice})`
       });
 
       // Record Status History
@@ -712,6 +713,15 @@ function updateOrder(sheets, d) {
     o.shipPrice = newShip;
     o.totalCOD = newProd + newShip;
     o.shipCost = newShip;
+
+    // تحديث كشف حساب المورد في الشيت أيضاً لمزامنة التغيير المالي
+    const ledgerIndex = findRowIndex(sheets.supplierLedger, "tracking", o.tracking);
+    if (ledgerIndex !== -1) {
+      updateRowByObject(sheets.supplierLedger, ledgerIndex, {
+        amount: newProd,
+        desc: `تعديل قيمة أوردر مستلم ${o.tracking} (صافي حساب المورد: ${newProd} = الكلي ${o.totalCOD} - الشحن ${newShip})`
+      });
+    }
 
     appendToSheet(sheets.auditLog, ["user", "type", "dateTime", "oldVal", "newVal", "reason"], {
       user: d.currentUser || "إدارة",

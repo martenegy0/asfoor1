@@ -368,6 +368,7 @@ export default function App() {
   const showUsersTab = role === "مدير";
   const showAddInputTab = role === "مدير" || role === "مورد";
   const showLedgerAccountingTab = role === "مورد" || role === "مندوب" || role === "مدير" || role === "محاسب";
+  const showCouriersProfileTab = role === "مدير" || role === "محاسب" || role === "مشرف";
 
   return (
     <div className="min-h-screen flex flex-col font-sans bg-[#040813] text-[#e2e8f0] relative select-none antialiased">
@@ -527,6 +528,18 @@ export default function App() {
           >
             <Users size={14} />
             <span>إدارة الصلاحيات</span>
+          </button>
+        )}
+
+        {showCouriersProfileTab && (
+          <button
+            onClick={() => setActiveTab("couriers_profile")}
+            className={`px-5 py-4 text-xs font-black cursor-pointer transition-all border-b-2 flex items-center gap-1.5 whitespace-nowrap ${
+              activeTab === "couriers_profile" ? "text-amber-500 border-amber-500" : "text-slate-400 border-transparent hover:text-slate-200"
+            }`}
+          >
+            <Settings size={14} />
+            <span>ملفات المناديب المالّية</span>
           </button>
         )}
       </nav>
@@ -769,6 +782,90 @@ export default function App() {
                           }`}
                         >
                           {isActive ? "إيقاف الحساب" : "تفعيل الحساب"}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* --- COURIERS FINANCIAL PROFILES TAB (Admin/Accountant/Supervisor only) --- */}
+        {activeTab === "couriers_profile" && showCouriersProfileTab && (
+          <div className="p-4 space-y-6 text-right">
+            <div className="flex items-center justify-between bg-slate-900 border border-white/6 p-4 rounded-xl">
+              <div>
+                <h3 className="text-xs font-black text-slate-100">📋 الملفات المالية وبيانات مناديب الشحن</h3>
+                <p className="text-[10px] text-slate-500 mt-1">
+                  تحديد الراتب الأساسي والعمولات الشهرية للمناديب لضمان الاحتساب الآلي في سجل التقفيل وكشف الرواتب.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {couriers.length === 0 ? (
+                <div className="col-span-full text-center py-12 text-xs text-slate-500 bg-slate-900 border border-white/6 rounded-2xl animate-pulse">
+                  جاري تحميل ملفات المناديب... للتسجيل يرجى تفعيل حساب لمندوب أولاً.
+                </div>
+              ) : (
+                couriers.map((c: any) => {
+                  const bSalary = c.base_fixed_salary !== undefined ? Number(c.base_fixed_salary) : Number(c.salary || 3000);
+                  const commSuccess = c.commission_success !== undefined ? Number(c.commission_success) : Number(c.commission || 25);
+                  const commReturn = c.commission_return !== undefined ? Number(c.commission_return) : 10;
+
+                  return (
+                    <div
+                      key={c.name}
+                      className="bg-slate-900 border border-white/6 rounded-2xl p-5 hover:border-amber-500/40 transition-all flex flex-col justify-between"
+                      id={`courier-card-${c.name}`}
+                    >
+                      <div className="space-y-4">
+                        <div className="flex justify-between items-start border-b border-white/6 pb-3">
+                          <span className="text-[10px] font-bold text-emerald-450 bg-emerald-950/30 border border-emerald-900/30 px-2 py-0.5 rounded-lg">
+                            {c.region || "غير محدد"}
+                          </span>
+                          <span className="text-xs font-black text-slate-100">{c.name}</span>
+                        </div>
+
+                        <div className="space-y-2.5">
+                          <div className="flex justify-between text-[11px]">
+                            <span className="text-slate-300 font-bold font-mono">{c.phone || "—"}</span>
+                            <span className="text-slate-500">: الهاتف</span>
+                          </div>
+
+                          <div className="flex justify-between text-[11px]">
+                            <span className="text-amber-500 font-extrabold font-mono">{bSalary.toLocaleString()} ج.م</span>
+                            <span className="text-slate-500">: الراتب الثابت الأساسي</span>
+                          </div>
+
+                          <div className="flex justify-between text-[11px]">
+                            <span className="text-emerald-400 font-extrabold font-mono">{commSuccess.toLocaleString()} ج.م</span>
+                            <span className="text-slate-500">: عمولة التسليم الناجح</span>
+                          </div>
+
+                          <div className="flex justify-between text-[11px]">
+                            <span className="text-red-400 font-extrabold font-mono">{commReturn.toLocaleString()} ج.م</span>
+                            <span className="text-slate-550">: عمولة المرتجع العام</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="mt-5 pt-3 border-t border-white/6">
+                        <button
+                          onClick={() => {
+                            setSelectedCourierName(c.name);
+                            setCourierPhone(c.phone || "");
+                            setCourierRegion(c.region || "");
+                            setCourierBaseSalary(bSalary);
+                            setCourierCommissionSuccess(commSuccess);
+                            setCourierCommissionReturn(commReturn);
+                            setCourierEditModalOpen(true);
+                          }}
+                          className="w-full py-2 bg-slate-950 hover:bg-slate-950/70 border border-white/8 rounded-xl text-[10px] font-black cursor-pointer text-amber-500 hover:text-amber-450 text-center transition-colors flex items-center justify-center gap-1"
+                        >
+                          <span>⚙️ تعديل الملف المالي للراتب والعمولات</span>
                         </button>
                       </div>
                     </div>
