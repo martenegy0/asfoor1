@@ -140,6 +140,9 @@ function doPost(e) {
       case "getCouriers":
         result = getCouriers(sheets);
         break;
+      case "updateCourier":
+        result = updateCourier(sheets, requestData);
+        break;
       case "getSuppliers":
         result = getSuppliers(sheets);
         break;
@@ -176,7 +179,7 @@ function initSheets() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const defs = {
     users: ["name", "role", "pass", "active", "email", "perms"],
-    couriers: ["name", "phone", "commission", "salary", "region"],
+    couriers: ["name", "phone", "commission", "salary", "region", "base_fixed_salary", "commission_success", "commission_return"],
     suppliers: ["name", "phone", "price", "notes"],
     orders: [
       "tracking", "createdAt", "updatedAt", "orderDate", "supplier", "customer", 
@@ -202,7 +205,7 @@ function initSheets() {
     expenses: ["المصاريف", "المصروفات", "expenses"],
     cashbox: ["الخزنة", "حركة الخزينة", "الخزينة", "cashbox"],
     statusHistory: ["سجل الحالات", "حالات الشحنات", "حالات الشحنة", "statusHistory"],
-    supplierLedger: ["كشف حساب الموردين", "حساب الموردين", "حسابات الموردين", "supplierLedger"],
+    supplierLedger: ["كشف حساب الموردين", "حساب الموردين", "supplierLedger"],
     courierLedger: ["كشف حساب المناديب", "حساب المناديب", "حساب المندوبين", "courierLedger"],
     auditLog: ["سجل العمليات", "سجل التدقيق", "audit.log", "auditLog"],
     dailyClosing: ["التقفيل اليومي", "dailyClosing"]
@@ -232,6 +235,27 @@ function initSheets() {
       sheet = ss.insertSheet(fallbackName);
       sheet.appendRow(defs[key]);
       sheet.getRange(1, 1, 1, defs[key].length).setFontWeight("bold").setBackground("#f1f5f9");
+    } else {
+      // 🛡️ معالجة احترازية: محاذاة الأعمدة وإضافة الناقص منها تلقائياً لمنع أخطاء البيانات
+      const lastCol = sheet.getLastColumn();
+      if (lastCol === 0) {
+        sheet.appendRow(defs[key]);
+        sheet.getRange(1, 1, 1, defs[key].length).setFontWeight("bold").setBackground("#f1f5f9");
+      } else {
+        const currentHeaders = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(function(h) {
+          return h.toString().trim();
+        });
+        const expectedHeaders = defs[key];
+        const missingHeaders = expectedHeaders.filter(function(h) {
+          return h && currentHeaders.indexOf(h) === -1;
+        });
+        if (missingHeaders.length > 0) {
+          const startCol = lastCol + 1;
+          const range = sheet.getRange(1, startCol, 1, missingHeaders.length);
+          range.setValues([missingHeaders]);
+          range.setFontWeight("bold").setBackground("#e2e8f0"); // تظليل الأعمدة المدخلة حديثاً للشفافية
+        }
+      }
     }
     sheets[key] = sheet;
   }
@@ -403,7 +427,10 @@ function addBulk(sheets, d) {
   // Cache current last row to avoid reading getLastRow inside loop
   let currentLastRow = sheets.orders.getLastRow();
   const yearSuffix = Utilities.formatDate(new Date(), "GMT+3", "yy");
-  const supplierName = d.supplier || "مورد عام";
+  const fallbackSupplier = d.supplier || "مورد عام";
+
+  // Pre-fetch all registered suppliers from sheets to check against dynamically
+  const registeredSuppliers = getTableData(sheets.suppliers);
 
   list.forEach(o => {
     if (!o.tracking) {
@@ -412,6 +439,24 @@ function addBulk(sheets, d) {
     }
 
     if (findRowIndex(sheets.orders, "tracking", o.tracking) === -1) {
+      // Resolve supplier row-by-row
+      let orderSupplier = fallbackSupplier;
+      if (d.currentRole === "مورد") {
+        orderSupplier = d.currentUser;
+      } else {
+        const itemRowSupplier = (o.supplier || "").toString().trim();
+        if (itemRowSupplier) {
+          const matchedSup = registeredSuppliers.find(
+            s => s.name && s.name.trim().toLowerCase() === itemRowSupplier.toLowerCase()
+          );
+          if (matchedSup) {
+            orderSupplier = matchedSup.name;
+          } else {
+            orderSupplier = fallbackSupplier;
+          }
+        }
+      }
+
       const pPrice = Number(o.prodPrice || 0);
       const sPrice = Number(o.shipPrice || 60);
       const tCOD = pPrice + sPrice;
@@ -421,7 +466,7 @@ function addBulk(sheets, d) {
         createdAt: now(),
         updatedAt: now(),
         orderDate: o.orderDate || nowDay(),
-        supplier: supplierName,
+        supplier: orderSupplier,
         customer: o.customer || "",
         phone: o.phone || "",
         phone2: o.phone2 || "",
@@ -448,7 +493,7 @@ function addBulk(sheets, d) {
 
       // Record Supplier Ledger
       appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
-        supplier: draft.supplier,
+        supplier: orderSupplier,
         date: now(),
         type: "أوردر مستلم",
         tracking: draft.tracking,
@@ -847,17 +892,21 @@ function getCourierLedger(sheets, d) {
   const cashbox = getTableData(sheets.cashbox);
 
   const courierObj = couriers.find(c => c.name === courier);
-  const basicSalary = courierObj ? Number(courierObj.salary || 3000) : 3000;
-  const rawCommission = courierObj ? Number(courierObj.commission || 25) : 25;
+  
+  // Calculations - using new persistent configs with backward-compatible defaults
+  const basicSalary = courierObj ? Number(courierObj.base_fixed_salary !== undefined && courierObj.base_fixed_salary !== "" ? courierObj.base_fixed_salary : (courierObj.salary || 3000)) : 3000;
+  const commissionSuccess = courierObj ? Number(courierObj.commission_success !== undefined && courierObj.commission_success !== "" ? courierObj.commission_success : (courierObj.commission || 25)) : 25;
+  const commissionReturn = courierObj ? Number(courierObj.commission_return !== undefined && courierObj.commission_return !== "" ? courierObj.commission_return : 10) : 10;
 
   const courierOrders = orders.filter(o => o.courier === courier);
   const targetLedger = ledger.filter(l => l.courier === courier);
 
   const deliveredCount = courierOrders.filter(o => o.status === "تم التسليم").length;
-  const delivCommission = deliveredCount * rawCommission;
+  const delivCommission = deliveredCount * commissionSuccess;
 
+  const returnedCount = courierOrders.filter(o => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length;
   const returnedPaidCount = courierOrders.filter(o => o.status === "مرتجع" && o.returnShippingType === "paid").length;
-  const returnShippingCommission = returnedPaidCount * rawCommission;
+  const returnShippingCommission = returnedPaidCount * commissionSuccess;
 
   const bonusesSum = targetLedger.filter(l => l.type === "مكافأة").reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const penaltiesSum = targetLedger.filter(l => l.type === "جزاء").reduce((sum, item) => sum + Number(item.amount || 0), 0);
@@ -866,19 +915,72 @@ function getCourierLedger(sheets, d) {
   const totalPaidToCompany = cashbox.filter(item => item.type === "استلام عهدة مندوب" && item.ref === courier).reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const deficit = totalCollected - totalPaidToCompany;
 
-  const netSalary = basicSalary + delivCommission + returnShippingCommission + bonusesSum - penaltiesSum;
+  // Cumulative Daily Ledger calculations for Apps Script
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  const daysInCurrentMonth = new Date(year, month + 1, 0).getDate();
+  const daysCount = daysInCurrentMonth || 30;
+
+  const datesSet = {};
+  courierOrders.forEach(o => {
+    if (o.status === "تم التسليم" && o.delivDate) {
+      datesSet[o.delivDate.substring(0, 10)] = true;
+    }
+    if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) && o.retDate) {
+      datesSet[o.retDate.substring(0, 10)] = true;
+    }
+  });
 
   const todayDate = nowDay();
+  datesSet[todayDate] = true;
+
+  const todayDayNum = now.getDate();
+  for (let dMonth = 1; dMonth <= todayDayNum; dMonth++) {
+    const dateStr = year + "-" + String(month + 1).padStart(2, "0") + "-" + String(dMonth).padStart(2, "0");
+    datesSet[dateStr] = true;
+  }
+
+  const sortedDates = Object.keys(datesSet).sort();
+  let runningCumulative = 0;
+  const dailyEarnings = sortedDates.map(dStr => {
+    const deliveredDay = courierOrders.filter(o => o.status === "تم التسليم" && o.delivDate && o.delivDate.substring(0, 10) === dStr).length;
+    const returnedDay = courierOrders.filter(o => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) && o.retDate && o.retDate.substring(0, 10) === dStr).length;
+
+    const baseEarning = Number((basicSalary / daysCount).toFixed(2));
+    const delivEarning = deliveredDay * commissionSuccess;
+    const retEarning = returnedDay * commissionReturn;
+    const total = baseEarning + delivEarning + retEarning;
+    runningCumulative += total;
+
+    return {
+      date: dStr,
+      delivered: deliveredDay,
+      returned: returnedDay,
+      baseEarning,
+      delivEarning,
+      retEarning,
+      total: Number(total.toFixed(2)),
+      cumulative: Number(runningCumulative.toFixed(2))
+    };
+  });
+
+  const netSalary = basicSalary + delivCommission + returnShippingCommission + bonusesSum - penaltiesSum;
+
   const todayDeliveredCount = courierOrders.filter(o => o.status === "تم التسليم" && o.delivDate && o.delivDate.substring(0, 10) === todayDate).length;
-  const todayDelivCommission = todayDeliveredCount * rawCommission;
+  const todayDelivCommission = todayDeliveredCount * commissionSuccess;
 
   return {
     ok: true,
     ledgerInfo: {
       courierName: courier,
       basicSalary,
+      base_fixed_salary: basicSalary,
+      commission_success: commissionSuccess,
+      commission_return: commissionReturn,
       deliveredCount,
       delivCommission,
+      returnedCount,
       returnedPaidCount,
       returnShippingCommission,
       bonusesSum,
@@ -888,7 +990,8 @@ function getCourierLedger(sheets, d) {
       totalPaidToCompany,
       deficit,
       todayDeliveredCount,
-      todayDelivCommission
+      todayDelivCommission,
+      dailyEarnings: dailyEarnings.reverse() // Sort descending
     },
     transactions: targetLedger.reverse()
   };
@@ -907,14 +1010,15 @@ function getCourierInfo(sheets, d) {
   const courierOrders = orders.filter(o => o.courier === courierName);
   const targetLedger = ledger.filter(l => l.courier === courierName);
 
-  const basicSalary = Number(courierObj.salary || 3000);
-  const rawCommission = Number(courierObj.commission || 25);
-  const delivCommission = targetLedger.filter(l => l.type === "تسليم").reduce((sum, item) => sum + Number(item.amount || 25), 0);
-  const returnShippingCommission = targetLedger.filter(l => l.type === "مرتجع مدفوع الشحن").reduce((sum, item) => sum + Number(item.amount || 25), 0);
+  const basicSalary = courierObj ? Number(courierObj.base_fixed_salary !== undefined && courierObj.base_fixed_salary !== "" ? courierObj.base_fixed_salary : (courierObj.salary || 3000)) : 3000;
+  const commissionSuccess = courierObj ? Number(courierObj.commission_success !== undefined && courierObj.commission_success !== "" ? courierObj.commission_success : (courierObj.commission || 25)) : 25;
+  const commissionReturn = courierObj ? Number(courierObj.commission_return !== undefined && courierObj.commission_return !== "" ? courierObj.commission_return : 10) : 10;
+
+  const delivCommission = targetLedger.filter(l => l.type === "تسليم").reduce((sum, item) => sum + Number(item.amount || commissionSuccess), 0);
+  const returnShippingCommission = targetLedger.filter(l => l.type === "مرتجع مدفوع الشحن").reduce((sum, item) => sum + Number(item.amount || commissionSuccess), 0);
   const bonusesSum = targetLedger.filter(l => l.type === "مكافأة").reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const penaltiesSum = targetLedger.filter(l => l.type === "جزاء").reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
-  // آلية تعقب عهدة النقدية ومنع العجز (Anti-loss tracking logic)
   const totalCollected = courierOrders.filter(o => o.status === "تم التسليم").reduce((sum, o) => sum + Number(o.totalCOD || 0), 0);
   const totalPaidToCompany = cashbox.filter(item => item.type === "استلام عهدة مندوب" && item.ref === courierName).reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const deficit = totalCollected - totalPaidToCompany;
@@ -923,15 +1027,69 @@ function getCourierInfo(sheets, d) {
 
   const todayDate = nowDay();
   const todayDelivered = courierOrders.filter(o => o.status === "تم التسليم" && o.delivDate && o.delivDate.substring(0, 10) === todayDate).length;
-  const todayDelivCommission = todayDelivered * rawCommission;
+  const todayDelivCommission = todayDelivered * commissionSuccess;
+  const todayReturned = courierOrders.filter(o => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) && o.retDate && o.retDate.substring(0, 10) === todayDate).length;
+
+  // Cumulative Daily Ledger calculations for Apps Script
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  const daysInCurrentMonth = new Date(year, month + 1, 0).getDate();
+  const daysCount = daysInCurrentMonth || 30;
+
+  const datesSet = {};
+  courierOrders.forEach(o => {
+    if (o.status === "تم التسليم" && o.delivDate) {
+      datesSet[o.delivDate.substring(0, 10)] = true;
+    }
+    if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) && o.retDate) {
+      datesSet[o.retDate.substring(0, 10)] = true;
+    }
+  });
+
+  datesSet[todayDate] = true;
+
+  const todayDayNum = now.getDate();
+  for (let dMonth = 1; dMonth <= todayDayNum; dMonth++) {
+    const dateStr = year + "-" + String(month + 1).padStart(2, "0") + "-" + String(dMonth).padStart(2, "0");
+    datesSet[dateStr] = true;
+  }
+
+  const sortedDates = Object.keys(datesSet).sort();
+  let runningCumulative = 0;
+  const dailyEarnings = sortedDates.map(dStr => {
+    const deliveredDay = courierOrders.filter(o => o.status === "تم التسليم" && o.delivDate && o.delivDate.substring(0, 10) === dStr).length;
+    const returnedDay = courierOrders.filter(o => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) && o.retDate && o.retDate.substring(0, 10) === dStr).length;
+
+    const baseEarning = Number((basicSalary / daysCount).toFixed(2));
+    const delivEarning = deliveredDay * commissionSuccess;
+    const retEarning = returnedDay * commissionReturn;
+    const total = baseEarning + delivEarning + retEarning;
+    runningCumulative += total;
+
+    return {
+      date: dStr,
+      delivered: deliveredDay,
+      returned: returnedDay,
+      baseEarning,
+      delivEarning,
+      retEarning,
+      total: Number(total.toFixed(2)),
+      cumulative: Number(runningCumulative.toFixed(2))
+    };
+  });
 
   return {
     ok: true,
     summary: {
       courierName,
       basicSalary,
+      base_fixed_salary: basicSalary,
+      commission_success: commissionSuccess,
+      commission_return: commissionReturn,
       deliveredCount: courierOrders.filter(o => o.status === "تم التسليم").length,
       returnedPaidCount: courierOrders.filter(o => o.status === "مرتجع" && o.returnShippingType === "paid").length,
+      returnedCount: courierOrders.filter(o => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length,
       delivCommission,
       returnShippingCommission,
       bonusesSum,
@@ -941,7 +1099,10 @@ function getCourierInfo(sheets, d) {
       totalPaidToCompany,
       deficit,
       todayDelivered,
-      todayDelivCommission
+      todayDelivCommission,
+      todayReturned,
+      todayReturnCommission: todayReturned * commissionReturn,
+      dailyEarnings: dailyEarnings.reverse() // Sort descending
     },
     transactions: targetLedger.reverse()
   };
@@ -1070,19 +1231,84 @@ function getUsers(sheets) {
   return { ok: true, users: list };
 }
 
-function addUser(sheets, d) {
-  const u = d.user;
-  if (!u || !u.name || !u.pass) return { ok: false, error: "معلومات العضو الجديد غير كافية لإنشاء الحساب" };
+function getPermissionsForRole(role) {
+  const r = (role || "").toString().trim();
+  if (r === "مدير") return "كاملة";
+  if (r === "مشرف" || r === "موظف عمليات") return "توزيع ومتابعة";
+  if (r === "محاسب") return "خزنة وحسابات وتقارير مالية";
+  if (r === "مندوب" || r.indexOf("مندوب") > -1) return "أوردرات المندوب وتحديث الحالات";
+  if (r === "مورد" || r.indexOf("مورد") > -1) return "إضافة أوردرات ورفع كشوفات";
+  if (r === "مسؤول مرتجعات" || r === "موظف مرتجعات" || r === "موظف مرتجعات") return "متابعة المرتجعات";
+  return "متابعة حالات فقط";
+}
 
-  const userIndex = findRowIndex(sheets.users, "name", u.name);
+function addUser(sheets, d) {
+  const userContainer = d.user || {};
+  const name = (userContainer.name ? userContainer.name : d.name || "").toString().trim();
+  const pass = (userContainer.pass ? userContainer.pass : d.pass || "").toString().trim();
+  const role = (userContainer.role ? userContainer.role : d.role || "").toString().trim();
+  const active = (userContainer.active ? userContainer.active : d.active || "نعم").toString().trim();
+  const email = (userContainer.email ? userContainer.email : d.email || "").toString().trim();
+  const perms = getPermissionsForRole(role);
+
+  if (!name || !pass || !role) {
+    return { ok: false, error: "معلومات العضو الجديد غير كافية لإنشاء الحساب (التأكد من توفر الاسم والباسورد والدور الوظيفي)" };
+  }
+
+  const userIndex = findRowIndex(sheets.users, "name", name);
   if (userIndex !== -1) return { ok: false, error: "اسم الحساب المدخل مسجل به مستخدم آخر مسبقاً" };
 
+  const u = {
+    name: name,
+    role: role,
+    pass: pass,
+    active: active,
+    email: email,
+    perms: perms
+  };
+
   appendToSheet(sheets.users, ["name", "role", "pass", "active", "email", "perms"], u);
+
+  // If newly added role is a courier, add to courier profiles sheet with default values for new salary scheme
+  if (role === "مندوب") {
+    const courierIndex = findRowIndex(sheets.couriers, "name", name);
+    if (courierIndex === -1) {
+      appendToSheet(sheets.couriers, ["name", "phone", "commission", "salary", "region", "base_fixed_salary", "commission_success", "commission_return"], {
+        name: name,
+        phone: "—",
+        commission: 25,
+        salary: 3000,
+        region: "—",
+        base_fixed_salary: 3000,
+        commission_success: 25,
+        commission_return: 10
+      });
+    }
+  }
+
+  // If newly added role is a supplier, add to suppliers sheet
+  if (role === "مورد") {
+    const supplierIndex = findRowIndex(sheets.suppliers, "name", name);
+    if (supplierIndex === -1) {
+      appendToSheet(sheets.suppliers, ["name", "phone", "price", "notes"], {
+        name: name,
+        phone: "—",
+        price: 65,
+        notes: "مورد جديد"
+      });
+    }
+  }
+
   return { ok: true, msg: "تم حفظ وتفعيل حساب الموظف الجديد بنجاح" };
 }
 
 function updateUser(sheets, d) {
-  const u = d.user;
+  let u = d.user || {};
+  if (!u.name) u.name = d.name;
+  if (!u.role) u.role = d.role;
+  if (!u.active) u.active = d.active;
+  if (!u.perms) u.perms = d.perms;
+
   if (!u || !u.name) return { ok: false, error: "اسم الموظف مفقود لتحديث ملفه" };
 
   const userIndex = findRowIndex(sheets.users, "name", u.name);
@@ -1169,4 +1395,27 @@ function addDailyClosing(sheets, d) {
   });
 
   return { ok: true, msg: `تم حفظ تقرير التقفيل لليوم ${date} بالملفات المركزية للشيت بنجاح` };
+}
+
+function updateCourier(sheets, d) {
+  const { name, phone, region, base_fixed_salary, commission_success, commission_return } = d;
+  if (!name) return { ok: false, error: "اسم المندوب مطلوب لتحديث البيانات" };
+
+  const couriersSheet = sheets.couriers;
+  const courierIndex = findRowIndex(couriersSheet, "name", name);
+  if (courierIndex === -1) return { ok: false, error: "الملف التعريفي للمندوب غير مسجل" };
+
+  const courierObj = {
+    name: name,
+    phone: phone || "—",
+    salary: Number(base_fixed_salary !== undefined ? base_fixed_salary : 3000),
+    commission: Number(commission_success !== undefined ? commission_success : 25),
+    region: region || "—",
+    base_fixed_salary: Number(base_fixed_salary !== undefined ? base_fixed_salary : 3000),
+    commission_success: Number(commission_success !== undefined ? commission_success : 25),
+    commission_return: Number(commission_return !== undefined ? commission_return : 10)
+  };
+
+  updateRowByObject(couriersSheet, courierIndex, courierObj);
+  return { ok: true, msg: "تم تحديث وحفظ بيانات المندوب بنجاح بفولدر السيستم" };
 }

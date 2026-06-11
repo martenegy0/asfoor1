@@ -478,6 +478,73 @@ export default function Ledger({ token, role, user }: LedgerProps) {
                 </div>
               </div>
 
+              {/* Cumulative Daily Earnings Ledger (Live chronologically tracked table) */}
+              <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 space-y-3">
+                <div className="flex items-center justify-between border-b border-white/6 pb-2">
+                  <h3 className="text-xs font-black text-amber-500 flex items-center gap-1.5">
+                    <Calendar size={14} />
+                    <span>📅 دفتر يومية الأرباح التراكمية (Cumulative Daily Ledger)</span>
+                  </h3>
+                  <span className="text-[9px] font-bold bg-amber-950/20 text-amber-500 border border-amber-900/40 px-2 py-0.5 rounded">
+                     محدث لـ {new Date().getFullYear()}/{String(new Date().getMonth() + 1).padStart(2, "0")}
+                  </span>
+                </div>
+                
+                <p className="text-[10px] text-slate-500 pb-1">
+                  رصد يومي مستمر للمعادلة المعتمدة: الراتب اليومي الثابت (الراتب الأساسي / أيام الشهر) + (عدد التسليمات × {courierSummary.commission_success || 25}) + (عدد المرتجعات × {courierSummary.commission_return || 10}).
+                </p>
+
+                <div className="overflow-x-auto max-h-[350px] overflow-y-auto">
+                  <table className="w-full text-right text-xs border-collapse">
+                    <thead className="sticky top-0 bg-slate-900 z-10">
+                      <tr className="border-b border-white/10 text-slate-400 font-extrabold text-[10px]">
+                        <th className="py-2 px-3 text-right">اليوم والتاريخ</th>
+                        <th className="py-2 px-3 text-center">التسليمات</th>
+                        <th className="py-2 px-3 text-center">المرتجعات</th>
+                        <th className="py-2 px-3 text-center">حصة الراتب اليومي</th>
+                        <th className="py-2 px-3 text-center">العمولات المكتسبة</th>
+                        <th className="py-2 px-3 text-left">صافي اليوم</th>
+                        <th className="py-2 px-3 text-left">التراكمي المتراكم</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(!courierSummary.dailyEarnings || courierSummary.dailyEarnings.length === 0) ? (
+                        <tr>
+                          <td colSpan={7} className="py-6 text-center text-slate-500 text-xs">
+                            لا يوجد سجل حركات يومية متاح لهذا الشهر للأن
+                          </td>
+                        </tr>
+                      ) : (
+                        courierSummary.dailyEarnings.map((dItem: any, idx: number) => {
+                          const dailyCommissions = (dItem.delivered * (courierSummary.commission_success || 25)) + (dItem.returned * (courierSummary.commission_return || 10));
+                          return (
+                            <tr key={idx} className={`border-b border-white/4 text-[11px] hover:bg-slate-950/40 transition-colors ${idx === 0 ? "bg-amber-500/5 animate-pulse" : ""}`}>
+                              <td className="py-3 px-3 font-bold text-slate-200">{dItem.date} {idx === 0 ? " (اليوم)" : ""}</td>
+                              <td className={`py-3 px-3 text-center font-black ${dItem.delivered > 0 ? "text-emerald-400" : "text-slate-500"}`}>
+                                {dItem.delivered} شحنة
+                              </td>
+                              <td className={`py-3 px-3 text-center font-black ${dItem.returned > 0 ? "text-amber-500" : "text-slate-500"}`}>
+                                {dItem.returned} شحنة
+                              </td>
+                              <td className="py-3 px-3 text-center font-mono text-slate-400">{(dItem.baseEarning || 0).toFixed(2)} ج.م</td>
+                              <td className={`py-3 px-3 text-center font-mono ${dailyCommissions > 0 ? "text-emerald-400 font-bold" : "text-slate-500"}`}>
+                                {dailyCommissions > 0 ? `+${dailyCommissions.toLocaleString("ar")}` : "0"} ج.م
+                              </td>
+                              <td className="py-3 px-3 text-left font-mono font-black text-amber-500">
+                                {dItem.total.toLocaleString("ar")} ج.م
+                              </td>
+                              <td className="py-3 px-3 text-left font-mono font-black text-emerald-400 bg-emerald-950/5">
+                                {dItem.cumulative.toLocaleString("ar")} ج.م
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
               <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 space-y-4">
                 <div className="text-center bg-slate-950/80 border border-white/4 py-5 rounded-xl space-y-1 relative">
                   <div className="text-[10px] font-extrabold tracking-widest text-slate-450 uppercase">

@@ -133,14 +133,24 @@ function writeDB(data: any): void {
 }
 
 // Helpers
+const getCairoDateObj = () => {
+  try {
+    const s = new Date().toLocaleString("en-US", { timeZone: "Africa/Cairo" });
+    return new Date(s);
+  } catch (e) {
+    // Fallback if formatting error occurs
+    return new Date();
+  }
+};
+
 const now = () => {
-  const date = new Date();
+  const date = getCairoDateObj();
   const pad = (n: number) => n.toString().padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 };
 
 const tod = () => {
-  const date = new Date();
+  const date = getCairoDateObj();
   const pad = (n: number) => n.toString().padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 };
@@ -284,13 +294,24 @@ app.post("/api", async (req: Request, res: Response) => {
       };
 
       if (d.action === "addUser" && !payloadToSheet.user) {
+        const getPermissionsForRole = (r: string) => {
+          const rTrim = (r || "").trim();
+          if (rTrim === "مدير") return "كاملة";
+          if (rTrim === "مشرف" || rTrim === "موظف عمليات") return "توزيع ومتابعة";
+          if (rTrim === "محاسب") return "خزنة وحسابات وتقارير مالية";
+          if (rTrim === "مندوب" || rTrim.indexOf("مندوب") > -1) return "أوردرات المندوب وتحديث الحالات";
+          if (rTrim === "مورد" || rTrim.indexOf("مورد") > -1) return "إضافة أوردرات ورفع كشوفات";
+          if (rTrim === "مسؤول مرتجعات" || rTrim === "موظف مرتجعات") return "متابعة المرتجعات";
+          return "متابعة حالات فقط";
+        };
+
         payloadToSheet.user = {
           name: d.name,
           role: d.role,
           pass: d.pass,
           active: d.active || "نعم",
           email: d.email || "",
-          perms: d.perms || (d.role === "مدير" ? "كاملة" : "مخصصة للمركز")
+          perms: getPermissionsForRole(d.role)
         };
       }
 
@@ -496,13 +517,32 @@ app.post("/api", async (req: Request, res: Response) => {
         }
 
         const ordersArr = d.orders || [];
-        const supplierName = currentRole === "مورد" ? currentUser : (d.supplier || "مورد عام");
+        const fallbackSupplier = currentRole === "مورد" ? currentUser : (d.supplier || "مورد عام");
         const tNow = now();
         let addedCount = 0;
 
         for (const item of ordersArr) {
           const ph = fixPhone(item.phone || "");
           if (!ph && !item.customer) continue;
+
+          // Resolve supplier row-by-row
+          let orderSupplier = fallbackSupplier;
+          if (currentRole === "مورد") {
+            orderSupplier = currentUser;
+          } else {
+            const itemRowSupplier = (item.supplier || "").toString().trim();
+            if (itemRowSupplier) {
+              // Look up in database to see if a supplier with this exact name exists
+              const matchedSup = db.suppliers.find(
+                (s: any) => s.name && s.name.trim().toLowerCase() === itemRowSupplier.toLowerCase()
+              );
+              if (matchedSup) {
+                orderSupplier = matchedSup.name;
+              } else {
+                orderSupplier = fallbackSupplier;
+              }
+            }
+          }
 
           const id = generateID(db);
           const pPrice = Number(item.prodPrice) || 0;
@@ -513,7 +553,7 @@ app.post("/api", async (req: Request, res: Response) => {
             createdAt: tNow,
             updatedAt: tNow,
             orderDate: tod(),
-            supplier: supplierName,
+            supplier: orderSupplier,
             customer: item.customer || "",
             phone: ph,
             phone2: "",
@@ -540,7 +580,7 @@ app.post("/api", async (req: Request, res: Response) => {
 
           // Supplier Ledger Transaction
           db.supplierLedger.push({
-            supplier: supplierName,
+            supplier: orderSupplier,
             date: tNow,
             type: "أوردر مستلم",
             tracking: id,
@@ -1018,12 +1058,13 @@ app.post("/api", async (req: Request, res: Response) => {
 
         const rate = stats.total ? Math.round((stats.delivered / stats.total) * 100) : 0;
         const remainingStock = ordersList.filter((o: any) => !["تم التسليم", "خارج مع المندوب", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)).length;
+        const inOfficeStock = stats.total - (stats.active + stats.returned);
 
         return ok(res, {
-          stats: { ...stats, rate, remainingStock },
-          couriers: formattedCouriers.sort((a, b) => b.total - a.total),
-          suppliers: formattedSuppliers.sort((a, b) => b.total - a.total).slice(0, 10),
-           bestCourier: bestCourierObj ? bestCourierObj.name : "—",
+          stats: { ...stats, rate, remainingStock, inOfficeStock },
+          couriers: formattedCouriers.sort((a, b) => b.delivered - a.delivered),
+          suppliers: formattedSuppliers.sort((a, b) => b.delivered - a.delivered).slice(0, 10),
+          bestCourier: bestCourierObj ? bestCourierObj.name : "—",
           bestSupplier: bestSupplierObj ? bestSupplierObj.name : "—"
         });
       }
@@ -1201,15 +1242,17 @@ app.post("/api", async (req: Request, res: Response) => {
         // Filter courier orders
         const courierOrders = db.orders.filter((o: any) => o.courier === courierName);
 
-        // Calculations
-        const basicSalary = Number(courierProfile.salary || 3000);
-        const rawCommission = Number(courierProfile.commission || 25);
+        // Calculations - using new persistent configs with backward-compatible defaults
+        const basicSalary = courierProfile.base_fixed_salary !== undefined ? Number(courierProfile.base_fixed_salary) : Number(courierProfile.salary || 3000);
+        const commissionSuccess = courierProfile.commission_success !== undefined ? Number(courierProfile.commission_success) : Number(courierProfile.commission || 25);
+        const commissionReturn = courierProfile.commission_return !== undefined ? Number(courierProfile.commission_return) : 10;
 
         const deliveredCount = courierOrders.filter((o: any) => o.status === "تم التسليم").length;
-        const delivCommission = deliveredCount * rawCommission;
+        const delivCommission = deliveredCount * commissionSuccess;
 
+        const returnedCount = courierOrders.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length;
         const returnedPaidCount = courierOrders.filter((o: any) => o.status === "مرتجع" && o.returnShippingType === "paid").length;
-        const returnShippingCommission = returnedPaidCount * rawCommission;
+        const returnShippingCommission = returnedPaidCount * commissionSuccess;
 
         // Fetch adjustments (Bonuses, Penalties) from courierLedger entries
         const targetLedger = db.courierLedger.filter((l: any) => l.courier === courierName);
@@ -1217,7 +1260,6 @@ app.post("/api", async (req: Request, res: Response) => {
         const penaltiesSum = targetLedger.filter((l: any) => l.type === "جزاء").reduce((sum: number, x: any) => sum + Number(x.amount), 0);
 
         // Compute COD Collection tracking for anti-deficit control
-        // Collected COD = Sum of totalCOD of delivered orders
         const totalCollected = courierOrders.filter((o: any) => o.status === "تم التسليم").reduce((sum: number, o: any) => sum + Number(o.totalCOD || 0), 0);
         
         // Handed Over to company = Sum of "استلام عهدة مندوب" records in cashbox for this courier
@@ -1227,19 +1269,74 @@ app.post("/api", async (req: Request, res: Response) => {
 
         const deficit = totalCollected - totalPaidToCompany;
 
-        // Here we can live compute net salary
+        // Cumulative Daily Ledger calculations
+        const nowCairo = getCairoDateObj();
+        const daysInCurrentMonth = new Date(nowCairo.getFullYear(), nowCairo.getMonth() + 1, 0).getDate();
+        const daysCount = daysInCurrentMonth || 30;
+
+        const datesSet = new Set<string>();
+        for (const o of courierOrders) {
+          if (o.status === "تم التسليم" && o.delivDate) {
+            datesSet.add(o.delivDate.substring(0, 10));
+          }
+          if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) && o.retDate) {
+            datesSet.add(o.retDate.substring(0, 10));
+          }
+        }
+        datesSet.add(tod());
+
+        const year = nowCairo.getFullYear();
+        const month = nowCairo.getMonth();
+        const todayDayNum = nowCairo.getDate();
+        for (let dMonth = 1; dMonth <= todayDayNum; dMonth++) {
+          const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(dMonth).padStart(2, "0")}`;
+          datesSet.add(dateStr);
+        }
+
+        const sortedDates = Array.from(datesSet).sort();
+        let runningCumulative = 0;
+        const dailyEarnings = sortedDates.map(dStr => {
+          const deliveredList = courierOrders.filter((o: any) => o.status === "تم التسليم" && o.delivDate && o.delivDate.substring(0, 10) === dStr);
+          const returnedList = courierOrders.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) && o.retDate && o.retDate.substring(0, 10) === dStr);
+          
+          const deliveredDay = deliveredList.length;
+          const returnedDay = returnedList.length;
+
+          const baseEarning = Number((basicSalary / daysCount).toFixed(2));
+          const delivEarning = deliveredDay * commissionSuccess;
+          const retEarning = returnedDay * commissionReturn;
+          const total = baseEarning + delivEarning + retEarning;
+          runningCumulative += total;
+
+          return {
+            date: dStr,
+            delivered: deliveredDay,
+            returned: returnedDay,
+            baseEarning,
+            delivEarning,
+            retEarning,
+            total: Number(total.toFixed(2)),
+            cumulative: Number(runningCumulative.toFixed(2))
+          };
+        });
+
+        // Use the accumulated daily earnings as netSalary
         const netSalary = basicSalary + delivCommission + returnShippingCommission + bonusesSum - penaltiesSum;
 
         const todayDate = tod();
         const todayDeliveredCount = courierOrders.filter((o: any) => o.status === "تم التسليم" && o.delivDate && o.delivDate.substring(0, 10) === todayDate).length;
-        const todayDelivCommission = todayDeliveredCount * rawCommission;
+        const todayDelivCommission = todayDeliveredCount * commissionSuccess;
 
         return ok(res, {
           ledgerInfo: {
             courierName,
             basicSalary,
+            base_fixed_salary: basicSalary,
+            commission_success: commissionSuccess,
+            commission_return: commissionReturn,
             deliveredCount,
             delivCommission,
+            returnedCount,
             returnedPaidCount,
             returnShippingCommission,
             bonusesSum,
@@ -1249,14 +1346,15 @@ app.post("/api", async (req: Request, res: Response) => {
             totalPaidToCompany,
             deficit,
             todayDeliveredCount,
-            todayDelivCommission
+            todayDelivCommission,
+            dailyEarnings: dailyEarnings.reverse() // Sort descending to have latest date first
           },
           transactions: targetLedger.reverse()
         });
       }
 
       case "getCourierInfo": {
-        // Fast courier self checking
+        // Fast courier self checking inside Courier portal
         const courierName = currentUser;
         const courierProfile = db.couriers.find((c: any) => c.name === courierName);
         if (!courierProfile) return err(res, "المندوب غير مسجل");
@@ -1265,34 +1363,105 @@ app.post("/api", async (req: Request, res: Response) => {
         const total = ordersList.length;
         const delivered = ordersList.filter((o: any) => o.status === "تم التسليم").length;
         const returnedPaid = ordersList.filter((o: any) => o.status === "مرتجع" && o.returnShippingType === "paid").length;
+        const returnedAll = ordersList.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length;
 
-        const salary = Number(courierProfile.salary || 3000);
-        const comm = Number(courierProfile.commission || 25);
+        const basicSalary = courierProfile.base_fixed_salary !== undefined ? Number(courierProfile.base_fixed_salary) : Number(courierProfile.salary || 3000);
+        const commissionSuccess = courierProfile.commission_success !== undefined ? Number(courierProfile.commission_success) : Number(courierProfile.commission || 25);
+        const commissionReturn = courierProfile.commission_return !== undefined ? Number(courierProfile.commission_return) : 10;
 
         // Fetch adjustment amounts
         const ledgerTr = db.courierLedger.filter((l: any) => l.courier === courierName);
         const bonuses = ledgerTr.filter((l: any) => l.type === "مكافأة").reduce((sum: number, x: any) => sum + Number(x.amount), 0);
         const penalties = ledgerTr.filter((l: any) => l.type === "جزاء").reduce((sum: number, x: any) => sum + Number(x.amount), 0);
 
-        const totalCommission = (delivered * comm) + (returnedPaid * comm);
-        const totalEarnings = salary + totalCommission + bonuses - penalties;
+        const totalCommission = (delivered * commissionSuccess) + (returnedPaid * commissionSuccess);
+        const totalEarnings = basicSalary + totalCommission + bonuses - penalties;
 
         const todayDate = tod();
         const todayDelivered = ordersList.filter((o: any) => o.status === "تم التسليم" && o.delivDate && o.delivDate.substring(0, 10) === todayDate).length;
-        const todayDelivCommission = todayDelivered * comm;
+        const todayDelivCommission = todayDelivered * commissionSuccess;
+        const todayReturned = ordersList.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) && o.retDate && o.retDate.substring(0, 10) === todayDate).length;
+
+        // Cumulative Daily Ledger calculations
+        const nowCairo = getCairoDateObj();
+        const daysInCurrentMonth = new Date(nowCairo.getFullYear(), nowCairo.getMonth() + 1, 0).getDate();
+        const daysCount = daysInCurrentMonth || 30;
+
+        const datesSet = new Set<string>();
+        for (const o of ordersList) {
+          if (o.status === "تم التسليم" && o.delivDate) {
+            datesSet.add(o.delivDate.substring(0, 10));
+          }
+          if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) && o.retDate) {
+            datesSet.add(o.retDate.substring(0, 10));
+          }
+        }
+        datesSet.add(todayDate);
+
+        const year = nowCairo.getFullYear();
+        const month = nowCairo.getMonth();
+        const todayDayNum = nowCairo.getDate();
+        for (let dMonth = 1; dMonth <= todayDayNum; dMonth++) {
+          const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(dMonth).padStart(2, "0")}`;
+          datesSet.add(dateStr);
+        }
+
+        const sortedDates = Array.from(datesSet).sort();
+        let runningCumulative = 0;
+        const dailyEarnings = sortedDates.map(dStr => {
+          const deliveredList = ordersList.filter((o: any) => o.status === "تم التسليم" && o.delivDate && o.delivDate.substring(0, 10) === dStr);
+          const returnedList = ordersList.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) && o.retDate && o.retDate.substring(0, 10) === dStr);
+          
+          const deliveredDay = deliveredList.length;
+          const returnedDay = returnedList.length;
+
+          const baseEarning = Number((basicSalary / daysCount).toFixed(2));
+          const delivEarning = deliveredDay * commissionSuccess;
+          const retEarning = returnedDay * commissionReturn;
+          const total = baseEarning + delivEarning + retEarning;
+          runningCumulative += total;
+
+          return {
+            date: dStr,
+            delivered: deliveredDay,
+            returned: returnedDay,
+            baseEarning,
+            delivEarning,
+            retEarning,
+            total: Number(total.toFixed(2)),
+            cumulative: Number(runningCumulative.toFixed(2))
+          };
+        });
+
+        // Total cash collected vs deposited for the courier portal itself
+        const totalCollectedOnInfo = ordersList.filter((o: any) => o.status === "تم التسليم").reduce((sum: number, o: any) => sum + Number(o.totalCOD || 0), 0);
+        const totalPaidToCompanyOnInfo = db.cashbox
+          .filter((item: any) => item.type === "استلام عهدة مندوب" && item.ref === courierName)
+          .reduce((sum: number, item: any) => sum + Number(item.amount || 0), 0);
+        const deficitOnInfo = totalCollectedOnInfo - totalPaidToCompanyOnInfo;
 
         return ok(res, {
-          salary,
-          commission: comm,
+          salary: basicSalary,
+          commission: commissionSuccess,
+          commission_success: commissionSuccess,
+          commission_return: commissionReturn,
+          base_fixed_salary: basicSalary,
           total,
           delivered,
+          returnedAll,
           returnedPaid,
           bonuses,
           penalties,
           totalCommission,
           totalEarnings,
           todayDelivered,
-          todayDelivCommission
+          todayDelivCommission,
+          todayReturned,
+          todayReturnCommission: todayReturned * commissionReturn,
+          deficit: deficitOnInfo,
+          totalCollected: totalCollectedOnInfo,
+          totalPaidToCompany: totalPaidToCompanyOnInfo,
+          dailyEarnings: dailyEarnings.reverse() // newest first
         });
       }
 
@@ -1462,13 +1631,24 @@ app.post("/api", async (req: Request, res: Response) => {
         const userExists = db.users.find((u: any) => u.name.trim() === name.trim());
         if (userExists) return err(res, "اسم المستخدم هذا مسجل مسبقاً");
 
+        const getPermissionsForRole = (r: string) => {
+          const rTrim = (r || "").trim();
+          if (rTrim === "مدير") return "كاملة";
+          if (rTrim === "مشرف" || rTrim === "موظف عمليات") return "توزيع ومتابعة";
+          if (rTrim === "محاسب") return "خزنة وحسابات وتقارير مالية";
+          if (rTrim === "مندوب" || rTrim.indexOf("مندوب") > -1) return "أوردرات المندوب وتحديث الحالات";
+          if (rTrim === "مورد" || rTrim.indexOf("مورد") > -1) return "إضافة أوردرات ورفع كشوفات";
+          if (rTrim === "مسؤول مرتجعات" || rTrim === "موظف مرتجعات") return "متابعة المرتجعات";
+          return "متابعة حالات فقط";
+        };
+
         const newUserObj = {
           name: name.trim(),
           role: role,
           pass: pass.trim(),
           active: "نعم",
           email: email || "",
-          perms: role === "مدير" ? "كاملة" : "مخصصة للمركز"
+          perms: getPermissionsForRole(role)
         };
 
         db.users.push(newUserObj);
@@ -1480,7 +1660,10 @@ app.post("/api", async (req: Request, res: Response) => {
             phone: "—",
             commission: 25,
             salary: 3000,
-            region: "—"
+            region: "—",
+            base_fixed_salary: 3000,
+            commission_success: 25,
+            commission_return: 10
           });
         }
 
@@ -1540,6 +1723,40 @@ app.post("/api", async (req: Request, res: Response) => {
       // ─────────────────────────────────────────────────────────────
       case "getCouriers": {
         return ok(res, { couriers: db.couriers });
+      }
+
+      case "updateCourier": {
+        if (!["مدير", "محاسب"].includes(currentRole)) {
+          return err(res, "صلاحية حصرية لإدارة الحسابات");
+        }
+        const { name, phone, region, base_fixed_salary, commission_success, commission_return } = d;
+        if (!name) return err(res, "اسم المندوب مطلوب لتحديث بيانات الملف المالي");
+
+        const courier = db.couriers.find((c: any) => c.name === name);
+        if (!courier) return err(res, "الملف غير مسجل");
+
+        courier.phone = phone || courier.phone || "—";
+        courier.region = region || courier.region || "—";
+        courier.salary = Number(base_fixed_salary !== undefined ? base_fixed_salary : (courier.salary || 3000));
+        courier.commission = Number(commission_success !== undefined ? commission_success : (courier.commission || 25));
+        courier.base_fixed_salary = Number(base_fixed_salary !== undefined ? base_fixed_salary : (courier.base_fixed_salary || 3000));
+        courier.commission_success = Number(commission_success !== undefined ? commission_success : (courier.commission_success || 25));
+        courier.commission_return = Number(commission_return !== undefined ? commission_return : (courier.commission_return || 10));
+
+        writeDB(db);
+
+        // Audit Log entry inside central system
+        if (!db.auditLog) db.auditLog = [];
+        db.auditLog.push({
+          user: currentUser,
+          type: "تعديل إعدادات مندوب",
+          dateTime: now(),
+          oldVal: "—",
+          newVal: `تم تعديل المندوب ${name}: الراتب: ${base_fixed_salary}، نجاح: ${commission_success}، مرتجع: ${commission_return}`,
+          reason: "تحديث إعدادات الراتب والعمولة"
+        });
+
+        return ok(res, { msg: "تم تحديث وحفظ بيانات المندوب بنجاح" });
       }
 
       case "getSuppliers": {

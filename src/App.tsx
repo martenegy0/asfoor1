@@ -45,6 +45,15 @@ export default function App() {
   const [addedPass, setAddedPass] = useState("");
   const [addedEmail, setAddedEmail] = useState("");
 
+  // --- Courier profile customization states ---
+  const [courierEditModalOpen, setCourierEditModalOpen] = useState(false);
+  const [selectedCourierName, setSelectedCourierName] = useState("");
+  const [courierPhone, setCourierPhone] = useState("");
+  const [courierRegion, setCourierRegion] = useState("");
+  const [courierBaseSalary, setCourierBaseSalary] = useState(3000);
+  const [courierCommissionSuccess, setCourierCommissionSuccess] = useState(25);
+  const [courierCommissionReturn, setCourierCommissionReturn] = useState(10);
+
   // --- Audit Log states ---
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [loadingAudits, setLoadingAudits] = useState(false);
@@ -290,6 +299,31 @@ export default function App() {
       }
     } catch (err) {
       alert("فشل قيد المستخدم الجديد");
+    }
+  }
+
+  async function handleUpdateCourierProfile(e: React.FormEvent) {
+    e.preventDefault();
+    if (!selectedCourierName) return;
+
+    try {
+      const res = await apiCall("updateCourier", token, {
+        name: selectedCourierName,
+        phone: courierPhone,
+        region: courierRegion,
+        base_fixed_salary: Number(courierBaseSalary),
+        commission_success: Number(courierCommissionSuccess),
+        commission_return: Number(courierCommissionReturn)
+      });
+      if (res.ok) {
+        setCourierEditModalOpen(false);
+        refreshAllData();
+        alert("✅ تم تعديل وحفظ ثوابت عمولات وراتب المندوب بنجاح");
+      } else {
+        alert("⚠️ " + res.error);
+      }
+    } catch (err) {
+      alert("عطل أثناء تحديث بيانات المندوب");
     }
   }
 
@@ -707,16 +741,36 @@ export default function App() {
                         </div>
                       </div>
 
-                      <button
-                        onClick={() => toggleUserActivation(u.row, u.name, u.active, u.role)}
-                        className={`px-3 py-1.5 rounded-lg text-[10px] font-black cursor-pointer transition-colors ${
-                          isActive
-                            ? "bg-red-950/20 text-red-500 border border-red-900/30 hover:bg-red-950/40"
-                            : "bg-emerald-950/20 text-emerald-400 border border-emerald-900/30 hover:bg-emerald-950/40"
-                        }`}
-                      >
-                        {isActive ? "إيقاف الحساب" : "تفعيل الحساب"}
-                      </button>
+                      <div className="flex gap-2 items-center">
+                        {u.role === "مندوب" && (
+                          <button
+                            onClick={() => {
+                              const courierItem = couriers.find((c: any) => c.name === u.name) || {};
+                              setSelectedCourierName(u.name);
+                              setCourierPhone(courierItem.phone || "");
+                              setCourierRegion(courierItem.region || "");
+                              setCourierBaseSalary(courierItem.base_fixed_salary !== undefined ? Number(courierItem.base_fixed_salary) : Number(courierItem.salary || 3000));
+                              setCourierCommissionSuccess(courierItem.commission_success !== undefined ? Number(courierItem.commission_success) : Number(courierItem.commission || 25));
+                              setCourierCommissionReturn(courierItem.commission_return !== undefined ? Number(courierItem.commission_return) : 10);
+                              setCourierEditModalOpen(true);
+                            }}
+                            className="px-2.5 py-1.5 rounded-lg text-[10px] font-black cursor-pointer bg-slate-900 text-slate-300 border border-white/8 hover:text-white transition-colors"
+                          >
+                            ⚙️ جدول الراتب والعمولة
+                          </button>
+                        )}
+
+                        <button
+                          onClick={() => toggleUserActivation(u.row, u.name, u.active, u.role)}
+                          className={`px-3 py-1.5 rounded-lg text-[10px] font-black cursor-pointer transition-colors ${
+                            isActive
+                              ? "bg-red-950/20 text-red-500 border border-red-900/30 hover:bg-red-950/40"
+                              : "bg-emerald-950/20 text-emerald-400 border border-emerald-900/30 hover:bg-emerald-950/40"
+                          }`}
+                        >
+                          {isActive ? "إيقاف الحساب" : "تفعيل الحساب"}
+                        </button>
+                      </div>
                     </div>
                   );
                 })
@@ -1000,6 +1054,105 @@ export default function App() {
                 className="px-4 py-3.5 bg-slate-950 text-slate-400 rounded-xl text-xs font-bold border border-white/6 cursor-pointer"
               >
                 إلغاء لخطأ
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* --- COURIER FINANCE & SETTINGS EDIT MODAL (Admin/Authorized only) --- */}
+      {courierEditModalOpen && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <form onSubmit={handleUpdateCourierProfile} className="bg-slate-900 border border-white/8 p-6 rounded-2xl w-full max-w-[420px] text-right space-y-4 shadow-2xl">
+            <h3 className="text-sm font-black text-amber-500 border-b border-white/6 pb-2 flex items-center gap-1.5 justify-end">
+              <span>⚙️ تعديل الملف المالي وثوابت المندوب</span>
+            </h3>
+
+            <div className="bg-slate-950/40 p-3 rounded-lg border border-white/4">
+              <div className="text-[10px] text-slate-400 font-bold">المندوب المختار:</div>
+              <div className="text-xs font-black text-slate-100 mt-0.5">{selectedCourierName}</div>
+            </div>
+
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="block text-[10px] text-slate-450 font-bold">الهاتف</label>
+                  <input
+                    type="text"
+                    value={courierPhone}
+                    onChange={(e) => setCourierPhone(e.target.value)}
+                    placeholder="رقم الهاتف..."
+                    className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-lg px-3 py-2 text-xs text-right"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-[10px] text-slate-450 font-bold">منطقة التغطية</label>
+                  <input
+                    type="text"
+                    value={courierRegion}
+                    onChange={(e) => setCourierRegion(e.target.value)}
+                    placeholder="الإسكندرية، طنطا..."
+                    className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-lg px-3 py-2 text-xs text-right"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-[10px] text-amber-550 font-extrabold">الراتب الشهري الأساسي الثابت (ج.م)*</label>
+                <input
+                  type="number"
+                  required
+                  min="0"
+                  value={courierBaseSalary}
+                  onChange={(e) => setCourierBaseSalary(Number(e.target.value))}
+                  placeholder="مثال: 4000..."
+                  className="w-full bg-slate-950 text-slate-200 border border-amber-900/40 rounded-lg px-3 py-2 text-xs text-right font-mono"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="block text-[9px] text-slate-450 font-bold">عمولة التسليم الناجح (ج.م)*</label>
+                  <input
+                    type="number"
+                    required
+                    min="0"
+                    value={courierCommissionSuccess}
+                    onChange={(e) => setCourierCommissionSuccess(Number(e.target.value))}
+                    placeholder="25"
+                    className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-lg px-3 py-2 text-xs text-right font-mono"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-[9px] text-slate-450 font-bold">عمولة المرتجع العام (ج.م)*</label>
+                  <input
+                    type="number"
+                    required
+                    min="0"
+                    value={courierCommissionReturn}
+                    onChange={(e) => setCourierCommissionReturn(Number(e.target.value))}
+                    placeholder="10"
+                    className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-lg px-3 py-2 text-xs text-right font-mono"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button
+                type="submit"
+                className="flex-1 py-3 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs rounded-xl cursor-pointer"
+              >
+                تحديث وحفظ الثوابت بالسيستم
+              </button>
+              <button
+                type="button"
+                onClick={() => setCourierEditModalOpen(false)}
+                className="px-4 py-3 bg-slate-950 text-slate-400 rounded-xl text-xs font-bold border border-white/6 cursor-pointer"
+              >
+                إلغاء
               </button>
             </div>
           </form>

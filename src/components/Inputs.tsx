@@ -184,7 +184,8 @@ export default function Inputs({ token, role, user, onSuccess }: InputsProps) {
           gov: obj["المحافظة"] || obj["gov"] || vals[3] || "القاهرة",
           region: obj["المنطقة"] || obj["region"] || vals[4] || "",
           prodPrice: obj["سعر المنتج"] || obj["price"] || vals[5] || "0",
-          notes: obj["ملاحظات"] || obj["notes"] || ""
+          notes: obj["ملاحظات"] || obj["notes"] || "",
+          supplier: obj["المورد"] || obj["اسم المورد"] || obj["merchant"] || obj["supplier"] || vals[6] || ""
         });
       }
 
@@ -198,8 +199,12 @@ export default function Inputs({ token, role, user, onSuccess }: InputsProps) {
       alert("الرجاء تحديد ملف CSV أولاً");
       return;
     }
-    if (!isSupplier && !bulkSupplier.trim()) {
-      alert("الطلب يحتاج تحديد اسم المورد");
+
+    // Check if any row doesn't specify a merchant/supplier
+    const hasRowsWithoutMerchant = excelData.some(item => !item.supplier || !item.supplier.trim());
+
+    if (!isSupplier && hasRowsWithoutMerchant && !bulkSupplier.trim()) {
+      alert("⚠️ الملف يحتوي على طلبات بدون اسم مورد، يرجى تحديد 'المورد الاحتياطي' من القائمة أولاً");
       return;
     }
 
@@ -514,7 +519,7 @@ export default function Inputs({ token, role, user, onSuccess }: InputsProps) {
 
               {!isSupplier && (
                 <div className="space-y-1 text-right max-w-[400px] mx-auto">
-                  <label className="block text-[10px] font-extrabold text-slate-400">مورد الشحنات الجماعية*</label>
+                  <label className="block text-[10px] font-extrabold text-slate-450">المورد الاحتياطي (Fallback) - لتعيينه للطلبات غير المسجلة أو غير محددة المورد بالملف</label>
                   <div className="flex flex-col gap-2">
                     <select
                       value={suppliersList.some(s => s.name === bulkSupplier) ? bulkSupplier : (bulkSupplier ? "custom" : "")}
