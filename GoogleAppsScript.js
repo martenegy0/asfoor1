@@ -129,7 +129,8 @@ function doPost(e) {
         result = getUsers(sheets);
         break;
       case "addUser":
-        result = addUser(sheets, requestData);
+      case "registerUser":
+        result = registerUser(sheets, requestData);
         break;
       case "updateUser":
         result = updateUser(sheets, requestData);
@@ -446,20 +447,57 @@ function addBulk(sheets, d) {
       } else {
         const itemRowSupplier = (o.supplier || "").toString().trim();
         if (itemRowSupplier) {
-          const matchedSup = registeredSuppliers.find(
-            s => s.name && s.name.trim().toLowerCase() === itemRowSupplier.toLowerCase()
-          );
-          if (matchedSup) {
-            orderSupplier = matchedSup.name;
-          } else {
-            orderSupplier = fallbackSupplier;
+          orderSupplier = itemRowSupplier;
+          // Automap: if it doesn't exist in suppliers, append it to sheets.suppliers
+          const matchedSup = registeredSuppliers.find(function(s) {
+            return s.name && s.name.trim().toLowerCase() === itemRowSupplier.toLowerCase();
+          });
+          if (!matchedSup) {
+            appendToSheet(sheets.suppliers, ["name", "phone", "price", "notes"], {
+              name: itemRowSupplier,
+              phone: "—",
+              price: 60,
+              notes: "تم تسجيله تلقائياً عن طريق رفع جماعي"
+            });
+            registeredSuppliers.push({ name: itemRowSupplier, phone: "—", price: 60, notes: "تم تسجيله تلقائياً عن طريق رفع جماعي" });
           }
+        } else {
+          orderSupplier = fallbackSupplier;
         }
       }
 
-      const pPrice = Number(o.prodPrice || 0);
-      const sPrice = Number(o.shipPrice || 60);
-      const tCOD = pPrice + sPrice;
+      // Resolve prices smartly (by reading total, shipping, product, cash to be collected from synonyms)
+      let pPrice = Number(o.prodPrice) || 0;
+      let sPrice = Number(o.shipPrice) || 0;
+      let tCOD = Number(o.totalCOD) || 0;
+
+      const rawShip = o["سعر الشحن"] || o["الشحن"] || o["تكلفة الشحن"] || o["مصاريف الشحن"] || o["shipping"] || o["shipPrice"] || o["ship_price"];
+      const rawTotal = o["المطلوب تحصيله"] || o["التحصيل"] || o["المطلوب"] || o["إجمالي الكود"] || o["الإجمالي"] || o["الاجمالي"] || o["إجمالي الأوردر"] || o["total"] || o["totalCOD"] || o["total_cod"] || o["cash_to_be_collected"] || o["cash"];
+      const rawProd = o["سعر المنتج"] || o["المنتج"] || o["سعر المادة"] || o["price"] || o["prodPrice"] || o["product_price"];
+
+      if (sPrice === 0 && rawShip !== undefined && !isNaN(Number(rawShip))) {
+        sPrice = Number(rawShip);
+      }
+      if (sPrice === 0) sPrice = 60; // default shipping fee fallback
+
+      if (tCOD === 0 && rawTotal !== undefined && !isNaN(Number(rawTotal))) {
+        tCOD = Number(rawTotal);
+      }
+
+      if (pPrice === 0 && rawProd !== undefined && !isNaN(Number(rawProd))) {
+        pPrice = Number(rawProd);
+      }
+
+      // Compute outstanding balance value for this merchant
+      if (tCOD > 0) {
+        if (pPrice === 0) {
+          pPrice = tCOD - sPrice;
+        } else if (sPrice === 60 && tCOD > pPrice) {
+          sPrice = tCOD - pPrice;
+        }
+      } else {
+        tCOD = pPrice + sPrice;
+      }
 
       const draft = {
         tracking: o.tracking,
@@ -491,14 +529,14 @@ function addBulk(sheets, d) {
 
       appendToSheet(sheets.orders, headers, draft);
 
-      // Record Supplier Ledger
+      // Record Supplier Ledger (with detailed informative description for balance calculation)
       appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
         supplier: orderSupplier,
         date: now(),
         type: "أوردر مستلم",
         tracking: draft.tracking,
         amount: pPrice,
-        desc: `رفع أوردر مستلم جماعياً ${draft.tracking}`
+        desc: `رفع أوردر مستلم جماعياً ${draft.tracking} (سعر المنتج: ${pPrice} · الشحن: ${sPrice} · المطلوب تحصيله: ${tCOD})`
       });
 
       // Record Status History
@@ -796,12 +834,12 @@ function getSupplierDashboard(sheets, d) {
   const supOrders = orders.filter(o => o.supplier === supplier);
   const total = supOrders.length;
   const delivered = supOrders.filter(o => o.status === "تم التسليم").length;
-  const returned = supOrders.filter(o => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length;
+  const returned = supOrders.filter(o => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)).length;
 
   // الحسابات والمدفوعات والذمم الدائنة
-  const totalCredited = supOrders.filter(o => o.status === "تم التسليم").reduce((sum, o) => sum + Number(o.prodPrice || 0), 0);
-  const totalPaid = ledger.filter(l => l.supplier === supplier && l.type === "دفعة مورد").reduce((sum, l) => sum + Number(l.amount || 0), 0);
-  const remaining = totalCredited - totalPaid;
+  const totalCredited = ledger.filter(l => l.supplier === supplier && l.type === "أوردر مستلم").reduce((sum, l) => sum + Number(l.amount || 0), 0);
+  const totalPaid = ledger.filter(l => l.supplier === supplier && (l.type === "دفعة مورد" || l.type === "دفع نقدي" || l.type.includes("دفعة"))).reduce((sum, l) => sum + Math.abs(Number(l.amount || 0)), 0);
+  const remaining = ledger.filter(l => l.supplier === supplier).reduce((sum, l) => sum + Number(l.amount || 0), 0);
 
   return {
     ok: true,
@@ -822,19 +860,25 @@ function getSupplierAccounts(sheets) {
   const ledger = getTableData(sheets.supplierLedger);
 
   const list = suppliers.map(s => {
-    const sOrders = orders.filter(o => o.supplier === s.name && o.status === "تم التسليم");
     const sLedger = ledger.filter(l => l.supplier === s.name);
+    const sOrders = orders.filter(o => o.supplier === s.name);
 
-    const totalRevenue = sOrders.reduce((sum, o) => sum + Number(o.prodPrice || 0), 0);
-    const paid = sLedger.filter(l => l.type === "دفعة مورد" || l.type.includes("دفعة")).reduce((sum, l) => sum + Number(l.amount || 0), 0);
-    const balance = totalRevenue - paid;
+    // Sum of amounts in ledger is the live balance!
+    const balance = sLedger.reduce((sum, l) => sum + Number(l.amount || 0), 0);
+    const totalCOD = sLedger.filter(l => l.type === "أوردر مستلم").reduce((sum, l) => sum + Number(l.amount || 0), 0);
+    const paid = sLedger.filter(l => l.supplier === s.name && (l.type === "دفعة مورد" || l.type === "دفع نقدي" || l.type.includes("دفعة"))).reduce((sum, l) => sum + Math.abs(Number(l.amount || 0)), 0);
+
+    const totalOrders = sOrders.length;
+    const deliveredOrders = sOrders.filter(o => o.status === "تم التسليم").length;
 
     return {
       name: s.name,
-      phone: s.phone,
-      totalRevenue,
-      paid,
-      balance
+      phone: s.phone || "—",
+      totalRevenue: totalCOD, // Total of received order values
+      paid: paid,             // Total payouts
+      balance: balance,       // Outstanding balance
+      totalOrders: totalOrders,
+      deliveredOrders: deliveredOrders
     };
   });
 
@@ -1243,63 +1287,82 @@ function getPermissionsForRole(role) {
 }
 
 function addUser(sheets, d) {
+  return registerUser(sheets, d);
+}
+
+function registerUser(sheets, d) {
   const userContainer = d.user || {};
   const name = (userContainer.name ? userContainer.name : d.name || "").toString().trim();
-  const pass = (userContainer.pass ? userContainer.pass : d.pass || "").toString().trim();
   const role = (userContainer.role ? userContainer.role : d.role || "").toString().trim();
+  const pass = (userContainer.pass ? userContainer.pass : d.pass || "").toString().trim();
   const active = (userContainer.active ? userContainer.active : d.active || "نعم").toString().trim();
   const email = (userContainer.email ? userContainer.email : d.email || "").toString().trim();
-  const perms = getPermissionsForRole(role);
+  let assignedPerms = userContainer.perms || d.perms || "";
 
-  if (!name || !pass || !role) {
-    return { ok: false, error: "معلومات العضو الجديد غير كافية لإنشاء الحساب (التأكد من توفر الاسم والباسورد والدور الوظيفي)" };
+  // Ensure minimal required fields are checked properly
+  if (!name || !role || !pass) {
+    return { ok: false, error: "اسم المستخدم، الدور الوظيفي، وكلمة المرور حقول إجبارية" };
   }
 
-  const userIndex = findRowIndex(sheets.users, "name", name);
+  const usersSheet = sheets.users;
+  const userIndex = findRowIndex(usersSheet, "name", name);
   if (userIndex !== -1) return { ok: false, error: "اسم الحساب المدخل مسجل به مستخدم آخر مسبقاً" };
 
-  const u = {
+  // Auto-map permissions based on role if not provided by UI
+  if (!assignedPerms) {
+    if (role === "مدير") assignedPerms = "كاملة";
+    else if (role === "مشرف") assignedPerms = "توزيع ومتابعة";
+    else if (role === "مندوب") assignedPerms = "معاينة الشحنات والتقفيل";
+    else assignedPerms = "متابعة محدودة";
+  }
+
+  // Append row safely to the unified English users layout using key mappings with appendToSheet
+  appendToSheet(usersSheet, ["name", "role", "pass", "active", "email", "perms"], {
     name: name,
     role: role,
     pass: pass,
     active: active,
-    email: email,
-    perms: perms
-  };
+    email: email || "—",
+    perms: assignedPerms
+  });
 
-  appendToSheet(sheets.users, ["name", "role", "pass", "active", "email", "perms"], u);
-
-  // If newly added role is a courier, add to courier profiles sheet with default values for new salary scheme
+  // Auto-generate Courier Profile if the newly created user is a Courier
   if (role === "مندوب") {
-    const courierIndex = findRowIndex(sheets.couriers, "name", name);
-    if (courierIndex === -1) {
-      appendToSheet(sheets.couriers, ["name", "phone", "commission", "salary", "region", "base_fixed_salary", "commission_success", "commission_return"], {
-        name: name,
-        phone: "—",
-        commission: 25,
-        salary: 3000,
-        region: "—",
-        base_fixed_salary: 3000,
-        commission_success: 25,
-        commission_return: 10
-      });
+    const couriersSheet = sheets.couriers;
+    if (couriersSheet) {
+      const courierIndex = findRowIndex(couriersSheet, "name", name);
+      if (courierIndex === -1) {
+        appendToSheet(couriersSheet, ["name", "phone", "commission", "salary", "region", "base_fixed_salary", "commission_success", "commission_return"], {
+          name: name,
+          phone: "—",
+          commission: 20,
+          salary: 3000,
+          region: "—",
+          base_fixed_salary: 3000,
+          commission_success: 20,
+          commission_return: 0
+        });
+      }
     }
   }
 
-  // If newly added role is a supplier, add to suppliers sheet
+  // Auto-generate Supplier Profile if the newly created user is a Supplier
   if (role === "مورد") {
-    const supplierIndex = findRowIndex(sheets.suppliers, "name", name);
-    if (supplierIndex === -1) {
-      appendToSheet(sheets.suppliers, ["name", "phone", "price", "notes"], {
-        name: name,
-        phone: "—",
-        price: 65,
-        notes: "مورد جديد"
-      });
+    const suppliersSheet = sheets.suppliers;
+    if (suppliersSheet) {
+      const supplierIndex = findRowIndex(suppliersSheet, "name", name);
+      if (supplierIndex === -1) {
+        appendToSheet(suppliersSheet, ["name", "phone", "price", "notes"], {
+          name: name,
+          phone: "—",
+          price: 65,
+          notes: "مورد جديد"
+        });
+      }
     }
   }
 
-  return { ok: true, msg: "تم حفظ وتفعيل حساب الموظف الجديد بنجاح" };
+  return { ok: true, msg: "تم إنشاء الحساب وإعداد الصلاحيات والملف المالي بنجاح" };
 }
 
 function updateUser(sheets, d) {
@@ -1326,7 +1389,33 @@ function checkPhone(sheets, d) {
 }
 
 function getCouriers(sheets) {
-  const list = getTableData(sheets.couriers);
+  const users = getTableData(sheets.users);
+  const profiles = getTableData(sheets.couriers);
+
+  const activeUsersCouriers = users.filter(function(u) {
+    const role = (u.role || "").toString().trim();
+    const active = (u.active || "").toString().trim();
+    const name = (u.name || "").toString().trim();
+    return (role === "مندوب" || role.indexOf("مندوب") > -1 || name === "عصفور") && active !== "لا";
+  });
+
+  const list = activeUsersCouriers.map(function(u) {
+    const profile = profiles.find(function(c) {
+      return (c.name || "").toString().trim() === (u.name || "").toString().trim();
+    }) || {};
+
+    return {
+      name: u.name,
+      phone: profile.phone || "—",
+      commission: profile.commission !== undefined ? profile.commission : 25,
+      salary: profile.salary !== undefined ? profile.salary : 3000,
+      region: profile.region || "—",
+      base_fixed_salary: profile.base_fixed_salary !== undefined ? profile.base_fixed_salary : (profile.salary || 3000),
+      commission_success: profile.commission_success !== undefined ? profile.commission_success : (profile.commission || 25),
+      commission_return: profile.commission_return !== undefined ? profile.commission_return : 10
+    };
+  });
+
   return { ok: true, couriers: list };
 }
 

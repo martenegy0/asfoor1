@@ -177,15 +177,50 @@ export default function Inputs({ token, role, user, onSuccess }: InputsProps) {
           obj[h] = vals[idx] || "";
         });
 
+        // 🧠 Smart Extraction Logic for prices:
+        // 1. Resolve shipping fees (default to 60)
+        let resolvedShip = 60;
+        const shipMatch = obj["سعر الشحن"] || obj["الشحن"] || obj["تكلفة الشحن"] || obj["مصاريف الشحن"] || obj["shipping"] || obj["shipPrice"] || obj["ship_price"];
+        if (shipMatch && !isNaN(Number(shipMatch))) {
+          resolvedShip = Number(shipMatch);
+        }
+
+        // 2. Resolve total COD / cash to be collected
+        let resolvedTotal = 0;
+        const totalMatch = obj["المطلوب تحصيله"] || obj["التحصيل"] || obj["المطلوب"] || obj["إجمالي الكود"] || obj["الإجمالي"] || obj["الاجمالي"] || obj["إجمالي الأوردر"] || obj["total"] || obj["totalCOD"] || obj["total_cod"] || obj["cash_to_be_collected"] || obj["cash"];
+        if (totalMatch && !isNaN(Number(totalMatch))) {
+          resolvedTotal = Number(totalMatch);
+        }
+
+        // 3. Resolve product price
+        let resolvedProd = 0;
+        const prodMatch = obj["سعر المنتج"] || obj["المنتج"] || obj["سعر المادة"] || obj["price"] || obj["prodPrice"] || obj["product_price"];
+        if (prodMatch && !isNaN(Number(prodMatch))) {
+          resolvedProd = Number(prodMatch);
+        }
+
+        // 4. Do smart math equations to construct values
+        if (resolvedTotal > 0) {
+          if (resolvedProd === 0) {
+            resolvedProd = resolvedTotal - resolvedShip;
+          } else if (resolvedShip === 60 && resolvedTotal > resolvedProd) {
+            resolvedShip = resolvedTotal - resolvedProd;
+          }
+        } else {
+          resolvedTotal = resolvedProd + resolvedShip;
+        }
+
         list.push({
-          customer: obj["اسم العميل"] || obj["customer"] || vals[0] || "",
-          phone: obj["التليفون"] || obj["phone"] || vals[1] || "",
-          address: obj["العنوان"] || obj["address"] || vals[2] || "",
-          gov: obj["المحافظة"] || obj["gov"] || vals[3] || "القاهرة",
-          region: obj["المنطقة"] || obj["region"] || vals[4] || "",
-          prodPrice: obj["سعر المنتج"] || obj["price"] || vals[5] || "0",
-          notes: obj["ملاحظات"] || obj["notes"] || "",
-          supplier: obj["المورد"] || obj["اسم المورد"] || obj["merchant"] || obj["supplier"] || vals[6] || ""
+          customer: obj["اسم العميل"] || obj["العميل"] || obj["اسم المستلم"] || obj["customer"] || vals[0] || "",
+          phone: obj["التليفون"] || obj["رقم التليفون"] || obj["تليفون"] || obj["الهاتف"] || obj["phone"] || vals[1] || "",
+          address: obj["العنوان"] || obj["العنوان بالتفصيل"] || obj["عنوان"] || obj["address"] || vals[2] || "",
+          gov: obj["المحافظة"] || obj["مقاولة المحافظة"] || obj["gov"] || vals[3] || "القاهرة",
+          region: obj["المنطقة"] || obj["المنطقه"] || obj["region"] || vals[4] || "",
+          prodPrice: resolvedProd,
+          shipPrice: resolvedShip,
+          totalCOD: resolvedTotal,
+          notes: obj["ملاحظات"] || obj["الملاحظات"] || obj["notes"] || "",
+          supplier: obj["المورد"] || obj["اسم المورد"] || obj["مورد"] || obj["merchant"] || obj["supplier"] || vals[6] || ""
         });
       }
 

@@ -293,16 +293,13 @@ app.post("/api", async (req: Request, res: Response) => {
         currentRole
       };
 
-      if (d.action === "addUser" && !payloadToSheet.user) {
+      if ((d.action === "addUser" || d.action === "registerUser") && !payloadToSheet.user) {
         const getPermissionsForRole = (r: string) => {
           const rTrim = (r || "").trim();
           if (rTrim === "مدير") return "كاملة";
-          if (rTrim === "مشرف" || rTrim === "موظف عمليات") return "توزيع ومتابعة";
-          if (rTrim === "محاسب") return "خزنة وحسابات وتقارير مالية";
-          if (rTrim === "مندوب" || rTrim.indexOf("مندوب") > -1) return "أوردرات المندوب وتحديث الحالات";
-          if (rTrim === "مورد" || rTrim.indexOf("مورد") > -1) return "إضافة أوردرات ورفع كشوفات";
-          if (rTrim === "مسؤول مرتجعات" || rTrim === "موظف مرتجعات") return "متابعة المرتجعات";
-          return "متابعة حالات فقط";
+          if (rTrim === "مشرف") return "توزيع ومتابعة";
+          if (rTrim === "مندوب") return "معاينة الشحنات والتقفيل";
+          return "متابعة محدودة";
         };
 
         payloadToSheet.user = {
@@ -532,21 +529,59 @@ app.post("/api", async (req: Request, res: Response) => {
           } else {
             const itemRowSupplier = (item.supplier || "").toString().trim();
             if (itemRowSupplier) {
-              // Look up in database to see if a supplier with this exact name exists
+              orderSupplier = itemRowSupplier;
+              // Look up in database to see if a supplier with this exact name exists; if not, register them!
               const matchedSup = db.suppliers.find(
                 (s: any) => s.name && s.name.trim().toLowerCase() === itemRowSupplier.toLowerCase()
               );
-              if (matchedSup) {
-                orderSupplier = matchedSup.name;
-              } else {
-                orderSupplier = fallbackSupplier;
+              if (!matchedSup) {
+                db.suppliers.push({
+                  name: itemRowSupplier,
+                  phone: "—",
+                  price: 60,
+                  notes: "تم تسجيله تلقائياً عن طريق رفع جماعي"
+                });
               }
+            } else {
+              orderSupplier = fallbackSupplier;
             }
           }
 
+          // Resolve prices smartly (by reading total, shipping, product, cash to be collected from synonyms)
+          let pPrice = Number(item.prodPrice) || 0;
+          let sPrice = Number(item.shipPrice) || 0;
+          let tCOD = Number(item.totalCOD) || 0;
+
+          const anyItem = item as any;
+          const rawShip = anyItem["سعر الشحن"] || anyItem["الشحن"] || anyItem["تكلفة الشحن"] || anyItem["مصاريف الشحن"] || anyItem["shipping"] || anyItem["shipPrice"] || anyItem["ship_price"];
+          const rawTotal = anyItem["المطلوب تحصيله"] || anyItem["التحصيل"] || anyItem["المطلوب"] || anyItem["إجمالي الكود"] || anyItem["الإجمالي"] || anyItem["الاجمالي"] || anyItem["إجمالي الأوردر"] || anyItem["total"] || anyItem["totalCOD"] || anyItem["total_cod"] || anyItem["cash_to_be_collected"] || anyItem["cash"];
+          const rawProd = anyItem["سعر المنتج"] || anyItem["المنتج"] || anyItem["سعر المادة"] || anyItem["price"] || anyItem["prodPrice"] || anyItem["product_price"];
+
+          if (sPrice === 0 && rawShip !== undefined && !isNaN(Number(rawShip))) {
+            sPrice = Number(rawShip);
+          }
+          if (sPrice === 0) sPrice = 60; // default shipping fee fallback
+
+          if (tCOD === 0 && rawTotal !== undefined && !isNaN(Number(rawTotal))) {
+            tCOD = Number(rawTotal);
+          }
+
+          if (pPrice === 0 && rawProd !== undefined && !isNaN(Number(rawProd))) {
+            pPrice = Number(rawProd);
+          }
+
+          // Compute outstanding balance value for this merchant
+          if (tCOD > 0) {
+            if (pPrice === 0) {
+              pPrice = tCOD - sPrice;
+            } else if (sPrice === 60 && tCOD > pPrice) {
+              sPrice = tCOD - pPrice;
+            }
+          } else {
+            tCOD = pPrice + sPrice;
+          }
+
           const id = generateID(db);
-          const pPrice = Number(item.prodPrice) || 0;
-          const sPrice = Number(item.shipPrice) || 60;
 
           const newObj = {
             tracking: id,
@@ -562,7 +597,7 @@ app.post("/api", async (req: Request, res: Response) => {
             address: item.address || "",
             prodPrice: pPrice,
             shipPrice: sPrice,
-            totalCOD: pPrice + sPrice,
+            totalCOD: tCOD,
             shipCost: sPrice,
             courier: "", // EMPTY AT CREATION ALWAYS
             status: "جديد",
@@ -578,14 +613,14 @@ app.post("/api", async (req: Request, res: Response) => {
 
           db.orders.push(newObj);
 
-          // Supplier Ledger Transaction
+          // Supplier Ledger Transaction (automatically records the cash/outstanding balance instantly)
           db.supplierLedger.push({
             supplier: orderSupplier,
             date: tNow,
             type: "أوردر مستلم",
             tracking: id,
             amount: pPrice,
-            desc: `رفع أوردر مستلم جماعياً ${id}`
+            desc: `رفع أوردر مستلم جماعياً ${id} (سعر المنتج: ${pPrice} · الشحن: ${sPrice} · المجموع الكلي المطلوب: ${tCOD})`
           });
 
           // History Log
@@ -1621,7 +1656,8 @@ app.post("/api", async (req: Request, res: Response) => {
         return ok(res, { users: usersList });
       }
 
-      case "addUser": {
+      case "addUser":
+      case "registerUser": {
         if (currentRole !== "مدير") {
           return err(res, "صلاحية حصرية لمدير النظام");
         }
@@ -1634,12 +1670,9 @@ app.post("/api", async (req: Request, res: Response) => {
         const getPermissionsForRole = (r: string) => {
           const rTrim = (r || "").trim();
           if (rTrim === "مدير") return "كاملة";
-          if (rTrim === "مشرف" || rTrim === "موظف عمليات") return "توزيع ومتابعة";
-          if (rTrim === "محاسب") return "خزنة وحسابات وتقارير مالية";
-          if (rTrim === "مندوب" || rTrim.indexOf("مندوب") > -1) return "أوردرات المندوب وتحديث الحالات";
-          if (rTrim === "مورد" || rTrim.indexOf("مورد") > -1) return "إضافة أوردرات ورفع كشوفات";
-          if (rTrim === "مسؤول مرتجعات" || rTrim === "موظف مرتجعات") return "متابعة المرتجعات";
-          return "متابعة حالات فقط";
+          if (rTrim === "مشرف") return "توزيع ومتابعة";
+          if (rTrim === "مندوب") return "معاينة الشحنات والتقفيل";
+          return "متابعة محدودة";
         };
 
         const newUserObj = {
@@ -1658,12 +1691,12 @@ app.post("/api", async (req: Request, res: Response) => {
           db.couriers.push({
             name: name.trim(),
             phone: "—",
-            commission: 25,
+            commission: 20,
             salary: 3000,
             region: "—",
             base_fixed_salary: 3000,
-            commission_success: 25,
-            commission_return: 10
+            commission_success: 20,
+            commission_return: 0
           });
         }
 
@@ -1678,7 +1711,7 @@ app.post("/api", async (req: Request, res: Response) => {
         }
 
         writeDB(db);
-        return ok(res, { msg: "تم تسجيل المستخدم بنجاح" });
+        return ok(res, { msg: "تم إنشاء الحساب وإعداد الصلاحيات والملف المالي بنجاح" });
       }
 
       case "updateUser": {
@@ -1722,7 +1755,29 @@ app.post("/api", async (req: Request, res: Response) => {
       // RESOURCE MANAGEMENT / STATIC ARRAYS
       // ─────────────────────────────────────────────────────────────
       case "getCouriers": {
-        return ok(res, { couriers: db.couriers });
+        const activeUsersCouriers = db.users.filter(
+          (u: any) =>
+            ((u.role || "").toString().trim() === "مندوب" ||
+              (u.role || "").toString().trim().indexOf("مندوب") > -1 ||
+              (u.name || "").toString().trim() === "عصفور") &&
+            u.active !== "لا"
+        );
+        const list = activeUsersCouriers.map((u: any) => {
+          const profile = db.couriers.find(
+            (c: any) => c.name.toString().trim() === u.name.toString().trim()
+          ) || {};
+          return {
+            name: u.name,
+            phone: profile.phone || "—",
+            commission: profile.commission !== undefined ? profile.commission : 25,
+            salary: profile.salary !== undefined ? profile.salary : 3000,
+            region: profile.region || "—",
+            base_fixed_salary: profile.base_fixed_salary !== undefined ? profile.base_fixed_salary : (profile.salary || 3000),
+            commission_success: profile.commission_success !== undefined ? profile.commission_success : (profile.commission || 25),
+            commission_return: profile.commission_return !== undefined ? profile.commission_return : 10
+          };
+        });
+        return ok(res, { couriers: list });
       }
 
       case "updateCourier": {
