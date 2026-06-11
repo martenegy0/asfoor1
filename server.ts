@@ -479,6 +479,19 @@ app.post("/api", async (req: Request, res: Response) => {
         currentRole
       };
 
+      // Enforce strict client-side role parameters security for Google Sheets proxy
+      if (currentRole === "مورد") {
+        payloadToSheet.supplier = currentUser;
+        if (payloadToSheet.order) {
+          payloadToSheet.order.supplier = currentUser;
+        }
+      } else if (currentRole === "مندوب") {
+        payloadToSheet.courier = currentUser;
+        if (payloadToSheet.order) {
+          payloadToSheet.order.courier = currentUser;
+        }
+      }
+
       if ((d.action === "addUser" || d.action === "registerUser") && !payloadToSheet.user) {
         const getPermissionsForRole = (r: string) => {
           const rTrim = (r || "").trim();
@@ -703,6 +716,39 @@ app.post("/api", async (req: Request, res: Response) => {
 
       try {
         const resData = await executeProxyRequest(gscriptUrl, payloadToSheet);
+
+        // Enforce secure client boundaries for proxied Google Sheets response data
+        if (resData && resData.ok) {
+          if (d.action === "getOrders" && Array.isArray(resData.orders)) {
+            const isAgent = currentRole === "مندوب";
+            const isSupplier = currentRole === "مورد";
+            const isReturnsOfficer = currentRole === "مسؤول مرتجعات";
+            let ordersList = [...resData.orders];
+
+            if (isAgent) {
+              ordersList = ordersList.filter((o: any) => o.courier === currentUser);
+              if (d.todayOnly) {
+                ordersList = ordersList.filter((o: any) => {
+                  const dt = o.createdAt?.substring(0, 10);
+                  const isToday = dt === tod();
+                  const isPending = ["جديد", "تم الإسناد", "خارج مع المندوب", "مؤجل", "لا يوجد رد"].includes(o.status);
+                  return isToday || isPending;
+                });
+              }
+            } else if (isSupplier) {
+              ordersList = ordersList.filter((o: any) => o.supplier === currentUser);
+            } else if (isReturnsOfficer) {
+              ordersList = ordersList.filter((o: any) => ["مرتجع", "التسليم للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) || o.returnQueueStatus);
+            }
+            resData.orders = ordersList;
+          }
+
+          if (d.action === "getSupplierLedger" && Array.isArray(resData.ledger)) {
+            const targetSupplier = currentRole === "مورد" ? currentUser : (d.supplier || "");
+            resData.ledger = resData.ledger.filter((l: any) => l.supplier === targetSupplier);
+          }
+        }
+
         return res.json(resData);
       } catch (proxyError: any) {
         console.error("Error proxying to Google Sheets Script URL:", proxyError);
