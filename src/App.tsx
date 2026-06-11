@@ -496,7 +496,7 @@ export default function App() {
                 رصيد الخزنة الحالي المتوفر (ج.م)
               </div>
               <div className="text-4xl font-black text-emerald-400">
-                {cashboxBalance.toLocaleString("ar")}{" "}
+                {(cashboxBalance || 0).toLocaleString("ar")}{" "}
                 <span className="text-sm font-medium">ج.م</span>
               </div>
               <p className="text-[10px] text-slate-500 leading-relaxed font-bold">
@@ -549,13 +549,13 @@ export default function App() {
                           </div>
                         </div>
                         <div className="text-left font-mono space-y-1">
-                          <div className={`text-xs font-black ${isCredit ? "text-emerald-400" : "text-red-400"}`}>
-                            {isCredit ? "+" : "-"}
-                            {e.amount.toLocaleString("ar")} ج.م
-                          </div>
-                          <div className="text-[9px] text-slate-500 font-bold">
-                            رصيد: {e.balance?.toLocaleString("ar")} ج
-                          </div>
+                        <div className={`text-xs font-black ${isCredit ? "text-emerald-400" : "text-red-400"}`}>
+                          {isCredit ? "+" : "-"}
+                          {(e.amount || 0).toLocaleString("ar")} ج.م
+                        </div>
+                        <div className="text-[9px] text-slate-500 font-bold">
+                          رصيد: {e.balance ? (e.balance).toLocaleString("ar") : "0"} ج
+                        </div>
                         </div>
                       </div>
                     );
@@ -578,7 +578,7 @@ export default function App() {
                 إجمالي المصروفات المدفوعة (ج.م)
               </div>
               <div className="text-4xl font-black text-red-400">
-                {expensesTotal.toLocaleString("ar")}{" "}
+                {(expensesTotal || 0).toLocaleString("ar")}{" "}
                 <span className="text-sm font-medium">جنيهاً</span>
               </div>
               <button
@@ -611,7 +611,7 @@ export default function App() {
                         </div>
                       </div>
                       <div className="text-xs font-black font-mono text-red-400">
-                        -{e.amount.toLocaleString("ar")} ج.م
+                        -{(e.amount || 0).toLocaleString("ar")} ج.م
                       </div>
                     </div>
                   ))}

@@ -30,7 +30,7 @@ export async function apiCall(action: string, token: string, extraParams: any = 
   for (let i = 0; i <= retries; i++) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      const timeoutId = setTimeout(() => controller.abort(), 20000); // 20s timeout
       
       const response = await fetch("/api", {
         method: "POST",
@@ -42,12 +42,42 @@ export async function apiCall(action: string, token: string, extraParams: any = 
       });
       
       clearTimeout(timeoutId);
-      const resData = await response.json();
+      
+      const responseText = await response.text();
+      let resData;
+      try {
+        resData = JSON.parse(responseText);
+      } catch (parseErr) {
+        console.error(`Non-JSON response for ${action}:`, responseText);
+        // If they received HTML (like Vercel serverless error pages)
+        if (response.status === 504) {
+          return {
+            ok: false,
+            error: "انتهت مهلة خادم فيرسيل (504 Gateway Timeout). يرجى التحقق من سرعة استجابة سكريبت جوجل شيت."
+          };
+        }
+        if (response.status === 502 || response.status === 500) {
+          return {
+            ok: false,
+            error: `فشل خادم فيرسيل (كود ${response.status}). يرجى التأكد من كتابة متغير GOOGLE_SCRIPT_URL بشكل صحيح وإجراء Redeploy للموقع.`
+          };
+        }
+        return {
+          ok: false,
+          error: `خطأ اتصال من فيرسيل (${response.status}): يرجى تفعيل وإدخال متغير GOOGLE_SCRIPT_URL في إعدادات فيرسيل`
+        };
+      }
       return resData;
-    } catch (error) {
+    } catch (error: any) {
       if (i === retries) {
         console.error(`API Call failed for action ${action}:`, error);
-        return { ok: false, error: "فشل الاتصال بالخادم الرئيسي — يرجى التأكد من اتصال الإنترنت" };
+        const isTimeout = error?.name === "AbortError";
+        return {
+          ok: false,
+          error: isTimeout 
+            ? "انتهت مهلة الاتصال بالخادم (20 ثانية) دون رد من جوجل شيت. يرجى إعادة المحاولة."
+            : `تعذر الاتصال بالخادم الرئيسي: ${error?.message || "يرجى التحقق من اتصال الإنترنت"}`
+        };
       }
       await new Promise((res) => setTimeout(res, 1200)); // wait and retry
     }

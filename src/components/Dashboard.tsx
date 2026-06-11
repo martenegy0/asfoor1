@@ -22,8 +22,66 @@ export default function Dashboard({ token }: DashboardProps) {
       const res = await apiCall("dashboard", token);
       if (res.ok) {
         setStats(res.stats);
-        setCouriers(res.couriers || []);
-        setSuppliers(res.suppliers || []);
+        
+        // Parse and normalize couriers list to support both Object.entries and normal object formats
+        let parsedCouriers: any[] = [];
+        if (Array.isArray(res.couriers)) {
+          parsedCouriers = res.couriers.map((c: any) => {
+            if (Array.isArray(c) && c.length === 2 && typeof c[0] === "string" && typeof c[1] === "object") {
+              return {
+                name: c[0],
+                total: c[1].total || 0,
+                delivered: c[1].delivered || 0,
+                returned: c[1].returned || 0,
+                rate: c[1].rate || 0,
+                cod: c[1].cod || 0
+              };
+            } else if (c && typeof c === "object" && "name" in c) {
+              return c;
+            } else if (c && typeof c === "object") {
+              return {
+                name: c.name || "مجهول",
+                total: c.total || 0,
+                delivered: c.delivered || 0,
+                returned: c.returned || 0,
+                rate: c.rate || 0,
+                cod: c.cod || 0
+              };
+            }
+            return null;
+          }).filter(Boolean);
+        }
+        setCouriers(parsedCouriers);
+
+        let parsedSuppliers: any[] = [];
+        if (Array.isArray(res.suppliers)) {
+          parsedSuppliers = res.suppliers.map((s: any) => {
+            if (Array.isArray(s) && s.length === 2 && typeof s[0] === "string" && typeof s[1] === "object") {
+              return {
+                name: s[0],
+                total: s[1].total || 0,
+                delivered: s[1].delivered || 0,
+                returned: s[1].returned || 0,
+                rate: s[1].rate || 0,
+                cod: s[1].cod || 0
+              };
+            } else if (s && typeof s === "object" && "name" in s) {
+              return s;
+            } else if (s && typeof s === "object") {
+              return {
+                name: s.name || "مجهول",
+                total: s.total || 0,
+                delivered: s.delivered || 0,
+                returned: s.returned || 0,
+                rate: s.rate || 0,
+                cod: s.cod || 0
+              };
+            }
+            return null;
+          }).filter(Boolean);
+        }
+        setSuppliers(parsedSuppliers);
+
         setBestCourier(res.bestCourier || "—");
         setBestSupplier(res.bestSupplier || "—");
       } else {

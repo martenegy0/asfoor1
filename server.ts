@@ -6,33 +6,121 @@ const app = express();
 const PORT = 3000;
 const DB_PATH = path.join(process.cwd(), "src", "db.json");
 
-// Parse JSON payloads
-app.use(express.json({ limit: "50mb" }));
+// Default Fallback Database to ensure successful startup & login under environments like Vercel with read-only/missing storage
+const DEFAULT_DB = {
+  users: [
+    { name: "عصفور", role: "مدير", pass: "14014", active: "نعم", email: "asfour@friendplus.com", perms: "كاملة" },
+    { name: "ابو ياسين", role: "مدير", pass: "361991", active: "نعم", email: "abuyassin@friendplus.com", perms: "كاملة" },
+    { name: "ابو خديجه", role: "مشرف", pass: "14014", active: "نعم", email: "abukhadija@friendplus.com", perms: "توزيع ومتابعة" },
+    { name: "أحمد المرتجعات", role: "مسؤول مرتجعات", pass: "222222", active: "نعم", email: "returns@friendplus.com", perms: "متابعة المرتجعات" },
+    { name: "المحاسب أحمد", role: "محاسب", pass: "111111", active: "نعم", email: "accounting@friendplus.com", perms: "خزنة وحسابات وتقارير مالية" },
+    { name: "محمد حمدى", role: "مندوب", pass: "500500", active: "نعم", email: "mohamed@friendplus.com", perms: "أوردرات المندوب وتحديث الحالات" },
+    { name: "زياد", role: "مندوب", pass: "500500", active: "نعم", email: "ziad@friendplus.com", perms: "أوردرات المندوب وتحديث الحالات" },
+    { name: "محل الأناقة", role: "مورد", pass: "333333", active: "نعم", email: "elegance@friendplus.com", perms: "إضافة أوردرات ورفع كشوفات" },
+    { name: "صفوت العمليات", role: "موظف عمليات", pass: "444444", active: "نعم", email: "safwat@friendplus.com", perms: "متابعة حالات فقط" }
+  ],
+  couriers: [
+    { name: "محمد حمدى", phone: "01112345678", commission: 25, salary: 3000, region: "القاهرة" },
+    { name: "زياد", phone: "01212345678", commission: 25, salary: 3000, region: "الجيزة" }
+  ],
+  suppliers: [
+    { name: "محل الأناقة", phone: "01055556666", price: 65, notes: "ملابس وموضة" },
+    { name: "إلكترونيات السلام", phone: "01544443333", price: 60, notes: "أجهزة إلكترونية وإكسسوارات" }
+  ],
+  orders: [
+    {
+      tracking: "FP-1001-26",
+      createdAt: "2026-06-10 10:00",
+      updatedAt: "2026-06-10 12:00",
+      orderDate: "2026-06-10",
+      supplier: "محل الأناقة",
+      customer: "محسن علي",
+      phone: "01011112222",
+      phone2: "",
+      gov: "القاهرة",
+      region: "المعادي",
+      address: "شارع 9 عمارة 4 أ",
+      prodPrice: 200,
+      shipPrice: 65,
+      totalCOD: 265,
+      shipCost: 65,
+      courier: "محمد حمدى",
+      status: "تم التسليم",
+      notes: "تم التسليف بنجاح والتحصيل",
+      delivDate: "2026-06-10 12:00",
+      retDate: "",
+      addedBy: "محل الأناقة",
+      commission: 25,
+      returnShippingType: "",
+      returnQueueStatus: "",
+      returnQueueAgent: ""
+    },
+    {
+      tracking: "FP-1002-26",
+      createdAt: "2026-06-10 10:15",
+      updatedAt: "2026-06-10 12:30",
+      orderDate: "2026-06-10",
+      supplier: "محل الأناقة",
+      customer: "خالد أحمد",
+      phone: "01122223333",
+      phone2: "",
+      gov: "الجيزة",
+      region: "المهندسين",
+      address: "شارع البطل أحمد عبد العزيز",
+      prodPrice: 300,
+      shipPrice: 65,
+      totalCOD: 365,
+      shipCost: 65,
+      courier: "زياد",
+      status: "مرتجع",
+      notes: "العميل دفع الشحن فقط ورجع المنتج",
+      delivDate: "",
+      retDate: "2026-06-10 12:30",
+      addedBy: "محل الأناقة",
+      commission: 25,
+      returnShippingType: "paid",
+      returnQueueStatus: "جاهز للتسليم للمورد",
+      returnQueueAgent: "أحمد المرتجعات"
+    }
+  ],
+  expenses: [
+    { date: "2026-06-10 09:00", cat: "إيجار", desc: "إيجار مكتب الفرع الرئيسي", amount: 1500, by: "المحاسب أحمد" }
+  ],
+  cashbox: [
+    { date: "2026-06-10 08:00", desc: "رأس مال ابتدائي لتسوية الخزنة", type: "وارد", amount: 10000, ref: "CAP-001", addedBy: "المحاسب أحمد" },
+    { date: "2026-06-10 09:10", desc: "تحويل إلى حساب صادر لدفع المصاريف", type: "صادر", amount: 1500, ref: "EXP-REV-01", addedBy: "المحاسب أحمد" }
+  ],
+  statusHistory: [],
+  supplierLedger: [],
+  courierLedger: [],
+  settings: {
+    COUNTER: 1005,
+    COMPANY: "فريند بلس",
+    VERSION: "5.1"
+  }
+};
+
+// Safe JSON Body Parsing: Bypasses parser if Vercel serverless has already populated req.body
+app.use((req, res, next) => {
+  if (req.body && typeof req.body === "object") {
+    next();
+  } else {
+    express.json({ limit: "50mb" })(req, res, next);
+  }
+});
 
 // Atomic Database Helper
 function readDB(): any {
   if (!fs.existsSync(DB_PATH)) {
     console.warn(`Database file not found at ${DB_PATH}. Returning fallback structure.`);
-    return {
-      orders: [],
-      users: [],
-      settings: { COUNTER: 1000 },
-      couriers: [],
-      suppliers: []
-    };
+    return DEFAULT_DB;
   }
   try {
     const data = fs.readFileSync(DB_PATH, "utf-8");
     return JSON.parse(data);
   } catch (error) {
     console.error("Error reading database:", error);
-    return {
-      orders: [],
-      users: [],
-      settings: { COUNTER: 1000 },
-      couriers: [],
-      suppliers: []
-    };
+    return DEFAULT_DB;
   }
 }
 
@@ -110,7 +198,7 @@ app.post("/api", async (req: Request, res: Response) => {
     // If GOOGLE_SCRIPT_URL is configured in environment variables (e.g., .env),
     // we bypass local mock processing and forward the entire payload to the Google Sheet script directly.
     // This allows Google Sheets to act as the live cloud database for our modern web application!
-    if (process.env.GOOGLE_SCRIPT_URL) {
+    if (process.env.GOOGLE_SCRIPT_URL && process.env.GOOGLE_SCRIPT_URL.trim() !== "" && process.env.GOOGLE_SCRIPT_URL.startsWith("http")) {
       try {
         const response = await fetch(process.env.GOOGLE_SCRIPT_URL, {
           method: "POST",
