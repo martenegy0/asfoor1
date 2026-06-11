@@ -214,7 +214,7 @@ export default function Dashboard({ token }: DashboardProps) {
                         </span>
                       </td>
                       <td className="p-3 text-left font-mono font-bold text-emerald-400">
-                        {c.cod.toLocaleString("ar")}
+                        {(c.cod || 0).toLocaleString("ar")}
                       </td>
                     </tr>
                   ))}
