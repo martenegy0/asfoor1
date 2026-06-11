@@ -120,24 +120,33 @@ export default function DailyClosing({ token, role, user }: DailyClosingProps) {
         const targetDate = selectedClosingDate.trim();
 
         // Safe lowercase status filter matching
+        const normalizeToYMD = (val: any) => {
+          if (!val) return "";
+          const str = val.toString().trim();
+          const matchYMD = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+          if (matchYMD) {
+            return `${matchYMD[1]}-${matchYMD[2].padStart(2, "0")}-${matchYMD[3].padStart(2, "0")}`;
+          }
+          const matchDMY = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+          if (matchDMY) {
+            return `${matchDMY[3]}-${matchDMY[2].padStart(2, "0")}-${matchDMY[1].padStart(2, "0")}`;
+          }
+          return str.split(" ")[0].split("T")[0];
+        };
+
         const isDeliveredOnDate = (o: any) => {
           if (o.status !== "تم التسليم") return false;
-          // Extract delivery date YYYY-MM-DD
-          const dDate = o.delivDate ? o.delivDate.split(" ")[0] : "";
-          return dDate === targetDate;
+          return normalizeToYMD(o.delivDate) === targetDate;
         };
 
         const isReturnedOnDate = (o: any) => {
           const isRetStatus = ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status);
           if (!isRetStatus) return false;
-          // Extract return date YYYY-MM-DD
-          const rDate = o.retDate ? o.retDate.split(" ")[0] : "";
-          return rDate === targetDate;
+          return normalizeToYMD(o.retDate) === targetDate;
         };
 
         const isCreatedOnDate = (o: any) => {
-          const cDate = o.orderDate ? o.orderDate.split(" ")[0] : "";
-          return cDate === targetDate;
+          return normalizeToYMD(o.orderDate || o.createdAt) === targetDate;
         };
 
         let delivered = 0;

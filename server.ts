@@ -272,6 +272,148 @@ const ok = (res: Response, d: any = {}) => res.json({ ok: true, ...d });
 const err = (res: Response, m: string) => res.json({ ok: false, error: m });
 
 // ─────────────────────────────────────────────────────────────
+// PROXY CACHING, DEDUPLICATION & ENHANCED DATE MATCHING (Stop API Spam)
+// ─────────────────────────────────────────────────────────────
+const isDateToday = (dateInput: any): boolean => {
+  if (!dateInput) return false;
+  const str = dateInput.toString().trim().toLowerCase();
+  
+  // Get Cairo today's metrics
+  const today = getCairoDateObj();
+  const ty = today.getFullYear(); // 2026
+  const tm = today.getMonth() + 1; // 6
+  const td = today.getDate(); // 11
+  
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  const yStr = ty.toString();
+  const mStr = tm.toString();
+  const mPad = pad(tm);
+  const dStr = td.toString();
+  const dPad = pad(td);
+  
+  if (
+    str.includes(`${yStr}-${mPad}-${dPad}`) ||
+    str.includes(`${yStr}/${mPad}/${dPad}`) ||
+    str.includes(`${yStr}-${mStr}-${dStr}`) ||
+    str.includes(`${yStr}/${mStr}-${dStr}`)
+  ) {
+    return true;
+  }
+  
+  if (
+    str.includes(`${dPad}/${mPad}/${yStr}`) ||
+    str.includes(`${dPad}-${mPad}-${yStr}`) ||
+    str.includes(`${dStr}/${mStr}/${yStr}`) ||
+    str.includes(`${dStr}-${mStr}-${yStr}`) ||
+    str.includes(`${dPad}/${mStr}/${yStr}`) ||
+    str.includes(`${dStr}/${mPad}/${yStr}`)
+  ) {
+    return true;
+  }
+  
+  const parts = str.split(/[-/\s]+/);
+  if (parts.length >= 2) {
+    const hasDay = parts.some(p => Number(p) === td);
+    const hasMonth = parts.some(p => Number(p) === tm);
+    const hasYear = parts.some(p => Number(p) === ty || p === "26");
+    if (hasDay && hasMonth && (hasYear || parts.length === 2)) {
+      return true;
+    }
+  }
+  
+  try {
+    const dObj = new Date(str);
+    if (!isNaN(dObj.getTime())) {
+      const dy = dObj.getFullYear();
+      const dm = dObj.getMonth() + 1;
+      const dd = dObj.getDate();
+      if (dy === ty && dm === tm && dd === td) {
+        return true;
+      }
+    }
+  } catch(e) {}
+  
+  return false;
+};
+
+interface CacheEntry {
+  data: any;
+  timestamp: number;
+}
+
+const READ_CACHE = new Map<string, CacheEntry>();
+const ACTIVE_FETCHES = new Map<string, Promise<any>>();
+const CACHE_TTL_MS = 10000; // 10 seconds cache
+
+function getCacheKey(payload: any): string {
+  const keyObj = {
+    action: payload.action,
+    todayOnly: payload.todayOnly,
+    status: payload.status,
+    search: payload.search,
+    supplier: payload.supplier,
+    courier: payload.courier,
+    currentUser: payload.currentUser,
+    currentRole: payload.currentRole
+  };
+  return JSON.stringify(keyObj);
+}
+
+async function executeProxyRequest(gscriptUrl: string, payload: any): Promise<any> {
+  const isWrite = [
+    "addOrder", "addBulk", "updateStatus", "updateOrder", "deleteOrder", "bulkUpdate",
+    "addSupplierPayment", "addCourierAdjustment", "addCashbox", "addExpense",
+    "addUser", "registerUser", "updateUser", "addDailyClosing", "updateCourier"
+  ].includes(payload.action);
+
+  if (isWrite) {
+    READ_CACHE.clear();
+    ACTIVE_FETCHES.clear();
+    
+    const response = await fetch(gscriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    return await response.json();
+  }
+
+  const cacheKey = getCacheKey(payload);
+
+  const cached = READ_CACHE.get(cacheKey);
+  const nowMs = Date.now();
+  if (cached && (nowMs - cached.timestamp < CACHE_TTL_MS)) {
+    return cached.data;
+  }
+
+  const active = ACTIVE_FETCHES.get(cacheKey);
+  if (active) {
+    return active;
+  }
+
+  const fetchPromise = (async () => {
+    try {
+      const response = await fetch(gscriptUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await response.json();
+      READ_CACHE.set(cacheKey, { data, timestamp: Date.now() });
+      return data;
+    } catch (err) {
+      ACTIVE_FETCHES.delete(cacheKey);
+      throw err;
+    } finally {
+      ACTIVE_FETCHES.delete(cacheKey);
+    }
+  })();
+
+  ACTIVE_FETCHES.set(cacheKey, fetchPromise);
+  return fetchPromise;
+}
+
+// ─────────────────────────────────────────────────────────────
 // UNIFIED POST HANDLER
 // ─────────────────────────────────────────────────────────────
 app.post("/api", async (req: Request, res: Response) => {
@@ -365,15 +507,129 @@ app.post("/api", async (req: Request, res: Response) => {
         };
       }
 
+      if (d.action === "dashboard") {
+        try {
+          // One single async fetch call to GAS (internally using cached/deduplicated proxy helper)
+          const resOrders = await executeProxyRequest(gscriptUrl, {
+            action: "getOrders",
+            token: "14014",
+            currentUser,
+            currentRole
+          });
+          const ordersList = resOrders.orders || [];
+
+          const todayDate = tod();
+          let stats = {
+            total: ordersList.length,
+            todayTotal: 0,
+            delivered: 0,
+            returned: 0,
+            pending: 0,
+            active: 0,
+            assignedPending: 0,
+            totalCOD: 0,
+            todayCOD: 0,
+            profit: 0
+          };
+
+          const courierStats: { [name: string]: { total: number; delivered: number; returned: number; cod: number } } = {};
+          const supplierStats: { [name: string]: { total: number; delivered: number; returned: number } } = {};
+
+          for (const o of ordersList) {
+            const isToday = isDateToday(o.createdAt || o.orderDate);
+
+            if (isToday) {
+              stats.todayTotal++; // Today's Orders created today
+            }
+
+            const isClosed = ["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status);
+            const isAssigned = o.courier && o.courier !== "";
+            if (isAssigned && !isClosed) {
+              stats.assignedPending++;
+            }
+
+            if (o.status === "تم التسليم") {
+              stats.delivered++;
+              stats.totalCOD += Number(o.totalCOD || 0);
+              stats.profit += Number(o.shipPrice || o.shipCost || 0);
+
+              if (o.delivDate && isDateToday(o.delivDate)) {
+                stats.todayCOD += Number(o.totalCOD || 0);
+              }
+            } else if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)) {
+              stats.returned++;
+            } else if (["جديد", "تم الإسناد", "مؤجل", "لا يوجد رد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد"].includes(o.status)) {
+              stats.pending++;
+            } else if (o.status === "خارج مع المندوب") {
+              stats.active++;
+            }
+
+            // Courier Statistics
+            if (o.courier) {
+              const cName = o.courier.toString().trim();
+              if (cName) {
+                if (!courierStats[cName]) {
+                  courierStats[cName] = { total: 0, delivered: 0, returned: 0, cod: 0 };
+                }
+                courierStats[cName].total++;
+                if (o.status === "تم التسليم") {
+                  courierStats[cName].delivered++;
+                  courierStats[cName].cod += Number(o.totalCOD || 0);
+                } else if (["مرتجع", "التسليم للمورد"].includes(o.status)) {
+                  courierStats[cName].returned++;
+                }
+              }
+            }
+
+            // Supplier Statistics
+            if (o.supplier) {
+              const sName = o.supplier.toString().trim();
+              if (sName) {
+                if (!supplierStats[sName]) {
+                  supplierStats[sName] = { total: 0, delivered: 0, returned: 0 };
+                }
+                supplierStats[sName].total++;
+                if (o.status === "تم التسليم") {
+                  supplierStats[sName].delivered++;
+                } else if (["مرتجع", "التسليم للمورد"].includes(o.status)) {
+                  supplierStats[sName].returned++;
+                }
+              }
+            }
+          }
+
+          const formattedCouriers = Object.entries(courierStats).map(([name, cs]: any) => {
+            const rate = cs.total ? Math.round((cs.delivered / cs.total) * 100) : 0;
+            return { name, ...cs, rate };
+          });
+
+          const formattedSuppliers = Object.entries(supplierStats).map(([name, ss]: any) => {
+            const rate = ss.total ? Math.round((ss.delivered / ss.total) * 100) : 0;
+            return { name, ...ss, rate };
+          });
+
+          const bestCourierObj = [...formattedCouriers].sort((a, b) => b.delivered - a.delivered)[0];
+          const bestSupplierObj = [...formattedSuppliers].sort((a, b) => b.delivered - a.delivered)[0];
+
+          const rate = stats.total ? Math.round((stats.delivered / stats.total) * 100) : 0;
+          const remainingStock = ordersList.filter((o: any) => !["تم التسليم", "خارج مع المندوب", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)).length;
+          const inOfficeStock = stats.total - (stats.active + stats.returned);
+
+          return ok(res, {
+            stats: { ...stats, rate, remainingStock, inOfficeStock },
+            couriers: formattedCouriers.sort((a, b) => b.delivered - a.delivered),
+            suppliers: formattedSuppliers.sort((a, b) => b.delivered - a.delivered).slice(0, 10),
+            bestCourier: bestCourierObj ? bestCourierObj.name : "—",
+            bestSupplier: bestSupplierObj ? bestSupplierObj.name : "—"
+          });
+        } catch (dashError: any) {
+          console.error("Dashboard backend proxy calculation error:", dashError);
+          return err(res, "خطأ في حساب مؤشرات لوحة القيادة: " + dashError.message);
+        }
+      }
+
       try {
-        const response = await fetch(gscriptUrl, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify(payloadToSheet)
-        });
-        const resData = await response.json();
+        const resData = await executeProxyRequest(gscriptUrl, payloadToSheet);
         return res.json(resData);
       } catch (proxyError: any) {
         console.error("Error proxying to Google Sheets Script URL:", proxyError);
@@ -1078,8 +1334,7 @@ app.post("/api", async (req: Request, res: Response) => {
         const supplierStats: { [name: string]: { total: number; delivered: number; returned: number } } = {};
 
         for (const o of ordersList) {
-          const ordDate = normalizeToDateString(o.createdAt);
-          const isToday = ordDate === todayDate;
+          const isToday = isDateToday(o.createdAt || o.orderDate);
 
           if (isToday) {
             stats.todayTotal++; // Today's Orders created today
@@ -1096,7 +1351,7 @@ app.post("/api", async (req: Request, res: Response) => {
             stats.totalCOD += Number(o.totalCOD || 0);
             stats.profit += Number(o.shipPrice || 0); // profit is ship share
 
-            if (o.delivDate && normalizeToDateString(o.delivDate) === todayDate) {
+            if (o.delivDate && isDateToday(o.delivDate)) {
               stats.todayCOD += Number(o.totalCOD || 0); // Money collected today
             }
           } else if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)) {
@@ -1418,7 +1673,7 @@ app.post("/api", async (req: Request, res: Response) => {
         const netSalary = basicSalary + delivCommission + returnShippingCommission + bonusesSum - penaltiesSum;
 
         const todayDate = tod();
-        const todayDeliveredCount = courierOrders.filter((o: any) => o.status === "تم التسليم" && o.delivDate && o.delivDate.substring(0, 10) === todayDate).length;
+        const todayDeliveredCount = courierOrders.filter((o: any) => o.status === "تم التسليم" && o.delivDate && isDateToday(o.delivDate)).length;
         const todayDelivCommission = todayDeliveredCount * commissionSuccess;
 
         return ok(res, {
@@ -1472,9 +1727,9 @@ app.post("/api", async (req: Request, res: Response) => {
         const totalEarnings = basicSalary + totalCommission + bonuses - penalties;
 
         const todayDate = tod();
-        const todayDelivered = ordersList.filter((o: any) => o.status === "تم التسليم" && o.delivDate && o.delivDate.substring(0, 10) === todayDate).length;
+        const todayDelivered = ordersList.filter((o: any) => o.status === "تم التسليم" && o.delivDate && isDateToday(o.delivDate)).length;
         const todayDelivCommission = todayDelivered * commissionSuccess;
-        const todayReturned = ordersList.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) && o.retDate && o.retDate.substring(0, 10) === todayDate).length;
+        const todayReturned = ordersList.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) && o.retDate && isDateToday(o.retDate)).length;
 
         // Cumulative Daily Ledger calculations
         const nowCairo = getCairoDateObj();
@@ -1901,7 +2156,7 @@ app.post("/api", async (req: Request, res: Response) => {
 
         switch (type) {
           case "today":
-            list = ordersList.filter((o: any) => normalizeToDateString(o.createdAt) === todayDate || normalizeToDateString(o.updatedAt) === todayDate);
+            list = ordersList.filter((o: any) => isDateToday(o.createdAt) || isDateToday(o.updatedAt));
             break;
           case "pending":
             list = ordersList.filter((o: any) => ["جديد", "تم الإسناد", "خارج مع المندوب", "مؤجل", "لا يوجد رد"].includes(o.status));
