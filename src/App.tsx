@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from "react";
-import { LogOut, RefreshCw, PlusCircle, LayoutDashboard, Truck, Wallet, FileText, Settings, Users, BookOpen, Layers } from "lucide-react";
+import { LogOut, RefreshCw, PlusCircle, LayoutDashboard, Truck, Wallet, FileText, Settings, Users, BookOpen, Layers, History, Calendar } from "lucide-react";
 import { apiCall } from "./utils";
 import Login from "./components/Login";
 import Dashboard from "./components/Dashboard";
 import Ledger from "./components/Ledger";
 import Orders from "./components/Orders";
 import Inputs from "./components/Inputs";
+import DailyClosing from "./components/DailyClosing";
 
 export default function App() {
   const [token, setToken] = useState("");
@@ -43,6 +44,10 @@ export default function App() {
   const [addedRole, setAddedRole] = useState("مندوب");
   const [addedPass, setAddedPass] = useState("");
   const [addedEmail, setAddedEmail] = useState("");
+
+  // --- Audit Log states ---
+  const [auditLogs, setAuditLogs] = useState<any[]>([]);
+  const [loadingAudits, setLoadingAudits] = useState(false);
 
   // --- Quick Success rate stats for current logged user ---
   const [quickTotal, setQuickTotal] = useState(0);
@@ -137,6 +142,7 @@ export default function App() {
       if (isFinance) {
         fetchCashboxDetails(tk);
         fetchExpensesDetails(tk);
+        loadAuditLogs(tk);
         if (activeRole === "مدير") {
           fetchUsersDetail(tk);
         }
@@ -145,6 +151,22 @@ export default function App() {
       console.error("Orders fetching failed offline", err);
     } finally {
       setLoadingOrders(false);
+    }
+  }
+
+  // --- central audit logging downloader ---
+  async function loadAuditLogs(tk = token) {
+    if (!tk) return;
+    setLoadingAudits(true);
+    try {
+      const res = await apiCall("getAuditLog", tk);
+      if (res.ok) {
+        setAuditLogs(res.logs || []);
+      }
+    } catch (err) {
+      console.error("Failed loading audit logs", err);
+    } finally {
+      setLoadingAudits(false);
     }
   }
 
@@ -439,6 +461,26 @@ export default function App() {
               <FileText size={14} />
               <span>المصروفات</span>
             </button>
+
+            <button
+              onClick={() => setActiveTab("closing")}
+              className={`px-5 py-4 text-xs font-black cursor-pointer transition-all border-b-2 flex items-center gap-1.5 whitespace-nowrap ${
+                activeTab === "closing" ? "text-amber-500 border-amber-500" : "text-slate-400 border-transparent hover:text-slate-200"
+              }`}
+            >
+              <Calendar size={14} />
+              <span>التقفيل اليومي</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab("audit")}
+              className={`px-5 py-4 text-xs font-black cursor-pointer transition-all border-b-2 flex items-center gap-1.5 whitespace-nowrap ${
+                activeTab === "audit" ? "text-amber-500 border-amber-500" : "text-slate-400 border-transparent hover:text-slate-200"
+              }`}
+            >
+              <History size={14} />
+              <span>سجلات التدقيق والأمان</span>
+            </button>
           </>
         )}
 
@@ -621,6 +663,11 @@ export default function App() {
           </div>
         )}
 
+        {/* --- DAILY CLOSING REPORT TAB (Only Accountant & Admin) --- */}
+        {activeTab === "closing" && showFinanceTabs && (
+          <DailyClosing token={token} role={role} user={username} />
+        )}
+
         {/* --- USERS MANAGEMENT TAB (Admin only per rules) --- */}
         {activeTab === "users" && showUsersTab && (
           <div className="p-4 space-y-6 text-right">
@@ -673,6 +720,70 @@ export default function App() {
                     </div>
                   );
                 })
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* --- AUDIT LOG PANEL (Admin/Accountant/Supervisor only per rules) --- */}
+        {activeTab === "audit" && showFinanceTabs && (
+          <div className="p-4 space-y-6 text-right">
+            <div className="flex items-center justify-between bg-slate-900 border border-white/6 p-4 rounded-xl">
+              <div>
+                <h3 className="text-xs font-black text-slate-100">🔒 سجلات التدقيق المالي ومراقب الأمان المركزي</h3>
+                <p className="text-[10px] text-slate-500 mt-1">تتبع التعديلات والعمليات المالية الحرجة لمنع العجز المالي والائتماني.</p>
+              </div>
+              <button
+                onClick={() => loadAuditLogs()}
+                className="px-3.5 py-2 bg-slate-800 hover:bg-slate-750 text-slate-205 border border-white/8 font-black text-xs rounded-xl cursor-pointer"
+              >
+                تحديث السجل
+              </button>
+            </div>
+
+            <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 space-y-3">
+              {loadingAudits ? (
+                <div className="text-center py-8 text-xs text-slate-500 animate-pulse">جاري تحميل سجلات التدقيق المالي...</div>
+              ) : auditLogs.length === 0 ? (
+                <div className="text-center py-12 text-xs text-slate-500">
+                  لا توجد سجلات تدقيق مالي مسجلة حالياً في النظام
+                </div>
+              ) : (
+                <div className="space-y-3 max-h-[600px] overflow-y-auto pr-1">
+                  {auditLogs.map((log: any, idx: number) => {
+                    return (
+                      <div
+                        key={idx}
+                        className="bg-slate-950 border border-white/4 p-4 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-3 hover:bg-slate-950/70"
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-[10px] font-bold text-rose-405 bg-rose-950/20 px-1.5 py-0.5 rounded border border-rose-900/40">
+                              {log.type}
+                            </span>
+                            <span className="text-xs font-bold text-slate-205">
+                              بواسطة: {log.user}
+                            </span>
+                            <span className="text-[9px] font-mono font-bold text-slate-500">
+                              {log.dateTime}
+                            </span>
+                          </div>
+                          
+                          <div className="text-xs text-slate-300 leading-relaxed font-bold">
+                            العملية: <span className="font-mono text-slate-400">{log.reason}</span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-3 self-end md:self-center bg-slate-900 px-3 py-2 rounded-lg border border-white/4">
+                          <div className="text-left font-mono text-[10px]">
+                            <div className="text-slate-500 line-through">قبل: {log.oldVal}</div>
+                            <div className="text-emerald-450 font-bold">بعد: {log.newVal}</div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               )}
             </div>
           </div>

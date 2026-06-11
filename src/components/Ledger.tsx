@@ -36,6 +36,11 @@ export default function Ledger({ token, role, user }: LedgerProps) {
   const [adjAmount, setAdjAmount] = useState("");
   const [adjDesc, setAdjDesc] = useState("");
 
+  // --- Courier Handover States ---
+  const [handoverAmount, setHandoverAmount] = useState("");
+  const [handoverRef, setHandoverRef] = useState("");
+  const [handoverDesc, setHandoverDesc] = useState("");
+
   const [loading, setLoading] = useState(false);
   const [feedback, setFeedback] = useState("");
 
@@ -170,6 +175,37 @@ export default function Ledger({ token, role, user }: LedgerProps) {
       }
     } catch (err) {
       alert("فشل تسجيل التسوية المالية للمندوب");
+    } finally {
+      setSubmittingLedger(false);
+    }
+  }
+
+  // Submit Physical COD Handover from Courier directly to Centralized Cashbox
+  async function handleCourierHandover(e: React.FormEvent) {
+    e.preventDefault();
+    if (!handoverAmount || Number(handoverAmount) <= 0) {
+      alert("يرجى إدخال مبلغ صحيح للاستلام");
+      return;
+    }
+    setSubmittingLedger(true);
+    try {
+      const res = await apiCall("addCashbox", token, {
+        type: "استلام عهدة مندوب",
+        ref: selectedCourier,
+        amount: Number(handoverAmount),
+        desc: handoverDesc.trim() || `استلام دفعة عهدة نقدية من المندوب: ${selectedCourier} بموجب وصل: ${handoverRef || "—"}`
+      });
+      if (res.ok) {
+        setHandoverAmount("");
+        setHandoverRef("");
+        setHandoverDesc("");
+        loadCourierLedger();
+        alert(`✅ تم استلام عهدة المندوب بنجاح وترحيلها إلى الخزنة المركزية وتصفيتها`);
+      } else {
+        alert("⚠️ " + res.error);
+      }
+    } catch (err) {
+      alert("فشل تسجيل حركة استلام العهدة المباشر");
     } finally {
       setSubmittingLedger(false);
     }
@@ -434,6 +470,107 @@ export default function Ledger({ token, role, user }: LedgerProps) {
                   </span>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* --- ANTI-LOSS COD & DEFICIT TRACKER CARD --- */}
+          {courierSummary && (
+            <div className="bg-gradient-to-br from-slate-900 via-slate-900 to-slate-950 border border-white/6 rounded-2xl p-5 space-y-4">
+              <div className="border-b border-white/6 pb-2">
+                <h3 className="text-xs font-black text-rose-400 flex items-center justify-between">
+                  <span>🚨 جهاز تعقب عهدة الـ COD ومنع العجز (المطابقة اللحظية)</span>
+                  <span className="text-[10px] font-bold bg-rose-950/20 text-rose-500 border border-rose-900/40 px-2 py-0.5 rounded">
+                     نظام حماية الحصيلة 100%
+                  </span>
+                </h3>
+                <p className="text-[10px] text-slate-500 mt-1">مطابقة النقدية المستلمة في الخزنة مع المجموع المستلم مع المندوبين وتحديد الفروقات.</p>
+              </div>
+
+              {/* COD Stat Row */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="bg-slate-950 p-4 border border-white/4 rounded-xl space-y-1">
+                  <div className="text-[10px] font-bold text-slate-400">إجمالي النقدية المحصلة (COD)</div>
+                  <div className="text-xl font-black text-slate-200 font-mono">
+                    {Number(courierSummary.totalCollected || 0).toLocaleString("ar")} <span className="text-xs font-medium">ج.م</span>
+                  </div>
+                  <div className="text-[9px] text-slate-500">مجموع الأوردرات المسلّمة بنجاح</div>
+                </div>
+
+                <div className="bg-slate-950 p-4 border border-white/4 rounded-xl space-y-1">
+                  <div className="text-[10px] font-bold text-slate-400">ما تم إيداعه بالشركة فعلياً</div>
+                  <div className="text-xl font-black text-emerald-400 font-mono">
+                    {Number(courierSummary.totalPaidToCompany || 0).toLocaleString("ar")} <span className="text-xs font-medium">ج.م</span>
+                  </div>
+                  <div className="text-[9px] text-emerald-500">إجمالي التوريدات المسجلة بالخزنة</div>
+                </div>
+
+                <div className={`p-4 rounded-xl space-y-1 border ${
+                  (courierSummary.deficit || 0) > 0 
+                  ? "bg-rose-950/15 border-rose-900/40" 
+                  : "bg-emerald-950/10 border-emerald-900/30"
+                }`}>
+                  <div className="text-[10px] font-bold text-slate-200">عجز المندوب المتبقي (العهدة المعلقة)</div>
+                  <div className={`text-xl font-black font-mono ${(courierSummary.deficit || 0) > 0 ? "text-rose-450" : "text-emerald-400"}`}>
+                    {Number(courierSummary.deficit || 0).toLocaleString("ar")} <span className="text-xs font-medium">ج.م</span>
+                  </div>
+                  <div className="text-[9px] text-slate-400 leading-none">
+                    {(courierSummary.deficit || 0) > 0 ? "⚠️ توجد عهدة مالية معلقة برقبته للجهة" : "✅ ذمة المندوب خالية تماماً"}
+                  </div>
+                </div>
+              </div>
+
+              {/* Handover payout form */}
+              {isFinancial && (
+                <div className="bg-slate-950 p-4 rounded-xl border border-white/4 space-y-3">
+                  <h4 className="text-[11px] font-black text-emerald-400 flex items-center gap-1.5">
+                     📥 تسجيل استلام نقدية وإخلاء عهدة مباشرة لـ {selectedCourier}
+                  </h4>
+                  <form onSubmit={handleCourierHandover} className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
+                    <div className="space-y-1">
+                      <label className="block text-[9px] text-slate-400 font-bold">المبلغ المستلم بالجنيه*</label>
+                      <input 
+                        type="number"
+                        required
+                        value={handoverAmount}
+                        onChange={(e) => setHandoverAmount(e.target.value)}
+                        placeholder="3500"
+                        className="w-full bg-slate-900 text-slate-200 border border-white/8 rounded-lg px-2.5 py-2 text-xs font-mono text-right"
+                      />
+                    </div>
+                    
+                    <div className="space-y-1">
+                      <label className="block text-[9px] text-slate-400 font-bold">رقم إيصال الاستلام (REF)*</label>
+                      <input 
+                        type="text"
+                        required
+                        value={handoverRef}
+                        onChange={(e) => setHandoverRef(e.target.value)}
+                        placeholder="REC-5502..."
+                        className="w-full bg-slate-900 text-slate-200 border border-white/8 rounded-lg px-2.5 py-2 text-xs text-right"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="block text-[9px] text-slate-400 font-bold">بيان إضافي (اختياري)</label>
+                      <input 
+                        type="text"
+                        value={handoverDesc}
+                        onChange={(e) => setHandoverDesc(e.target.value)}
+                        placeholder="توريد الوردية المسائية..."
+                        className="w-full bg-slate-900 text-slate-200 border border-white/8 rounded-lg px-2.5 py-2 text-xs text-right"
+                      />
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={submittingLedger}
+                      className="w-full bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-black text-xs py-2.5 rounded-lg cursor-pointer transition-colors disabled:opacity-50"
+                    >
+                      تسجيل التوريد وتصفية العجز
+                    </button>
+                  </form>
+                </div>
+              )}
             </div>
           )}
 

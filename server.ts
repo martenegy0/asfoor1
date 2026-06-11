@@ -162,23 +162,56 @@ function generateID(db: any): string {
   return `FP-${counter}-${yearSuffix}`;
 }
 
+// Stateless Session Helpers
+function createStatelessToken(user: string, role: string, perms: string): string {
+  const payload = {
+    user,
+    role,
+    perms,
+    exp: Date.now() + 7 * 24 * 60 * 60 * 1000 // 7 days
+  };
+  return Buffer.from(JSON.stringify(payload)).toString("base64");
+}
+
+function verifyStatelessToken(token: string): { user: string; role: string; perms: string } | null {
+  if (!token) return null;
+  if (token === "mock-token-asfour") return { user: "عصفور", role: "مدير", perms: "كاملة" };
+  if (token === "mock-token-abuyassin") return { user: "ابو ياسين", role: "مدير", perms: "كاملة" };
+  try {
+    const decoded = JSON.parse(Buffer.from(token, "base64").toString("utf-8"));
+    if (decoded && decoded.exp && decoded.exp > Date.now()) {
+      return { user: decoded.user, role: decoded.role, perms: decoded.perms };
+    }
+  } catch (e) {
+    // legacy token style or invalid
+  }
+  return null;
+}
+
 // Session simulated store
-const SESSIONS: { [token: string]: { user: string; role: string } } = {};
+const SESSIONS: { [token: string]: { user: string; role: string; perms?: string } } = {};
 
 function getSession(token: string) {
   if (!token) return null;
-  return SESSIONS[token] || null;
+  if (SESSIONS[token]) {
+    return SESSIONS[token];
+  }
+  const verified = verifyStatelessToken(token);
+  if (verified) {
+    return { user: verified.user, role: verified.role, perms: verified.perms };
+  }
+  return null;
 }
 
-function createSession(user: string, role: string): string {
-  const token = Math.random().toString(36).substring(2) + Date.now().toString(36);
-  SESSIONS[token] = { user, role };
+function createSession(user: string, role: string, perms: string = "كاملة"): string {
+  const token = createStatelessToken(user, role, perms);
+  SESSIONS[token] = { user, role, perms };
   return token;
 }
 
 // Seed admin sessions on demand so they don't expire easily
-SESSIONS["mock-token-asfour"] = { user: "عصفور", role: "مدير" };
-SESSIONS["mock-token-abuyassin"] = { user: "ابو ياسين", role: "مدير" };
+SESSIONS["mock-token-asfour"] = { user: "عصفور", role: "مدير", perms: "كاملة" };
+SESSIONS["mock-token-abuyassin"] = { user: "ابو ياسين", role: "مدير", perms: "كاملة" };
 
 // Global Error / Response wrapping
 const ok = (res: Response, d: any = {}) => res.json({ ok: true, ...d });
@@ -194,18 +227,69 @@ app.post("/api", async (req: Request, res: Response) => {
       return err(res, "Missing action parameter");
     }
 
-    // 🌐 Google Sheets Integration Web-App Proxy
-    // If GOOGLE_SCRIPT_URL is configured in environment variables (e.g., .env),
-    // we bypass local mock processing and forward the entire payload to the Google Sheet script directly.
-    // This allows Google Sheets to act as the live cloud database for our modern web application!
+    // 🌐 Modern Google Sheets Integration Proxy Gateway
     if (process.env.GOOGLE_SCRIPT_URL && process.env.GOOGLE_SCRIPT_URL.trim() !== "" && process.env.GOOGLE_SCRIPT_URL.startsWith("http")) {
+      const gscriptUrl = process.env.GOOGLE_SCRIPT_URL.trim();
+
+      // 1. Handle "login" action securely against Google Sheets
+      if (d.action === "login") {
+        const { name, pass } = d;
+        if (!name || !pass) return err(res, "اكتب الاسم وكلمة المرور");
+        
+        try {
+          const response = await fetch(gscriptUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "getUsers", token: "14014" })
+          });
+          const resData = await response.json();
+          if (resData.ok && resData.users) {
+            const user = resData.users.find(
+              (u: any) => u.name?.toString().trim() === name.trim() && u.pass?.toString().trim() === pass.trim()
+            );
+            if (!user) return err(res, "اسم المستخدم أو كلمة المرور غلط");
+            if (user.active === "لا") return err(res, "الحساب موقوف");
+            
+            const token = createSession(user.name, user.role, user.perms || "كاملة");
+            return ok(res, { user: user.name, role: user.role, token, perms: user.perms || "كاملة" });
+          } else {
+            return err(res, resData.error || "خطأ في استرجاع بيانات الموظفين من جوجل شيت");
+          }
+        } catch (authErr: any) {
+          console.error("Google Sheets Auth Proxy error:", authErr);
+          return err(res, `فشل الاتصال بجوجل شيت للتحقق من الحساب: ${authErr.message || authErr}`);
+        }
+      }
+
+      // 2. Process non-login requests
+      let currentUser = "زائر";
+      let currentRole = "زائر";
+
+      // Allow "checkPhone" temporarily or verify session for everything else
+      if (d.action !== "checkPhone") {
+        const sess = getSession(d.token);
+        if (!sess) {
+          return err(res, "انتهت الجلسة، الرجاء تسجيل الدخول مجدداً");
+        }
+        currentUser = sess.user;
+        currentRole = sess.role;
+      }
+
+      // Inject server-verified metadata & security ACCESS_TOKEN ("14014") for Google Sheets
+      const payloadToSheet = {
+        ...d,
+        token: "14014",
+        currentUser,
+        currentRole
+      };
+
       try {
-        const response = await fetch(process.env.GOOGLE_SCRIPT_URL, {
+        const response = await fetch(gscriptUrl, {
           method: "POST",
           headers: {
             "Content-Type": "application/json"
           },
-          body: JSON.stringify(d)
+          body: JSON.stringify(payloadToSheet)
         });
         const resData = await response.json();
         return res.json(resData);
@@ -464,7 +548,7 @@ app.post("/api", async (req: Request, res: Response) => {
       // UPDATE ORDER STATUS (Workflow Controls)
       // ─────────────────────────────────────────────────────────────
       case "updateStatus": {
-        const { tracking, status, returnShippingType, returnQueueStatus } = d;
+        const { tracking, status, returnShippingType } = d;
         if (!tracking || !status) return err(res, "معاملات مفقودة");
 
         const order = db.orders.find((o: any) => o.tracking === tracking);
@@ -478,7 +562,6 @@ app.post("/api", async (req: Request, res: Response) => {
         }
 
         // 🚨 Role Permissions Guard for status transitions
-        // Admin, Supervisor: distributed/assigments/everything allowed
         const isAdmin = currentRole === "مدير";
         const isSuper = currentRole === "مشرف";
         const isOps = currentRole === "موظف عمليات";
@@ -527,8 +610,7 @@ app.post("/api", async (req: Request, res: Response) => {
           order.returnShippingType = returnShippingType; // 'paid' or 'unpaid'
           order.retDate = now();
 
-          // 1. Calculate Courier Commission according to:
-          // "إذا دفع الشحن: يتم احتساب عمولة المندوب. إذا رفض دفع الشحن: لا يتم احتساب عمولة المندوب."
+          // 1. Calculate Courier Commission
           if (returnShippingType === "paid") {
             const courierProfile = db.couriers.find((c: any) => c.name === order.courier);
             const commVal = courierProfile ? Number(courierProfile.commission || 25) : 25;
@@ -545,7 +627,7 @@ app.post("/api", async (req: Request, res: Response) => {
             });
           } else {
             order.commission = 0;
-            // Unpaid return has 0 commission, goes into follow up list
+            // Unpaid return has 0 commission
             db.courierLedger.push({
               courier: order.courier,
               date: now(),
@@ -557,28 +639,14 @@ app.post("/api", async (req: Request, res: Response) => {
           }
 
           // 2. Returns Queue System:
-          // "عند تحويل أي أوردر إلى: مرتجع، يظهر تلقائياً داخل Return Queue ويتم تعيين مسؤول المرتجعات لمتابعته."
-          // Set initial return queue state
           order.returnQueueStatus = "مرتجع جديد";
           const firstReturnsOfficer = db.users.find((u: any) => u.role === "مسؤول مرتجعات" && u.active === "نعم");
           order.returnQueueAgent = firstReturnsOfficer ? firstReturnsOfficer.name : "أحمد المرتجعات";
-
-          // Adjust Supplier Ledger:
-          // Returns delivered back to the supplier subtract the product price (reverting the credited balance)
-          db.supplierLedger.push({
-            supplier: order.supplier,
-            date: now(),
-            type: "مرتجع",
-            tracking: order.tracking,
-            amount: -Number(order.prodPrice || 0),
-            desc: `تخفيض مرتجع للأوردر ${order.tracking} (${returnShippingType === "paid" ? "دفع الشحن" : "رفض الشحن"})`
-          });
         }
 
         // Handle transitioning between Return Queue statuses directly
         else if (["مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"].includes(status)) {
           order.returnQueueStatus = status;
-          // If return is finally delivered back to the supplier, let's also update status to 'التسليم للمورد' (Delivered to supplier)
           if (status === "تم تسليم المرتجع للمورد") {
             order.status = "التسليم للمورد";
             order.retDate = now();
@@ -607,8 +675,7 @@ app.post("/api", async (req: Request, res: Response) => {
               desc: `عمولة تسليم الأوردر والتحصيل للأوردر: ${order.tracking}`
             });
 
-            // Put delivered cash into Treasury (خارج مع المندوب cash settles to treasury)
-            // Add to Cashbox: totalCOD is added as 'تحصيل مندوب'
+            // Automatically register the delivery in cashbox as physical collection pending handover
             db.cashbox.push({
               date: now(),
               desc: `تحصيل أوردر مسلّم: ${order.tracking} (المندوب: ${order.courier})`,
@@ -624,9 +691,25 @@ app.post("/api", async (req: Request, res: Response) => {
           }
         }
 
+        // --- DEDUCTION TO SUPPLIER LEDGER SECURED AND DELAYED UNTIL DELIVERED BACK TO SUPPLIER ---
+        // Checks both status and queue state to execute the deduction of the product value safely
+        if (status === "التسليم للمورد" || status === "تم تسليم المرتجع للمورد" || status === "مرتجع تم تسليمه للمورد") {
+          const dupLedger = db.supplierLedger.find((l: any) => l.tracking === order.tracking && (l.type === "مرتجع" || l.type === "مرتجع تم تسليمه للمورد"));
+          if (!dupLedger) {
+            db.supplierLedger.push({
+              supplier: order.supplier,
+              date: now(),
+              type: "مرتجع تم تسليمه للمورد",
+              tracking: order.tracking,
+              amount: -Number(order.prodPrice || 0),
+              desc: `خصم قيمة المنتج لمرتجع تسلمه المورد: ${order.tracking} (المسؤول: ${currentUser})`
+            });
+          }
+        }
+
         order.updatedAt = now();
 
-        // Save Status History log
+        // Save Status History log (which act as audit trail)
         db.statusHistory.push({
           tracking: tracking,
           oldStatus: oldStatus,
@@ -662,10 +745,27 @@ app.post("/api", async (req: Request, res: Response) => {
         order.notes = o.notes !== undefined ? o.notes : order.notes;
 
         if (o.prodPrice !== undefined || o.shipPrice !== undefined) {
-          order.prodPrice = o.prodPrice !== undefined ? Number(o.prodPrice) : order.prodPrice;
-          order.shipPrice = o.shipPrice !== undefined ? Number(o.shipPrice) : order.shipPrice;
-          order.totalCOD = order.prodPrice + order.shipPrice;
-          order.shipCost = order.shipPrice;
+          const oldProd = order.prodPrice;
+          const oldShip = order.shipPrice;
+          const newProd = o.prodPrice !== undefined ? Number(o.prodPrice) : oldProd;
+          const newShip = o.shipPrice !== undefined ? Number(o.shipPrice) : oldShip;
+
+          if (oldProd !== newProd || oldShip !== newShip) {
+            order.prodPrice = newProd;
+            order.shipPrice = newShip;
+            order.totalCOD = newProd + newShip;
+            order.shipCost = newShip;
+
+            if (!db.auditLog) db.auditLog = [];
+            db.auditLog.push({
+              user: currentUser,
+              type: "تعديل مالي أوردر",
+              dateTime: now(),
+              oldVal: `سعر المنتج: ${oldProd} ج.م، الشحن: ${oldShip} ج.م`,
+              newVal: `سعر المنتج: ${newProd} ج.م، الشحن: ${newShip} ج.م`,
+              reason: d.reason || o.reason || "تحديث الأسعار يدويًا بواسطة الإدارة"
+            });
+          }
         }
 
         // Courier assignment details
@@ -902,9 +1002,16 @@ app.post("/api", async (req: Request, res: Response) => {
           stats: { ...stats, rate },
           couriers: formattedCouriers.sort((a, b) => b.total - a.total),
           suppliers: formattedSuppliers.sort((a, b) => b.total - a.total).slice(0, 10),
-          bestCourier: bestCourierObj ? bestCourierObj.name : "—",
+           bestCourier: bestCourierObj ? bestCourierObj.name : "—",
           bestSupplier: bestSupplierObj ? bestSupplierObj.name : "—"
         });
+      }
+
+      case "getAuditLog": {
+        if (!["مدير", "مشرف", "محاسب"].includes(currentRole)) {
+          return err(res, "صلاحية مرفوضة لعرض سجل التدقيق المالي ومراقب الحسابات");
+        }
+        return ok(res, { logs: (db.auditLog || []).reverse() });
       }
 
       // ─────────────────────────────────────────────────────────────
@@ -1044,6 +1151,17 @@ app.post("/api", async (req: Request, res: Response) => {
           addedBy: currentUser
         });
 
+        // Audit Log entry inside central system
+        if (!db.auditLog) db.auditLog = [];
+        db.auditLog.push({
+          user: currentUser,
+          type: "سداد مورد / دفعة نقدية",
+          dateTime: now(),
+          oldVal: "—",
+          newVal: `صرف مبلغ: ${val} ج.م للمورد: ${supplier}`,
+          reason: desc || `دفعة نقدية منصرفة للمورد: ${supplier}`
+        });
+
         writeDB(db);
         return ok(res, { msg: "تم تسجيل الدفعة النقدية بنجاح وتسويتها بالخزنة" });
       }
@@ -1077,7 +1195,17 @@ app.post("/api", async (req: Request, res: Response) => {
         const bonusesSum = targetLedger.filter((l: any) => l.type === "مكافأة").reduce((sum: number, x: any) => sum + Number(x.amount), 0);
         const penaltiesSum = targetLedger.filter((l: any) => l.type === "جزاء").reduce((sum: number, x: any) => sum + Number(x.amount), 0);
 
-        // Apply filters by period if provided (day, week, month)
+        // Compute COD Collection tracking for anti-deficit control
+        // Collected COD = Sum of totalCOD of delivered orders
+        const totalCollected = courierOrders.filter((o: any) => o.status === "تم التسليم").reduce((sum: number, o: any) => sum + Number(o.totalCOD || 0), 0);
+        
+        // Handed Over to company = Sum of "استلام عهدة مندوب" records in cashbox for this courier
+        const totalPaidToCompany = db.cashbox
+          .filter((item: any) => item.type === "استلام عهدة مندوب" && item.ref === courierName)
+          .reduce((sum: number, item: any) => sum + Number(item.amount || 0), 0);
+
+        const deficit = totalCollected - totalPaidToCompany;
+
         // Here we can live compute net salary
         const netSalary = basicSalary + delivCommission + returnShippingCommission + bonusesSum - penaltiesSum;
 
@@ -1091,7 +1219,10 @@ app.post("/api", async (req: Request, res: Response) => {
             returnShippingCommission,
             bonusesSum,
             penaltiesSum,
-            netSalary
+            netSalary,
+            totalCollected,
+            totalPaidToCompany,
+            deficit
           },
           transactions: targetLedger.reverse()
         });
@@ -1164,6 +1295,17 @@ app.post("/api", async (req: Request, res: Response) => {
             addedBy: currentUser
           });
         }
+
+        // Audit Log entry inside central system
+        if (!db.auditLog) db.auditLog = [];
+        db.auditLog.push({
+          user: currentUser,
+          type: `تسوية مندوب (${type})`,
+          dateTime: now(),
+          oldVal: "—",
+          newVal: `${type}: ${val} ج.م للمندوب: ${courier}`,
+          reason: desc || `تسجيل تسوية للمندوب: ${courier}`
+        });
 
         writeDB(db);
         return ok(res, { msg: "تم تسجيل التسوية المالية للمندوب بنجاح" });
