@@ -1018,7 +1018,7 @@ app.post("/api", async (req: Request, res: Response) => {
       // SUPPLIER LEDGER SYSTEM (COD calculations)
       // ─────────────────────────────────────────────────────────────
       case "getSupplierLedger": {
-        const supplierName = currentUser;
+        const supplierName = currentRole === "مورد" ? currentUser : (d.supplier || "");
         const ledger = db.supplierLedger.filter((l: any) => l.supplier === supplierName);
 
         // Compute running balance live

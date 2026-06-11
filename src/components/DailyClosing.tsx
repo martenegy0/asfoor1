@@ -46,6 +46,38 @@ export default function DailyClosing({ token, role, user }: DailyClosingProps) {
   const [manualCOD, setManualCOD] = useState("0");
   const [manualShip, setManualShip] = useState("0");
 
+  // Detailed orders viewer states
+  const [activeDetailDate, setActiveDetailDate] = useState<string | null>(null);
+  const [detailOrders, setDetailOrders] = useState<any[]>([]);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [detailSearch, setDetailSearch] = useState("");
+  const [detailStatusFilter, setDetailStatusFilter] = useState("all");
+
+  async function loadDetailOrders(targetDate: string) {
+    setActiveDetailDate(targetDate);
+    setLoadingDetail(true);
+    setDetailSearch("");
+    setDetailStatusFilter("all");
+    try {
+      const res = await apiCall("getOrders", token);
+      if (res.ok && res.orders) {
+        const ordersList = res.orders || [];
+        // Filter orders related to targetDate
+        const filtered = ordersList.filter((o: any) => {
+          const dDate = o.delivDate ? o.delivDate.split(" ")[0] : "";
+          const rDate = o.retDate ? o.retDate.split(" ")[0] : "";
+          const cDate = o.createdAt ? o.createdAt.split(" ")[0] : (o.orderDate ? o.orderDate.split(" ")[0] : "");
+          return dDate === targetDate || rDate === targetDate || cDate === targetDate;
+        });
+        setDetailOrders(filtered);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoadingDetail(false);
+    }
+  }
+
   // Fetch all existing closings
   async function fetchClosingRecords() {
     setLoading(true);
@@ -387,13 +419,24 @@ export default function DailyClosing({ token, role, user }: DailyClosingProps) {
               </div>
 
               {/* Action save */}
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <button
                   onClick={() => handleSaveClosing(calculatedDraft)}
                   className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 active:scale-98 text-slate-950 hover:text-slate-950 font-black text-xs rounded-xl cursor-pointer flex items-center justify-center gap-1.5 transition-all"
                 >
                   <Save size={13} />
                   ترحيل وإثبات هذا التقرير اليومي بالملفات المركزية
+                </button>
+                <button
+                  onClick={() => {
+                    loadDetailOrders(calculatedDraft.date);
+                    setTimeout(() => {
+                      document.getElementById("detail-orders-section")?.scrollIntoView({ behavior: "smooth" });
+                    }, 100);
+                  }}
+                  className="px-4 py-2 border border-orange-500/30 bg-orange-500/10 hover:bg-orange-500/20 text-orange-400 font-extrabold text-xs rounded-xl flex items-center gap-1"
+                >
+                  <span>🔍 معاينة الشحنات</span>
                 </button>
                 <button
                   onClick={() => setCalculatedDraft(null)}
@@ -609,8 +652,18 @@ export default function DailyClosing({ token, role, user }: DailyClosingProps) {
                 </thead>
                 <tbody className="divide-y divide-white/4">
                   {filteredRecords.map((r, idx) => (
-                    <tr key={idx} className="hover:bg-white/1 font-semibold text-slate-300">
-                      <td className="p-3.5 font-mono text-orange-400">{r.date}</td>
+                    <tr 
+                      key={idx} 
+                      onClick={() => {
+                        loadDetailOrders(r.date);
+                        setTimeout(() => {
+                          const el = document.getElementById("detail-orders-section");
+                          if (el) el.scrollIntoView({ behavior: "smooth" });
+                        }, 100);
+                      }}
+                      className="hover:bg-white/5 font-semibold text-slate-300 cursor-pointer transition-all border-r-[3px] border-transparent hover:border-orange-500"
+                    >
+                      <td className="p-3.5 font-mono text-orange-400 font-bold">📅 {r.date}</td>
                       <td className="p-3.5 text-emerald-400">{r.deliveredCount} أوردر</td>
                       <td className="p-3.5 text-red-400">{r.returnedCount} أوردر</td>
                       <td className="p-3.5 font-mono text-slate-100">{(r.totalCOD).toLocaleString("ar")} ج.م</td>
@@ -659,6 +712,138 @@ export default function DailyClosing({ token, role, user }: DailyClosingProps) {
           </div>
         )}
       </div>
+
+      {/* Module D: Detailed Orders Viewer */}
+      {activeDetailDate && (
+        <div className="bg-slate-900 border border-orange-500/25 rounded-2xl p-5 mt-6 space-y-4 animate-fade-in scroll-mt-6" id="detail-orders-section">
+          <div className="flex items-center justify-between border-b border-white/6 pb-2.5">
+            <div>
+              <h3 className="text-sm font-black text-slate-200 flex items-center gap-1.5">
+                <span>📋 تفاصيل كشف حركة شحنات تاريخ:</span>
+                <span className="font-mono text-orange-400 font-bold">{activeDetailDate}</span>
+              </h3>
+              <p className="text-[10px] text-slate-500 mt-1 font-semibold">
+                يعرض هذا الجدول جميع طلبيات التوريد، التسليم والارتجاع التي طرأت في هذا اليوم المالي.
+              </p>
+            </div>
+            <button
+              onClick={() => setActiveDetailDate(null)}
+              className="text-xs font-black text-rose-400 bg-rose-950/20 px-3 py-1.5 rounded-xl border border-rose-900/35 hover:bg-rose-950/40 transition-colors cursor-pointer"
+            >
+              إغلاق التفاصيل ×
+            </button>
+          </div>
+
+          {loadingDetail ? (
+            <div className="py-12 text-center text-xs text-slate-550 flex flex-col items-center justify-center gap-2">
+              <RefreshCw size={20} className="animate-spin text-orange-500" />
+              <span>جاري استدعاء تفاصيل الأوردرات ومطابقتها...</span>
+            </div>
+          ) : detailOrders.length === 0 ? (
+            <div className="py-8 text-center text-xs text-slate-550 bg-slate-950 border border-white/4 rounded-xl">
+              لا توجد طلبيات مسجلة بحدث (توصيل/ارتجاع/إنشاء) في تاريخ {activeDetailDate}.
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {/* Detailed Inner Filter Controls */}
+              <div className="flex flex-col sm:flex-row gap-2 items-center justify-between bg-slate-950/60 p-3 rounded-xl border border-white/4">
+                <div className="relative w-full sm:max-w-[280px]">
+                  <Search size={14} className="absolute right-3 top-2.5 text-slate-500" />
+                  <input
+                    type="text"
+                    placeholder="البحث برقم الشحنة، اسم العميل، أو المورد..."
+                    value={detailSearch}
+                    onChange={(e) => setDetailSearch(e.target.value)}
+                    className="w-full bg-slate-900 border border-white/8 rounded-lg py-1.5 pr-8 pl-3 text-xs text-slate-200 outline-none focus:border-orange-500 text-right"
+                  />
+                </div>
+                
+                <div className="flex flex-wrap gap-1.5 justify-end">
+                  <button
+                    onClick={() => setDetailStatusFilter("all")}
+                    className={`px-3 py-1 text-[10px] font-bold rounded cursor-pointer ${detailStatusFilter === "all" ? "bg-orange-500 text-slate-950" : "bg-slate-900 text-slate-400"}`}
+                  >
+                    الكل ({detailOrders.length})
+                  </button>
+                  <button
+                    onClick={() => setDetailStatusFilter("delivered")}
+                    className={`px-3 py-1 text-[10px] font-bold rounded cursor-pointer ${detailStatusFilter === "delivered" ? "bg-emerald-600 text-slate-950" : "bg-slate-900 text-slate-400"}`}
+                  >
+                    تم التسليم ({detailOrders.filter(o => o.status === "تم التسليم").length})
+                  </button>
+                  <button
+                    onClick={() => setDetailStatusFilter("returned")}
+                    className={`px-3 py-1 text-[10px] font-bold rounded cursor-pointer ${detailStatusFilter === "returned" ? "bg-rose-600 text-white" : "bg-slate-900 text-slate-400"}`}
+                  >
+                    المرتجعات ({detailOrders.filter(o => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length})
+                  </button>
+                  <button
+                    onClick={() => setDetailStatusFilter("other")}
+                    className={`px-3 py-1 text-[10px] font-bold rounded cursor-pointer ${detailStatusFilter === "other" ? "bg-amber-600 text-slate-950" : "bg-slate-900 text-slate-400"}`}
+                  >
+                    أخرى ({detailOrders.filter(o => o.status !== "تم التسليم" && !["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length})
+                  </button>
+                </div>
+              </div>
+
+              {/* Grid or Table listing of detailOrders */}
+              <div className="overflow-x-auto rounded-xl border border-white/6 bg-slate-950">
+                <table className="w-full text-right border-collapse text-xs">
+                  <thead>
+                    <tr className="bg-slate-900 text-slate-400 border-b border-white/6 font-bold text-right">
+                      <th className="p-2.5">رقم البوليصة</th>
+                      <th className="p-2.5">اسم المورد</th>
+                      <th className="p-2.5">العميل</th>
+                      <th className="p-2.5">الهاتف</th>
+                      <th className="p-2.5">المحافظة</th>
+                      <th className="p-2.5">الحالة الحالية</th>
+                      <th className="p-2.5 text-left">المبلغ COD</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/4">
+                    {detailOrders
+                      .filter(o => {
+                        if (detailSearch) {
+                          const s = detailSearch.toLowerCase();
+                          return (o.tracking || "").toLowerCase().includes(s) ||
+                                 (o.customer || "").toLowerCase().includes(s) ||
+                                 (o.supplier || "").toLowerCase().includes(s) ||
+                                 (o.phone || "").toLowerCase().includes(s);
+                        }
+                        return true;
+                      })
+                      .filter(o => {
+                        if (detailStatusFilter === "delivered") return o.status === "تم التسليم";
+                        if (detailStatusFilter === "returned") return ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status);
+                        if (detailStatusFilter === "other") return o.status !== "تم التسليم" && !["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status);
+                        return true;
+                      })
+                      .map((o, oidx) => (
+                        <tr key={oidx} className="hover:bg-white/1 text-slate-350 font-semibold text-right">
+                          <td className="p-2.5 font-mono text-orange-400 font-bold">{o.tracking}</td>
+                          <td className="p-2.5 font-sans font-bold text-slate-300">{o.supplier}</td>
+                          <td className="p-2.5">{o.customer}</td>
+                          <td className="p-2.5 font-mono text-[10px] text-slate-450">{o.phone}</td>
+                          <td className="p-2.5">{o.gov || "—"}</td>
+                          <td className="p-2.5">
+                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-black ${
+                              o.status === "تم التسليم" ? "bg-emerald-950/30 text-emerald-450 border border-emerald-900/40" :
+                              ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) ? "bg-red-950/30 text-rose-400 border border-red-900/40" :
+                              "bg-amber-950/20 text-amber-500 border border-amber-900/30"
+                            }`}>
+                              {o.status}
+                            </span>
+                          </td>
+                          <td className="p-2.5 text-left font-mono font-bold text-slate-100">{(Number(o.totalCOD || 0)).toLocaleString("ar")} ج.م</td>
+                        </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

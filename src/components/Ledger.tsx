@@ -74,8 +74,18 @@ export default function Ledger({ token, role, user }: LedgerProps) {
         supplier: isSupplier ? user : selectedSupplier
       });
       if (res.ok) {
-        setSubscribes(res.entries || []);
-        setLiveBalance(res.balance || 0);
+        const rawEntries = res.entries || res.ledger || [];
+        
+        // Calculate running balance from oldest to newest (chronological order)
+        let tempBalance = 0;
+        const chronological = [...rawEntries].reverse();
+        const entriesWithBalance = chronological.map((item: any) => {
+          tempBalance += Number(item.amount || 0);
+          return { ...item, balanceAfter: tempBalance };
+        });
+        
+        setSubscribes([...entriesWithBalance].reverse());
+        setLiveBalance(res.balance !== undefined ? res.balance : tempBalance);
       } else {
         setFeedback(res.error || "خطأ أثناء تحميل كشف حساب المورد");
       }

@@ -33,6 +33,23 @@ export default function Inputs({ token, role, user, onSuccess }: InputsProps) {
   const [bulkSupplier, setBulkSupplier] = useState(isSupplier ? user : "");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const [suppliersList, setSuppliersList] = useState<any[]>([]);
+  React.useEffect(() => {
+    async function loadSuppliers() {
+      try {
+        const res = await apiCall("getSuppliers", token);
+        if (res.ok && res.suppliers) {
+          setSuppliersList(res.suppliers);
+        }
+      } catch (err) {
+        console.error("Failed to load suppliers in Inputs", err);
+      }
+    }
+    if (!isSupplier) {
+      loadSuppliers();
+    }
+  }, [token, isSupplier]);
+
   // --- OCR Utilities ---
   const [ocrStatus, setOcrStatus] = useState("");
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -299,15 +316,39 @@ export default function Inputs({ token, role, user, onSuccess }: InputsProps) {
       {activeTab === "manual" && (
         <div className="space-y-4">
           {!isSupplier && (
-            <div className="space-y-1">
+            <div className="space-y-1 text-right">
               <label className="block text-[10px] font-extrabold text-slate-400">اسم المورد صاحب الشحنة*</label>
-              <input
-                type="text"
-                value={formSupplier}
-                onChange={(e) => setFormSupplier(e.target.value)}
-                placeholder="أدخل اسم المورد..."
-                className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-xl px-4 py-2.5 text-xs focus:border-amber-500/30 outline-none text-right"
-              />
+              <div className="flex flex-col md:flex-row gap-2">
+                <select
+                  value={suppliersList.some(s => s.name === formSupplier) ? formSupplier : (formSupplier ? "custom" : "")}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === "custom") {
+                      setFormSupplier("");
+                    } else {
+                      setFormSupplier(val);
+                    }
+                  }}
+                  className="flex-1 bg-slate-950 text-slate-200 border border-white/8 rounded-xl px-4 py-2.5 text-xs text-right focus:border-amber-500/30 outline-none"
+                >
+                  <option value="">-- اختر مورد مسجل --</option>
+                  {suppliersList.map((sup: any, sIdx: number) => (
+                    <option key={sIdx} value={sup.name}>{sup.name}</option>
+                  ))}
+                  <option value="custom">✏️ إدخال اسم مورد آخر...</option>
+                </select>
+                
+                {/* Free input field to type a custom name if selected */}
+                {(!suppliersList.some(s => s.name === formSupplier) || formSupplier === "") && (
+                  <input
+                    type="text"
+                    value={formSupplier}
+                    onChange={(e) => setFormSupplier(e.target.value)}
+                    placeholder="اكتب اسم المورد الجديد..."
+                    className="flex-1 bg-slate-950 text-slate-200 border border-white/8 rounded-xl px-4 py-2.5 text-xs focus:border-amber-500/30 outline-none text-right"
+                  />
+                )}
+              </div>
             </div>
           )}
 
@@ -474,13 +515,36 @@ export default function Inputs({ token, role, user, onSuccess }: InputsProps) {
               {!isSupplier && (
                 <div className="space-y-1 text-right max-w-[400px] mx-auto">
                   <label className="block text-[10px] font-extrabold text-slate-400">مورد الشحنات الجماعية*</label>
-                  <input
-                    type="text"
-                    value={bulkSupplier}
-                    onChange={(e) => setBulkSupplier(e.target.value)}
-                    placeholder="اسم المورد..."
-                    className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-xl px-4 py-2.5 text-xs text-right focus:border-amber-500/30 outline-none"
-                  />
+                  <div className="flex flex-col gap-2">
+                    <select
+                      value={suppliersList.some(s => s.name === bulkSupplier) ? bulkSupplier : (bulkSupplier ? "custom" : "")}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === "custom") {
+                          setBulkSupplier("");
+                        } else {
+                          setBulkSupplier(val);
+                        }
+                      }}
+                      className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-xl px-4 py-2.5 text-xs text-right focus:border-amber-500/30 outline-none"
+                    >
+                      <option value="">-- اختر مورد مسجل --</option>
+                      {suppliersList.map((sup: any, sIdx: number) => (
+                        <option key={sIdx} value={sup.name}>{sup.name}</option>
+                      ))}
+                      <option value="custom">✏️ إدخال اسم مورد آخر...</option>
+                    </select>
+
+                    {(!suppliersList.some(s => s.name === bulkSupplier) || bulkSupplier === "") && (
+                      <input
+                        type="text"
+                        value={bulkSupplier}
+                        onChange={(e) => setBulkSupplier(e.target.value)}
+                        placeholder="اكتب اسم المورد الجديد للشحنات الجماعية..."
+                        className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-xl px-4 py-2.5 text-xs text-right focus:border-amber-500/30 outline-none"
+                      />
+                    )}
+                  </div>
                 </div>
               )}
 

@@ -321,22 +321,75 @@ function getOrders(sheets) {
 
 function addOrder(sheets, d) {
   const o = d.order;
-  if (!o || !o.tracking) return { ok: false, error: "بيانات الأوردر مفقودة أو خاطئة" };
-  
+  if (!o) return { ok: false, error: "بيانات الأوردر مفقودة" };
+
+  // Generate tracking ID if missing
+  if (!o.tracking) {
+    const lastRow = sheets.orders.getLastRow();
+    const counter = 1000 + lastRow;
+    const yearSuffix = Utilities.formatDate(new Date(), "GMT+3", "yy");
+    o.tracking = "FP-" + counter + "-" + yearSuffix;
+  }
+
   // فحص عدم تكرار التتبع
   if (findRowIndex(sheets.orders, "tracking", o.tracking) !== -1) {
     return { ok: false, error: "رقم التتبع المسجل مستخدم بالفعل لأوردر آخر" };
   }
 
-  const headers = sheets.orders.getRange(1, 1, 1, sheets.orders.getLastColumn()).getValues()[0].map(h => h.trim());
+  const pPrice = Number(o.prodPrice || 0);
+  const sPrice = Number(o.shipPrice || 60);
+  const tCOD = pPrice + sPrice;
+
   const newOrder = {
-    ...o,
+    tracking: o.tracking,
     createdAt: now(),
     updatedAt: now(),
-    status: o.status || "جاهز للشحن"
+    orderDate: o.orderDate || nowDay(),
+    supplier: o.supplier || "مورد عام",
+    customer: o.customer || "",
+    phone: o.phone || "",
+    phone2: o.phone2 || "",
+    gov: o.gov || "القاهرة",
+    region: o.region || "",
+    address: o.address || "",
+    prodPrice: pPrice,
+    shipPrice: sPrice,
+    totalCOD: tCOD,
+    shipCost: sPrice,
+    courier: "", // Empty during creation
+    status: o.status || "جديد",
+    notes: o.notes || "",
+    delivDate: "",
+    retDate: "",
+    addedBy: d.currentUser || "إدارة",
+    commission: 0,
+    returnShippingType: "",
+    returnQueueStatus: "",
+    returnQueueAgent: ""
   };
 
+  const headers = sheets.orders.getRange(1, 1, 1, sheets.orders.getLastColumn()).getValues()[0].map(h => h.trim());
   appendToSheet(sheets.orders, headers, newOrder);
+
+  // Record Supplier Ledger
+  appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
+    supplier: newOrder.supplier,
+    date: now(),
+    type: "أوردر مستلم",
+    tracking: newOrder.tracking,
+    amount: pPrice,
+    desc: `أوردر جديد مستلم من المورد: ${newOrder.tracking}`
+  });
+
+  // Record Status History
+  appendToSheet(sheets.statusHistory, ["tracking", "oldStatus", "newStatus", "updatedBy", "dateTime"], {
+    tracking: newOrder.tracking,
+    oldStatus: "",
+    newStatus: "جديد",
+    updatedBy: d.currentUser || "موظف",
+    dateTime: now()
+  });
+
   return { ok: true, msg: "تم تسجيل الأوردر بنجاح", order: newOrder };
 }
 
@@ -346,16 +399,72 @@ function addBulk(sheets, d) {
 
   const headers = sheets.orders.getRange(1, 1, 1, sheets.orders.getLastColumn()).getValues()[0].map(h => h.trim());
   let addedCount = 0;
+  
+  // Cache current last row to avoid reading getLastRow inside loop
+  let currentLastRow = sheets.orders.getLastRow();
+  const yearSuffix = Utilities.formatDate(new Date(), "GMT+3", "yy");
+  const supplierName = d.supplier || "مورد عام";
 
   list.forEach(o => {
-    if (o.tracking && findRowIndex(sheets.orders, "tracking", o.tracking) === -1) {
+    if (!o.tracking) {
+      o.tracking = "FP-" + (1000 + currentLastRow) + "-" + yearSuffix;
+      currentLastRow++;
+    }
+
+    if (findRowIndex(sheets.orders, "tracking", o.tracking) === -1) {
+      const pPrice = Number(o.prodPrice || 0);
+      const sPrice = Number(o.shipPrice || 60);
+      const tCOD = pPrice + sPrice;
+
       const draft = {
-        ...o,
+        tracking: o.tracking,
         createdAt: now(),
         updatedAt: now(),
-        status: o.status || "جاهز للشحن"
+        orderDate: o.orderDate || nowDay(),
+        supplier: supplierName,
+        customer: o.customer || "",
+        phone: o.phone || "",
+        phone2: o.phone2 || "",
+        gov: o.gov || "القاهرة",
+        region: o.region || "",
+        address: o.address || "",
+        prodPrice: pPrice,
+        shipPrice: sPrice,
+        totalCOD: tCOD,
+        shipCost: sPrice,
+        courier: "",
+        status: o.status || "جديد",
+        notes: o.notes || "",
+        delivDate: "",
+        retDate: "",
+        addedBy: d.currentUser || "إدارة",
+        commission: 0,
+        returnShippingType: "",
+        returnQueueStatus: "",
+        returnQueueAgent: ""
       };
+
       appendToSheet(sheets.orders, headers, draft);
+
+      // Record Supplier Ledger
+      appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
+        supplier: draft.supplier,
+        date: now(),
+        type: "أوردر مستلم",
+        tracking: draft.tracking,
+        amount: pPrice,
+        desc: `رفع أوردر مستلم جماعياً ${draft.tracking}`
+      });
+
+      // Record Status History
+      appendToSheet(sheets.statusHistory, ["tracking", "oldStatus", "newStatus", "updatedBy", "dateTime"], {
+        tracking: draft.tracking,
+        oldStatus: "",
+        newStatus: "جديد",
+        updatedBy: d.currentUser || "موظف",
+        dateTime: now()
+      });
+
       addedCount++;
     }
   });
