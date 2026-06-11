@@ -507,6 +507,79 @@ app.post("/api", async (req: Request, res: Response) => {
         };
       }
 
+      // Fast Optimistic UI & Asynchronous Background Sync for Expenses & Transactions
+      if (d.action === "addExpense") {
+        if (!["مدير", "محاسب"].includes(currentRole)) {
+          return err(res, "لا توجد صلاحيات صرف لميزانية المصروفات");
+        }
+        const { cat, desc, amount } = d;
+        if (!amount) return err(res, "المبلغ مطلوب");
+        const val = Number(amount);
+
+        // 1. Invalidate cashbox & dashboard cache instantly
+        READ_CACHE.clear();
+        ACTIVE_FETCHES.clear();
+
+        // 2. Perform optimistic write to local memory
+        const db = readDB();
+        db.expenses.push({
+          date: now(),
+          cat: cat || "أخرى",
+          desc: desc || "",
+          amount: val,
+          by: currentUser
+        });
+        db.cashbox.push({
+          date: now(),
+          desc: `صرف مصروف: ${desc || cat}`,
+          type: "صادر",
+          amount: val,
+          ref: "EXPENSE",
+          addedBy: currentUser
+        });
+        writeDB(db);
+
+        // 3. Queue heavy sequential Google Sheets write asynchronously
+        executeProxyRequest(gscriptUrl, payloadToSheet).catch((syncErr) => {
+          console.error("Async Google Sheets synchronization for addExpense failed:", syncErr);
+        });
+
+        // 4. Return extremely fast response so UI doesn't freeze or wait
+        return ok(res, { msg: "تم إرساء بند الصرف بنجاح وسداده من الخزينة تلقائياً" });
+      }
+
+      if (d.action === "addCashbox") {
+        if (!["مدير", "محاسب"].includes(currentRole)) {
+          return err(res, "صلاحية مرفوضة لإدراج حركات الخزنة");
+        }
+        const { desc, type, amount, ref } = d;
+        if (!amount || !type) return err(res, "المبلغ والنوع مطلوبان");
+
+        // 1. Invalidate cashbox & dashboard cache instantly
+        READ_CACHE.clear();
+        ACTIVE_FETCHES.clear();
+
+        // 2. Perform optimistic write to local memory
+        const db = readDB();
+        db.cashbox.push({
+          date: now(),
+          desc: desc || "",
+          type: type,
+          amount: Number(amount),
+          ref: ref || "",
+          addedBy: currentUser
+        });
+        writeDB(db);
+
+        // 3. Queue heavy sequential Google Sheets write asynchronously
+        executeProxyRequest(gscriptUrl, payloadToSheet).catch((syncErr) => {
+          console.error("Async Google Sheets synchronization for addCashbox failed:", syncErr);
+        });
+
+        // 4. Return extremely fast response so UI doesn't freeze or wait
+        return ok(res, { msg: "تم إدراج بند الخزينة وتصفيته" });
+      }
+
       if (d.action === "dashboard") {
         try {
           // One single async fetch call to GAS (internally using cached/deduplicated proxy helper)
@@ -1899,6 +1972,9 @@ app.post("/api", async (req: Request, res: Response) => {
         const { desc, type, amount, ref } = d;
         if (!amount || !type) return err(res, "المبلغ والنوع مطلوبان");
 
+        READ_CACHE.clear();
+        ACTIVE_FETCHES.clear();
+
         db.cashbox.push({
           date: now(),
           desc: desc || "",
@@ -1935,6 +2011,9 @@ app.post("/api", async (req: Request, res: Response) => {
         if (!amount) return err(res, "المبلغ مطلوب");
 
         const val = Number(amount);
+
+        READ_CACHE.clear();
+        ACTIVE_FETCHES.clear();
 
         // Save expense item
         db.expenses.push({

@@ -37,6 +37,7 @@ export default function App() {
   const [expCat, setExpCat] = useState("أخرى");
   const [expAmount, setExpAmount] = useState("");
   const [expDesc, setExpDesc] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // --- Users management states (Admin only!) ---
   const [usersList, setUsersList] = useState<any[]>([]);
@@ -219,10 +220,12 @@ export default function App() {
   // Submit Cash entry
   async function submitCashboxLog(e: React.FormEvent) {
     e.preventDefault();
+    if (isSubmitting) return;
     if (!cashAmount || Number(cashAmount) <= 0) {
       alert("الطلب يحتاج إدخال مبلغ صحيح");
       return;
     }
+    setIsSubmitting(true);
     try {
       const res = await apiCall("addCashbox", token, {
         desc: cashDesc.trim() || `حركة خزينة يدوية: ${cashType}`,
@@ -242,16 +245,20 @@ export default function App() {
       }
     } catch (err) {
        alert("فشل تسجيل حركة الخزينة");
+    } finally {
+       setIsSubmitting(false);
     }
   }
 
   // Submit Expense item
   async function submitExpenseLog(e: React.FormEvent) {
     e.preventDefault();
+    if (isSubmitting) return;
     if (!expAmount || Number(expAmount) <= 0) {
       alert("يرجى كتابة مبلغ مصروف صحيح");
       return;
     }
+    setIsSubmitting(true);
     try {
       const res = await apiCall("addExpense", token, {
         cat: expCat,
@@ -270,6 +277,8 @@ export default function App() {
       }
     } catch (err) {
       alert("عطل في تعيين المصروف");
+    } finally {
+       setIsSubmitting(false);
     }
   }
 
@@ -960,7 +969,7 @@ export default function App() {
 
       {/* --- TREASURY ADDITION DIALOG BOX --- */}
       {cashModalOpen && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className={`fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 ${isSubmitting ? "pointer-events-none select-none opacity-90" : ""}`}>
           <form onSubmit={submitCashboxLog} className="bg-slate-900 border border-white/8 p-6 rounded-2xl w-full max-w-[380px] text-right space-y-4">
             <h3 className="text-sm font-black text-amber-550 border-b border-white/6 pb-2">
               ➕ إضافة حركة بالخزينة يدويا ({cashType})
@@ -972,10 +981,11 @@ export default function App() {
                 <input
                   type="number"
                   required
+                  disabled={isSubmitting}
                   value={cashAmount}
                   onChange={(e) => setCashAmount(e.target.value)}
                   placeholder="3000"
-                  className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-lg px-3 py-2 text-xs text-right font-mono"
+                  className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-lg px-3 py-2 text-xs text-right font-mono disabled:opacity-50"
                 />
               </div>
 
@@ -984,10 +994,11 @@ export default function App() {
                 <input
                   type="text"
                   required
+                  disabled={isSubmitting}
                   value={cashDesc}
                   onChange={(e) => setCashDesc(e.target.value)}
                   placeholder="قيد تسوية الخزنة..."
-                  className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-lg px-3 py-2 text-xs text-right"
+                  className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-lg px-3 py-2 text-xs text-right disabled:opacity-50"
                 />
               </div>
 
@@ -995,10 +1006,11 @@ export default function App() {
                 <label className="block text-[10px] text-slate-400 font-bold">رقم المرجع (اختياري)</label>
                 <input
                   type="text"
+                  disabled={isSubmitting}
                   value={cashRef}
                   onChange={(e) => setCashRef(e.target.value)}
                   placeholder="REF-1033..."
-                  className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-lg px-3 py-2 text-xs text-right"
+                  className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-lg px-3 py-2 text-xs text-right disabled:opacity-50"
                 />
               </div>
             </div>
@@ -1006,14 +1018,16 @@ export default function App() {
             <div className="flex gap-2 pt-2">
               <button
                 type="submit"
-                className="flex-1 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-slate-950 font-black text-xs rounded-xl cursor-pointer"
+                disabled={isSubmitting}
+                className="flex-1 py-3.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-800 disabled:opacity-75 text-slate-950 font-black text-xs rounded-xl cursor-pointer disabled:cursor-not-allowed"
               >
-                تنفيد القيد المالي
+                {isSubmitting ? "جاري الحفظ..." : "تنفيد القيد المالي"}
               </button>
               <button
                 type="button"
+                disabled={isSubmitting}
                 onClick={() => setCashModalOpen(false)}
-                className="px-4 py-3.5 bg-slate-950 text-slate-500 rounded-xl text-xs font-bold border border-white/6 cursor-pointer"
+                className="px-4 py-3.5 bg-slate-950 text-slate-500 rounded-xl text-xs font-bold border border-white/6 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 إلغاء لخطأ
               </button>
@@ -1024,7 +1038,7 @@ export default function App() {
 
       {/* --- EXPENSE ADDITION DIALOG BOX --- */}
       {expModalOpen && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className={`fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 ${isSubmitting ? "pointer-events-none select-none opacity-90" : ""}`}>
           <form onSubmit={submitExpenseLog} className="bg-slate-900 border border-white/8 p-6 rounded-2xl w-full max-w-[380px] text-right space-y-4">
             <h3 className="text-sm font-black text-red-400 border-b border-white/6 pb-2">
               💸 تسجيل بند صرف ومصروف تشغيل رئيسي
@@ -1035,8 +1049,9 @@ export default function App() {
                 <label className="block text-[10px] text-slate-400 font-bold">فئة الصرف والترصيد</label>
                 <select
                   value={expCat}
+                  disabled={isSubmitting}
                   onChange={(e) => setExpCat(e.target.value)}
-                  className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-lg px-3 py-2.5 text-xs text-right"
+                  className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-lg px-3 py-2.5 text-xs text-right disabled:opacity-50"
                 >
                   <option value="مرتبات">مرتبات</option>
                   <option value="بنزين">بنزين وصيانة شاحنات</option>
@@ -1052,10 +1067,11 @@ export default function App() {
                 <input
                   type="number"
                   required
+                  disabled={isSubmitting}
                   value={expAmount}
                   onChange={(e) => setExpAmount(e.target.value)}
                   placeholder="250"
-                  className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-lg px-3 py-2 text-xs text-right font-mono"
+                  className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-lg px-3 py-2 text-xs text-right font-mono disabled:opacity-50"
                 />
               </div>
 
@@ -1064,10 +1080,11 @@ export default function App() {
                 <input
                   type="text"
                   required
+                  disabled={isSubmitting}
                   value={expDesc}
                   onChange={(e) => setExpDesc(e.target.value)}
                   placeholder="بنزين ووقود خط القاهرة سموحة..."
-                  className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-lg px-3 py-2 text-xs text-right"
+                  className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-lg px-3 py-2 text-xs text-right disabled:opacity-50"
                 />
               </div>
             </div>
@@ -1075,14 +1092,16 @@ export default function App() {
             <div className="flex gap-2 pt-2">
               <button
                 type="submit"
-                className="flex-1 py-3.5 bg-red-650 hover:bg-red-700 text-slate-200 font-black text-xs rounded-xl cursor-pointer"
+                disabled={isSubmitting}
+                className="flex-1 py-3.5 bg-red-650 hover:bg-red-700 disabled:bg-red-800 disabled:opacity-75 text-slate-200 font-black text-xs rounded-xl cursor-pointer disabled:cursor-not-allowed"
               >
-                قيد المصروف الآن
+                {isSubmitting ? "جاري الحفظ..." : "قيد المصروف الآن"}
               </button>
               <button
                 type="button"
+                disabled={isSubmitting}
                 onClick={() => setExpModalOpen(false)}
-                className="px-4 py-3.5 bg-slate-950 text-slate-500 rounded-xl text-xs font-bold border border-white/6 cursor-pointer"
+                className="px-4 py-3.5 bg-slate-950 text-slate-500 rounded-xl text-xs font-bold border border-white/6 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 إلغاء لخطأ
               </button>
