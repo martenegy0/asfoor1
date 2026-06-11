@@ -1491,7 +1491,7 @@ app.post("/api", async (req: Request, res: Response) => {
         }
 
         // Extract ledger details by Suppler
-        const accountsMap: { [supplier: string]: { name: string; totalCOD: number; returnsDelivered: number; adjustments: number; payments: number; totalOrders: number; deliveredOrders: number; balance: number } } = {};
+        const accountsMap: { [supplier: string]: { name: string; totalCOD: number; returnsDelivered: number; adjustments: number; payments: number; totalOrders: number; deliveredOrders: number; returnsCount: number; balance: number } } = {};
 
         // 1. Check with ledger transactions
         const ledger = db.supplierLedger;
@@ -1500,15 +1500,15 @@ app.post("/api", async (req: Request, res: Response) => {
           if (!sup) continue;
 
           if (!accountsMap[sup]) {
-            accountsMap[sup] = { name: sup, totalCOD: 0, returnsDelivered: 0, adjustments: 0, payments: 0, totalOrders: 0, deliveredOrders: 0, balance: 0 };
+            accountsMap[sup] = { name: sup, totalCOD: 0, returnsDelivered: 0, adjustments: 0, payments: 0, totalOrders: 0, deliveredOrders: 0, returnsCount: 0, balance: 0 };
           }
 
           accountsMap[sup].balance += Number(transaction.amount);
 
           if (transaction.type === "أوردر مستلم") accountsMap[sup].totalCOD += Number(transaction.amount);
-          if (transaction.type === "مرتجع") accountsMap[sup].returnsDelivered += Math.abs(Number(transaction.amount));
+          if (transaction.type === "مرتجع" || transaction.type === "مرتجع تم تسليمه للمورد" || transaction.type.includes("مرتجع")) accountsMap[sup].returnsDelivered += Math.abs(Number(transaction.amount));
           if (transaction.type === "تسوية") accountsMap[sup].adjustments += Number(transaction.amount);
-          if (transaction.type === "دفع نقدي") accountsMap[sup].payments += Math.abs(Number(transaction.amount));
+          if (transaction.type === "دفع نقدي" || transaction.type === "دفعة مورد" || transaction.type.includes("دفعة")) accountsMap[sup].payments += Math.abs(Number(transaction.amount));
         }
 
         // 2. Fetch order volumes
@@ -1516,10 +1516,13 @@ app.post("/api", async (req: Request, res: Response) => {
           const sup = o.supplier;
           if (!sup) continue;
           if (!accountsMap[sup]) {
-            accountsMap[sup] = { name: sup, totalCOD: 0, returnsDelivered: 0, adjustments: 0, payments: 0, totalOrders: 0, deliveredOrders: 0, balance: 0 };
+            accountsMap[sup] = { name: sup, totalCOD: 0, returnsDelivered: 0, adjustments: 0, payments: 0, totalOrders: 0, deliveredOrders: 0, returnsCount: 0, balance: 0 };
           }
           accountsMap[sup].totalOrders++;
           if (o.status === "تم التسليم") accountsMap[sup].deliveredOrders++;
+          if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)) {
+            accountsMap[sup].returnsCount++;
+          }
         }
 
         const accountsList = Object.values(accountsMap).map((a: any) => {

@@ -18,6 +18,7 @@ interface SupplierAccount {
   payments: number;
   totalOrders: number;
   deliveredOrders: number;
+  returnsCount: number;
   balance: number;
   rate: number;
 }
@@ -198,24 +199,31 @@ export default function SuppliersManagement({ token, role }: SuppliersManagement
                     </div>
 
                     <div className="flex justify-between text-[11px] border-t border-dashed border-white/4 pt-2.5">
-                      <span className="text-indigo-400 font-extrabold font-mono">
-                        {(computedNet + acc.payments).toLocaleString()} ج.م
+                      <span className="text-emerald-400 font-extrabold font-mono">
+                        {acc.totalCOD.toLocaleString()} ج.م
                       </span>
-                      <span className="text-slate-500">: صافي المستحقات (Total Net)</span>
+                      <span className="text-slate-500">: إجمالي المسلم الصافي</span>
                     </div>
 
                     <div className="flex justify-between text-[11px]">
-                      <span className="text-slate-300 font-extrabold font-mono">
+                      <span className="text-red-400 font-bold font-mono">
+                        {acc.returnsCount || 0} طلب ({Math.abs(acc.returnsDelivered || 0).toLocaleString()} ج.م)
+                      </span>
+                      <span className="text-slate-500">: المرتجعات المخصومة</span>
+                    </div>
+
+                    <div className="flex justify-between text-[11px]">
+                      <span className="text-slate-350 font-extrabold font-mono">
                         {Math.abs(acc.payments).toLocaleString()} ج.م
                       </span>
-                      <span className="text-slate-500">: كلي الدفعات الممنوحة</span>
+                      <span className="text-slate-500">: كلي الدفعات المصروفة</span>
                     </div>
 
                     <div className="flex justify-between text-xs font-black border-t border-white/6 pt-3 mt-3">
-                      <span className="text-amber-500 font-extrabold font-mono text-sm">
+                      <span className="text-amber-500 font-extrabold font-mono text-sm font-black">
                         {outstanding.toLocaleString()} ج.م
                       </span>
-                      <span className="text-slate-200">: الرصيد المتبقي المستحق</span>
+                      <span className="text-slate-200 font-black">: المبلغ المستحق الحالي</span>
                     </div>
                   </div>
                 </div>
@@ -261,20 +269,51 @@ export default function SuppliersManagement({ token, role }: SuppliersManagement
             </div>
 
             <form onSubmit={handleSettleSubmit} className="space-y-4">
+              {/* Detailed accounting breakdown */}
+              <div className="bg-slate-950 p-4 border border-white/6 rounded-xl space-y-3 text-xs">
+                <div className="flex justify-between items-center text-slate-300">
+                  <span className="font-extrabold font-mono text-emerald-400">
+                    {activeSupplier.totalCOD.toLocaleString()} ج.م
+                  </span>
+                  <span>إجمالي المسلم الصافي</span>
+                </div>
+
+                <div className="flex justify-between items-center text-slate-300">
+                  <span className="font-extrabold font-mono text-red-400">
+                    {activeSupplier.returnsCount || 0} طلب ({Math.abs(activeSupplier.returnsDelivered || 0).toLocaleString()} ج.م)
+                  </span>
+                  <span>عدد وقيمة المرتجعات المستحقة</span>
+                </div>
+
+                <div className="flex justify-between items-center text-slate-300">
+                  <span className="font-extrabold font-mono text-slate-400">
+                    {Math.abs(activeSupplier.payments || 0).toLocaleString()} ج.م
+                  </span>
+                  <span>الدفعات المصروفة سابقاً</span>
+                </div>
+
+                <div className="border-t border-white/6 pt-2 pb-1 flex justify-between items-center font-black">
+                  <span className="text-amber-500 font-black font-mono text-sm">
+                    {activeSupplier.balance.toLocaleString()} ج.م
+                  </span>
+                  <span className="text-slate-100">المبلغ المستحق الحالي</span>
+                </div>
+              </div>
+
               <div>
-                <label className="block text-[11px] font-bold text-slate-400 mb-1.5">: المبلغ المالي المراد صرفه وتسجيله (ج.م)</label>
+                <label className="block text-[11px] font-bold text-slate-400 mb-1.5">المبلغ المراد صرفه (Amount to Pay)</label>
                 <input
                   type="number"
                   required
                   value={settleAmount}
                   onChange={(e) => setSettleAmount(e.target.value)}
                   className="w-full bg-slate-950 border border-white/6 rounded-xl px-4 py-2.5 text-xs text-amber-500 font-extrabold outline-none text-right placeholder:text-slate-600 focus:border-amber-500 font-mono"
-                  placeholder="مثال: 5000"
+                  placeholder="حدد مبلغا لصرفه من رصيد المورد للمدفوعات"
                 />
               </div>
 
               <div>
-                <label className="block text-[11px] font-bold text-slate-400 mb-1.5">: وصف المعاملة المالية لوثائق الخزنة</label>
+                <label className="block text-[11px] font-bold text-slate-400 mb-1.5">وصف المعاملة المالية لوثائق الخزنة</label>
                 <textarea
                   value={settleDesc}
                   onChange={(e) => setSettleDesc(e.target.value)}

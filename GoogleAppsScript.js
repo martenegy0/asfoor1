@@ -922,16 +922,22 @@ function getSupplierAccounts(sheets) {
     // Sum of amounts in ledger is the live balance!
     const balance = sLedger.reduce((sum, l) => sum + Number(l.amount || 0), 0);
     const totalCOD = sLedger.filter(l => l.type === "أوردر مستلم").reduce((sum, l) => sum + Number(l.amount || 0), 0);
+    const returnsDelivered = sLedger.filter(l => l.type === "مرتجع" || l.type === "مرتجع تم تسليمه للمورد" || l.type.includes("مرتجع")).reduce((sum, l) => sum + Math.abs(Number(l.amount || 0)), 0);
     const paid = sLedger.filter(l => l.supplier === s.name && (l.type === "دفعة مورد" || l.type === "دفع نقدي" || l.type.includes("دفعة"))).reduce((sum, l) => sum + Math.abs(Number(l.amount || 0)), 0);
 
     const totalOrders = sOrders.length;
     const deliveredOrders = sOrders.filter(o => o.status === "تم التسليم").length;
+    const returnsCount = sOrders.filter(o => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)).length;
 
     return {
       name: s.name,
       phone: s.phone || "—",
       totalRevenue: totalCOD, // Total of received order values
+      totalCOD: totalCOD,
+      returnsDelivered: returnsDelivered,
+      returnsCount: returnsCount,
       paid: paid,             // Total payouts
+      payments: paid,
       balance: balance,       // Outstanding balance
       totalOrders: totalOrders,
       deliveredOrders: deliveredOrders
@@ -963,7 +969,7 @@ function addSupplierPayment(sheets, d) {
     date: now(),
     type: "دفعة مورد",
     tracking: "—",
-    amount: val,
+    amount: -val,
     desc: desc || `استلام دفعة نقدية مسواة للمورد: ${supplier}`
   });
 
