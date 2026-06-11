@@ -1230,6 +1230,10 @@ app.post("/api", async (req: Request, res: Response) => {
         // Here we can live compute net salary
         const netSalary = basicSalary + delivCommission + returnShippingCommission + bonusesSum - penaltiesSum;
 
+        const todayDate = tod();
+        const todayDeliveredCount = courierOrders.filter((o: any) => o.status === "تم التسليم" && o.delivDate && o.delivDate.substring(0, 10) === todayDate).length;
+        const todayDelivCommission = todayDeliveredCount * rawCommission;
+
         return ok(res, {
           ledgerInfo: {
             courierName,
@@ -1243,7 +1247,9 @@ app.post("/api", async (req: Request, res: Response) => {
             netSalary,
             totalCollected,
             totalPaidToCompany,
-            deficit
+            deficit,
+            todayDeliveredCount,
+            todayDelivCommission
           },
           transactions: targetLedger.reverse()
         });
@@ -1271,6 +1277,10 @@ app.post("/api", async (req: Request, res: Response) => {
         const totalCommission = (delivered * comm) + (returnedPaid * comm);
         const totalEarnings = salary + totalCommission + bonuses - penalties;
 
+        const todayDate = tod();
+        const todayDelivered = ordersList.filter((o: any) => o.status === "تم التسليم" && o.delivDate && o.delivDate.substring(0, 10) === todayDate).length;
+        const todayDelivCommission = todayDelivered * comm;
+
         return ok(res, {
           salary,
           commission: comm,
@@ -1280,7 +1290,9 @@ app.post("/api", async (req: Request, res: Response) => {
           bonuses,
           penalties,
           totalCommission,
-          totalEarnings
+          totalEarnings,
+          todayDelivered,
+          todayDelivCommission
         });
       }
 

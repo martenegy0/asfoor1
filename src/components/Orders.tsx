@@ -21,6 +21,25 @@ export default function Orders({ token, role, username, orders, couriers, onRefr
   
   const canManage = isAdmin || isSuper;
 
+  // --- Courier specifications for dynamic calculations ---
+  const currentCourierProfile = couriers.find((c: any) => c.name === username);
+  const basicSalary = currentCourierProfile ? Number(currentCourierProfile.salary || 3000) : 3000;
+  const rawCommission = currentCourierProfile ? Number(currentCourierProfile.commission || 25) : 25;
+
+  const nowEgypt = new Date();
+  nowEgypt.setHours(nowEgypt.getHours() + 3); // GMT+3 Egypt/Cairo offset
+  const todayDateStr = nowEgypt.toISOString().substring(0, 10);
+
+  const todayDeliveredOrders = orders.filter((o: any) => {
+    const isMyDeliv = o.courier === username && o.status === "تم التسليم";
+    if (!isMyDeliv) return false;
+    const isDelivToday = o.delivDate && o.delivDate.substring(0, 10) === todayDateStr;
+    const isUpdatedToday = o.updatedAt && o.updatedAt.substring(0, 10) === todayDateStr;
+    return isDelivToday || isUpdatedToday;
+  });
+  const todayDeliveredCount = todayDeliveredOrders.length;
+  const todayCommissions = todayDeliveredCount * rawCommission;
+
   const [search, setSearch] = useState("");
   const [activeFilter, setActiveFilter] = useState("all");
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -249,6 +268,63 @@ export default function Orders({ token, role, username, orders, couriers, onRefr
           </button>
         ))}
       </div>
+
+      {/* 💼 Beautiful Courier Financial & Performance Quick Summary Table */}
+      {isAgent && (
+        <div className="mx-4 p-5 bg-gradient-to-br from-slate-900 to-slate-950 border border-white/6 rounded-2xl space-y-4">
+          <div className="flex items-center justify-between border-b border-white/6 pb-2">
+            <h3 className="text-xs font-black text-amber-500 flex items-center gap-1.5">
+              <span>💼 كشف الحساب والراتب اليومي (متصل لحطيًا بـ Google Sheets)</span>
+            </h3>
+            <span className="text-[9px] font-bold bg-amber-950/20 text-amber-500 border border-amber-900/40 px-2 py-0.5 rounded">
+              محدث تلقائياً
+            </span>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-right text-xs border-collapse">
+              <thead>
+                <tr className="border-b border-white/10 text-slate-400 font-extrabold">
+                  <th className="py-2 px-3">بند الحساب الجاري للمندوب</th>
+                  <th className="py-2 px-3 text-center">البيان الميداني</th>
+                  <th className="py-2 px-3 text-left">مجموع القيمة</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr className="border-b border-white/4 hover:bg-slate-950/30">
+                  <td className="py-3 px-3 text-slate-200">الراتب الأساسي الثابت</td>
+                  <td className="py-3 px-3 text-slate-400 text-center">تعاقد شهري أساسي</td>
+                  <td className="py-3 px-3 text-left font-mono font-bold text-slate-350">
+                    {basicSalary.toLocaleString("ar")} ج.م
+                  </td>
+                </tr>
+                <tr className="border-b border-white/4 hover:bg-slate-950/30">
+                  <td className="py-3 px-3 text-slate-250 font-semibold">عدد الطلبات التي تم تسليمها اليوم</td>
+                  <td className="py-3 px-3 text-emerald-400 text-center font-bold">
+                    {todayDeliveredCount} شحنات مسلّمة اليوم
+                  </td>
+                  <td className="py-3 px-3 text-left font-mono font-black text-emerald-400">
+                    +{todayCommissions.toLocaleString("ar")} ج.م (عمولة اليوم)
+                  </td>
+                </tr>
+                <tr className="hover:bg-slate-950/30 bg-amber-950/10 font-bold text-amber-500">
+                  <td className="py-3 px-3">مستحقات اليوم التقريبية</td>
+                  <td className="py-3 px-3 text-[#64748b] text-center text-[10px]">
+                    عمولات اليوم المستحقة القائمة
+                  </td>
+                  <td className="py-3 px-3 text-left font-mono">
+                    {todayCommissions.toLocaleString("ar")} ج.م
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          
+          <p className="text-[9px] text-slate-500 leading-relaxed">
+            * يتم احتساب عمولتك بناءً على عمولتك المعتمدة للطلب الواحد ({rawCommission} ج.م) والمسجلة بملفك الوظيفي بالخادم المركزي والـ Google Sheets.
+          </p>
+        </div>
+      )}
 
       {/* Bulk Toolbar for Managers and Supervisors */}
       {selected.size > 0 && canManage && (

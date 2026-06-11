@@ -424,36 +424,90 @@ export default function Ledger({ token, role, user }: LedgerProps) {
 
           {/* Detailed Earning Calculations (Sixth Point - Courier Ledger Sheet!) */}
           {courierSummary && (
-            <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 space-y-4">
-              <div className="text-center bg-slate-950/80 border border-white/4 py-5 rounded-xl space-y-1 relative">
-                <div className="text-[10px] font-extrabold tracking-widest text-slate-450 uppercase">
-                  صافي مستحقات المندوب للتقفيل ({periodFilter === "day" ? "اليومي" : periodFilter === "week" ? "الأسبوعي" : "الشهري"})
-                </div>
-                <div className="text-3xl font-black text-amber-500">
-                  {courierSummary.netSalary.toLocaleString("ar")} <span className="text-xs">ج.م</span>
-                </div>
-                <div className="text-[9px] text-slate-500">
-                  الراتب الأساسي مفلتر + عمولات التسليم + عمولات المرتجعات مدفوعة الشحن + المكافآت - الجزاءات
+            <div className="space-y-4">
+              {/* Today's Courier Financial Performance Table */}
+              <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 space-y-3">
+                <h3 className="text-xs font-black text-amber-500 border-b border-white/6 pb-2">
+                   📊 جدول المطابقة المالية للمندوب (مسترجع لحظياً من Google Sheets)
+                </h3>
+                
+                <div className="overflow-x-auto">
+                  <table className="w-full text-right text-xs border-collapse">
+                    <thead>
+                      <tr className="border-b border-white/10 text-slate-400 font-extrabold">
+                        <th className="py-2 px-3 text-right">كشف الحساب</th>
+                        <th className="py-2 px-3 text-center">البيان الميداني</th>
+                        <th className="py-2 px-3 text-left">القيمة المالية</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr className="border-b border-white/4 hover:bg-slate-950/40">
+                        <td className="py-3 px-3 font-semibold text-slate-200">الراتب الأساسي للشهر</td>
+                        <td className="py-3 px-3 text-slate-450 text-center font-bold">تعيين تعاقدي ثابت</td>
+                        <td className="py-3 px-3 text-left font-mono font-black text-slate-200">
+                          {(courierSummary.basicSalary || 0).toLocaleString("ar")} ج.م
+                        </td>
+                      </tr>
+                      <tr className="border-b border-white/4 hover:bg-slate-950/40">
+                        <td className="py-3 px-3 font-semibold text-slate-200">عدد الطلبات التي تم تسليمها اليوم</td>
+                        <td className="py-3 px-3 text-emerald-400 text-center font-bold">
+                          {(courierSummary.todayDeliveredCount || 0)} شحنة اليوم
+                        </td>
+                        <td className="py-3 px-3 text-left font-mono font-black text-emerald-400">
+                          +{(courierSummary.todayDelivCommission || 0).toLocaleString("ar")} ج.م (عمولة اليوم)
+                        </td>
+                      </tr>
+                      <tr className="border-b border-white/4 hover:bg-slate-950/40 font-bold">
+                        <td className="py-3 px-3 text-slate-300">إجمالي عمولات التوصيل (جميع الفترات)</td>
+                        <td className="py-3 px-3 text-slate-400 text-center">
+                          {(courierSummary.deliveredCount || 0)} أوردر مسلّم كلياً
+                        </td>
+                        <td className="py-3 px-3 text-left font-mono font-black text-emerald-500">
+                          +{(courierSummary.delivCommission || 0).toLocaleString("ar")} ج.م
+                        </td>
+                      </tr>
+                      <tr className="hover:bg-slate-950/40 font-black text-sm text-amber-500 bg-amber-950/10">
+                        <td className="py-3 px-3">الراتب الصافي الإجمالي المستحق</td>
+                        <td className="py-3 px-3 text-center text-xs">شامل العمولات والمكافآت والخصومات</td>
+                        <td className="py-3 px-3 text-left font-mono">
+                          {(courierSummary.netSalary || 0).toLocaleString("ar")} ج.م
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
                 </div>
               </div>
 
-              {/* Grid Breakdown */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <div className="bg-slate-950 p-3 rounded-xl text-center border border-white/4">
-                  <div className="text-[18px] text-amber-400 font-black font-mono">
-                    {courierSummary.basicSalary.toLocaleString("ar")} ج
+              <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 space-y-4">
+                <div className="text-center bg-slate-950/80 border border-white/4 py-5 rounded-xl space-y-1 relative">
+                  <div className="text-[10px] font-extrabold tracking-widest text-slate-450 uppercase">
+                    صافي مستحقات المندوب للتقفيل ({periodFilter === "day" ? "اليومي" : periodFilter === "week" ? "الأسبوعي" : "الشهري"})
                   </div>
-                  <div className="text-[9px] text-slate-500 font-bold mt-1">الراتب الأساسي المفترض</div>
+                  <div className="text-3xl font-black text-amber-500">
+                    {courierSummary.netSalary.toLocaleString("ar")} <span className="text-xs">ج.م</span>
+                  </div>
+                  <div className="text-[9px] text-slate-500">
+                    الراتب الأساسي مفلتر + عمولات التسليم + عمولات المرتجعات مدفوعة الشحن + المكافآت - الجزاءات
+                  </div>
                 </div>
 
-                <div className="bg-slate-950 p-3 rounded-xl text-center border border-white/4">
-                  <div className="text-[18px] text-emerald-400 font-black font-mono">
-                    {courierSummary.delivCommission.toLocaleString("ar")} ج
+                {/* Grid Breakdown */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="bg-slate-950 p-3 rounded-xl text-center border border-white/4">
+                    <div className="text-[18px] text-amber-400 font-black font-mono">
+                      {courierSummary.basicSalary.toLocaleString("ar")} ج
+                    </div>
+                    <div className="text-[9px] text-slate-500 font-bold mt-1">الراتب الأساسي المفترض</div>
                   </div>
-                  <div className="text-[9px] text-slate-500 font-bold mt-1">
-                    عمولة التسليم ({courierSummary.deliveredCount} أوردر)
+
+                  <div className="bg-slate-950 p-3 rounded-xl text-center border border-white/4">
+                    <div className="text-[18px] text-emerald-400 font-black font-mono">
+                      {courierSummary.delivCommission.toLocaleString("ar")} ج
+                    </div>
+                    <div className="text-[9px] text-slate-500 font-bold mt-1">
+                      عمولة التسليم ({courierSummary.deliveredCount} أوردر)
+                    </div>
                   </div>
-                </div>
 
                 <div className="bg-slate-950 p-3 rounded-xl text-center border border-white/4">
                   <div className="text-[18px] text-emerald-400 font-black font-mono">
@@ -480,6 +534,7 @@ export default function Ledger({ token, role, user }: LedgerProps) {
                   </span>
                 </div>
               </div>
+            </div>
             </div>
           )}
 

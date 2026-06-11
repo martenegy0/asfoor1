@@ -842,8 +842,56 @@ function addSupplierPayment(sheets, d) {
 function getCourierLedger(sheets, d) {
   const { courier } = d;
   const ledger = getTableData(sheets.courierLedger);
-  const filtered = ledger.filter(l => l.courier === courier);
-  return { ok: true, transactions: filtered.reverse() };
+  const couriers = getTableData(sheets.couriers);
+  const orders = getTableData(sheets.orders);
+  const cashbox = getTableData(sheets.cashbox);
+
+  const courierObj = couriers.find(c => c.name === courier);
+  const basicSalary = courierObj ? Number(courierObj.salary || 3000) : 3000;
+  const rawCommission = courierObj ? Number(courierObj.commission || 25) : 25;
+
+  const courierOrders = orders.filter(o => o.courier === courier);
+  const targetLedger = ledger.filter(l => l.courier === courier);
+
+  const deliveredCount = courierOrders.filter(o => o.status === "تم التسليم").length;
+  const delivCommission = deliveredCount * rawCommission;
+
+  const returnedPaidCount = courierOrders.filter(o => o.status === "مرتجع" && o.returnShippingType === "paid").length;
+  const returnShippingCommission = returnedPaidCount * rawCommission;
+
+  const bonusesSum = targetLedger.filter(l => l.type === "مكافأة").reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const penaltiesSum = targetLedger.filter(l => l.type === "جزاء").reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
+  const totalCollected = courierOrders.filter(o => o.status === "تم التسليم").reduce((sum, o) => sum + Number(o.totalCOD || 0), 0);
+  const totalPaidToCompany = cashbox.filter(item => item.type === "استلام عهدة مندوب" && item.ref === courier).reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const deficit = totalCollected - totalPaidToCompany;
+
+  const netSalary = basicSalary + delivCommission + returnShippingCommission + bonusesSum - penaltiesSum;
+
+  const todayDate = nowDay();
+  const todayDeliveredCount = courierOrders.filter(o => o.status === "تم التسليم" && o.delivDate && o.delivDate.substring(0, 10) === todayDate).length;
+  const todayDelivCommission = todayDeliveredCount * rawCommission;
+
+  return {
+    ok: true,
+    ledgerInfo: {
+      courierName: courier,
+      basicSalary,
+      deliveredCount,
+      delivCommission,
+      returnedPaidCount,
+      returnShippingCommission,
+      bonusesSum,
+      penaltiesSum,
+      netSalary,
+      totalCollected,
+      totalPaidToCompany,
+      deficit,
+      todayDeliveredCount,
+      todayDelivCommission
+    },
+    transactions: targetLedger.reverse()
+  };
 }
 
 function getCourierInfo(sheets, d) {
@@ -860,20 +908,22 @@ function getCourierInfo(sheets, d) {
   const targetLedger = ledger.filter(l => l.courier === courierName);
 
   const basicSalary = Number(courierObj.salary || 3000);
+  const rawCommission = Number(courierObj.commission || 25);
   const delivCommission = targetLedger.filter(l => l.type === "تسليم").reduce((sum, item) => sum + Number(item.amount || 25), 0);
   const returnShippingCommission = targetLedger.filter(l => l.type === "مرتجع مدفوع الشحن").reduce((sum, item) => sum + Number(item.amount || 25), 0);
   const bonusesSum = targetLedger.filter(l => l.type === "مكافأة").reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const penaltiesSum = targetLedger.filter(l => l.type === "جزاء").reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
   // آلية تعقب عهدة النقدية ومنع العجز (Anti-loss tracking logic)
-  // إجمالي المحصل من الأوردرات المسلمة
   const totalCollected = courierOrders.filter(o => o.status === "تم التسليم").reduce((sum, o) => sum + Number(o.totalCOD || 0), 0);
-  // إجمالي ما دفعه وسلمه المندوب للشركة فعلياً
   const totalPaidToCompany = cashbox.filter(item => item.type === "استلام عهدة مندوب" && item.ref === courierName).reduce((sum, item) => sum + Number(item.amount || 0), 0);
-  // عجز المندوب المالي المعلق برقبته للشركة
   const deficit = totalCollected - totalPaidToCompany;
 
   const netSalary = basicSalary + delivCommission + returnShippingCommission + bonusesSum - penaltiesSum;
+
+  const todayDate = nowDay();
+  const todayDelivered = courierOrders.filter(o => o.status === "تم التسليم" && o.delivDate && o.delivDate.substring(0, 10) === todayDate).length;
+  const todayDelivCommission = todayDelivered * rawCommission;
 
   return {
     ok: true,
@@ -889,7 +939,9 @@ function getCourierInfo(sheets, d) {
       netSalary,
       totalCollected,
       totalPaidToCompany,
-      deficit
+      deficit,
+      todayDelivered,
+      todayDelivCommission
     },
     transactions: targetLedger.reverse()
   };
