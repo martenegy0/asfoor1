@@ -276,12 +276,32 @@ app.post("/api", async (req: Request, res: Response) => {
       }
 
       // Inject server-verified metadata & security ACCESS_TOKEN ("14014") for Google Sheets
-      const payloadToSheet = {
+      const payloadToSheet: any = {
         ...d,
         token: "14014",
         currentUser,
         currentRole
       };
+
+      if (d.action === "addUser" && !payloadToSheet.user) {
+        payloadToSheet.user = {
+          name: d.name,
+          role: d.role,
+          pass: d.pass,
+          active: d.active || "نعم",
+          email: d.email || "",
+          perms: d.perms || (d.role === "مدير" ? "كاملة" : "مخصصة للمركز")
+        };
+      }
+
+      if (d.action === "updateUser" && !payloadToSheet.user) {
+        payloadToSheet.user = {
+          name: d.name,
+          role: d.role,
+          active: d.active,
+          perms: d.perms
+        };
+      }
 
       try {
         const response = await fetch(gscriptUrl, {
@@ -997,9 +1017,10 @@ app.post("/api", async (req: Request, res: Response) => {
         const bestSupplierObj = [...formattedSuppliers].sort((a, b) => b.delivered - a.delivered)[0];
 
         const rate = stats.total ? Math.round((stats.delivered / stats.total) * 100) : 0;
+        const remainingStock = ordersList.filter((o: any) => !["تم التسليم", "خارج مع المندوب", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)).length;
 
         return ok(res, {
-          stats: { ...stats, rate },
+          stats: { ...stats, rate, remainingStock },
           couriers: formattedCouriers.sort((a, b) => b.total - a.total),
           suppliers: formattedSuppliers.sort((a, b) => b.total - a.total).slice(0, 10),
            bestCourier: bestCourierObj ? bestCourierObj.name : "—",

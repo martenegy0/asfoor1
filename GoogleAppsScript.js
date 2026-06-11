@@ -717,7 +717,8 @@ function getDashboardStats(sheets) {
       returned,
       shipping,
       rate: rate.toFixed(1) + "%",
-      cashBalance
+      cashBalance,
+      remainingStock: orders.filter(o => !["تم التسليم", "خارج مع المندوب", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)).length
     },
     couriers: couriers.map(c => ({ name: c.name, total: orders.filter(o => o.courier === c.name).length })),
     suppliers: suppliers.map(s => ({ name: s.name, total: orders.filter(o => o.supplier === s.name).length })),

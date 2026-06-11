@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { TrendingUp, Award, Calendar, Wallet, CheckCircle2, AlertTriangle, Truck, Layers, Search, BarChart3 } from "lucide-react";
+import { TrendingUp, Award, Calendar, Wallet, CheckCircle2, AlertTriangle, Truck, Layers, Search, BarChart3, Package } from "lucide-react";
 import { apiCall } from "../utils";
 
 interface DashboardProps {
@@ -118,25 +118,41 @@ export default function Dashboard({ token }: DashboardProps) {
     );
   }
 
-  const s = stats || { total: 0, todayTotal: 0, delivered: 0, returned: 0, pending: 0, active: 0, totalCOD: 0, todayCOD: 0, profit: 0, rate: 0 };
+  const s = stats || { total: 0, todayTotal: 0, delivered: 0, returned: 0, pending: 0, active: 0, totalCOD: 0, todayCOD: 0, profit: 0, rate: 0, remainingStock: 0 };
+
+  const remainingStock = s.remainingStock !== undefined 
+    ? s.remainingStock 
+    : Math.max(0, s.total - s.delivered - s.returned - (s.active || s.shipping || 0));
 
   const getRateColor = (r: number) => {
-    if (r >= 75) return "text-emerald-400 bg-emerald-950/20 border border-emerald-900/30";
-    if (r >= 50) return "text-amber-400 bg-amber-950/20 border border-amber-900/30";
-    return "text-red-400 bg-red-950/20 border border-red-900/30";
+    if (r >= 75) return "text-emerald-400 bg-emerald-950/20 border border-emerald-950/30";
+    if (r >= 50) return "text-amber-400 bg-amber-950/20 border border-amber-950/30";
+    return "text-red-400 bg-red-950/20 border border-red-950/30";
   };
 
   return (
     <div className="p-4 space-y-6 select-none font-sans text-right">
       {/* Dynamic Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
         {/* Total Orders */}
-        <div className="col-span-2 md:col-span-1 bg-slate-900 border border-white/6 rounded-2xl p-5 text-center relative overflow-hidden">
+        <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 text-center relative overflow-hidden">
           <div className="absolute top-2 left-2 text-amber-500/15">
             <Layers size={48} />
           </div>
           <div className="text-3xl font-black text-amber-500">{s.total}</div>
           <div className="text-[11px] font-bold text-slate-500 mt-1 uppercase tracking-wider">إجمالي الطلبات المستلمة</div>
+        </div>
+
+        {/* Remaining Warehouse Stock Card */}
+        <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 text-center relative overflow-hidden">
+          <div className="absolute top-2 left-2 text-orange-500/15">
+            <Package size={48} />
+          </div>
+          <div className="text-3xl font-black text-orange-500">{remainingStock}</div>
+          <div className="text-[11px] font-bold text-slate-500 mt-1 uppercase tracking-wider">المخزون المتبقي بالمستودع</div>
+          <div className="text-[10px] text-slate-400 font-bold mt-1 inline-block px-1.5 py-0.5 rounded bg-orange-950/20">
+             طلبات لم تُشحن بعد
+          </div>
         </div>
 
         {/* Delivered Orders */}
