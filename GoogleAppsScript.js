@@ -301,6 +301,26 @@ function nowDay() {
   return Utilities.formatDate(new Date(), "GMT+3", "yyyy-MM-dd");
 }
 
+function normalizeToDateString(dateInput) {
+  if (!dateInput) return "";
+  var str = dateInput.toString().trim();
+  var match = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (match) {
+    var y = match[1];
+    var m = match[2].length === 1 ? "0" + match[2] : match[2];
+    var d = match[3].length === 1 ? "0" + match[3] : match[3];
+    return y + "-" + m + "-" + d;
+  }
+  try {
+    var dateObj = new Date(str);
+    if (!isNaN(dateObj.getTime())) {
+      var pad = function(n) { return n.toString().length === 1 ? "0" + n : n.toString(); };
+      return dateObj.getFullYear() + "-" + pad(dateObj.getMonth() + 1) + "-" + pad(dateObj.getDate());
+    }
+  } catch (e) {}
+  return str.substring(0, 10);
+}
+
 /**
  * دالة البحث السريع عن سطر أوردر بناءً على كود التتبع
  */

@@ -155,6 +155,26 @@ const tod = () => {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 };
 
+const normalizeToDateString = (dateInput: any): string => {
+  if (!dateInput) return "";
+  const str = dateInput.toString().trim();
+  const match = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (match) {
+    const y = match[1];
+    const m = match[2].padStart(2, "0");
+    const d = match[3].padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+  try {
+    const dateObj = new Date(str);
+    if (!isNaN(dateObj.getTime())) {
+      const pad = (n: number) => n.toString().padStart(2, "0");
+      return `${dateObj.getFullYear()}-${pad(dateObj.getMonth() + 1)}-${pad(dateObj.getDate())}`;
+    }
+  } catch (e) {}
+  return str.substring(0, 10);
+};
+
 function fixPhone(phone: any): string {
   if (!phone) return "";
   let p = phone.toString().replace(/[^0-9]/g, "");
@@ -1034,7 +1054,7 @@ app.post("/api", async (req: Request, res: Response) => {
         const supplierStats: { [name: string]: { total: number; delivered: number; returned: number } } = {};
 
         for (const o of ordersList) {
-          const ordDate = o.createdAt.substring(0, 10);
+          const ordDate = normalizeToDateString(o.createdAt);
           const isToday = ordDate === todayDate;
 
           if (isToday) {
@@ -1052,7 +1072,7 @@ app.post("/api", async (req: Request, res: Response) => {
             stats.totalCOD += Number(o.totalCOD || 0);
             stats.profit += Number(o.shipPrice || 0); // profit is ship share
 
-            if (o.delivDate && o.delivDate.substring(0, 10) === todayDate) {
+            if (o.delivDate && normalizeToDateString(o.delivDate) === todayDate) {
               stats.todayCOD += Number(o.totalCOD || 0); // Money collected today
             }
           } else if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)) {
@@ -1857,7 +1877,7 @@ app.post("/api", async (req: Request, res: Response) => {
 
         switch (type) {
           case "today":
-            list = ordersList.filter((o: any) => o.createdAt.substring(0, 10) === todayDate || o.updatedAt.substring(0, 10) === todayDate);
+            list = ordersList.filter((o: any) => normalizeToDateString(o.createdAt) === todayDate || normalizeToDateString(o.updatedAt) === todayDate);
             break;
           case "pending":
             list = ordersList.filter((o: any) => ["جديد", "تم الإسناد", "خارج مع المندوب", "مؤجل", "لا يوجد رد"].includes(o.status));

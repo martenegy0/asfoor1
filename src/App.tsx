@@ -7,6 +7,7 @@ import Ledger from "./components/Ledger";
 import Orders from "./components/Orders";
 import Inputs from "./components/Inputs";
 import DailyClosing from "./components/DailyClosing";
+import SuppliersManagement from "./components/SuppliersManagement";
 
 export default function App() {
   const [token, setToken] = useState("");
@@ -369,6 +370,7 @@ export default function App() {
   const showAddInputTab = role === "مدير" || role === "مورد";
   const showLedgerAccountingTab = role === "مورد" || role === "مندوب" || role === "مدير" || role === "محاسب";
   const showCouriersProfileTab = role === "مدير" || role === "محاسب" || role === "مشرف";
+  const showSuppliersPageTab = role === "مدير" || role === "محاسب" || role === "مشرف";
 
   return (
     <div className="min-h-screen flex flex-col font-sans bg-[#040813] text-[#e2e8f0] relative select-none antialiased">
@@ -540,6 +542,18 @@ export default function App() {
           >
             <Settings size={14} />
             <span>ملفات المناديب المالّية</span>
+          </button>
+        )}
+
+        {showSuppliersPageTab && (
+          <button
+            onClick={() => setActiveTab("suppliers")}
+            className={`px-5 py-4 text-xs font-black cursor-pointer transition-all border-b-2 flex items-center gap-1.5 whitespace-nowrap ${
+              activeTab === "suppliers" ? "text-amber-500 border-amber-500" : "text-slate-400 border-transparent hover:text-slate-200"
+            }`}
+          >
+            <Users size={14} />
+            <span>إدارة الموردين</span>
           </button>
         )}
       </nav>
@@ -938,6 +952,9 @@ export default function App() {
               )}
             </div>
           </div>
+        )}
+        {activeTab === "suppliers" && showSuppliersPageTab && (
+          <SuppliersManagement token={token} role={role} />
         )}
       </main>
 
