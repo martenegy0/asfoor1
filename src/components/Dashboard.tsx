@@ -118,15 +118,13 @@ export default function Dashboard({ token }: DashboardProps) {
     );
   }
 
-  const s = stats || { total: 0, todayTotal: 0, delivered: 0, returned: 0, pending: 0, active: 0, totalCOD: 0, todayCOD: 0, profit: 0, rate: 0, remainingStock: 0, inOfficeStock: 0 };
+  const s = stats || { total: 0, todayTotal: 0, delivered: 0, returned: 0, pending: 0, active: 0, assignedPending: 0, totalCOD: 0, todayCOD: 0, profit: 0, rate: 0, remainingStock: 0, inOfficeStock: 0 };
 
-  const remainingStock = s.remainingStock !== undefined 
-    ? s.remainingStock 
-    : Math.max(0, s.total - s.delivered - s.returned - (s.active || s.shipping || 0));
+  const remainingStock = Math.max(0, s.total - s.delivered - s.returned);
 
-  const inOfficeStock = s.inOfficeStock !== undefined
-    ? s.inOfficeStock
-    : Math.max(0, s.total - (s.active || 0) - (s.returned || 0));
+  const assignedPending = s.assignedPending !== undefined 
+    ? s.assignedPending 
+    : (s.active !== undefined ? s.active : 0);
 
   const getRateColor = (r: number) => {
     if (r >= 75) return "text-emerald-400 bg-emerald-950/20 border border-emerald-950/30";
@@ -137,7 +135,7 @@ export default function Dashboard({ token }: DashboardProps) {
   return (
     <div className="p-4 space-y-6 select-none font-sans text-right">
       {/* Dynamic Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
         {/* Total Orders */}
         <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 text-center relative overflow-hidden">
           <div className="absolute top-2 left-2 text-amber-500/15">
@@ -155,19 +153,19 @@ export default function Dashboard({ token }: DashboardProps) {
           <div className="text-3xl font-black text-orange-500">{remainingStock}</div>
           <div className="text-[11px] font-bold text-slate-500 mt-1 uppercase tracking-wider">المخزون المتبقي بالمستودع</div>
           <div className="text-[10px] text-slate-400 font-bold mt-1 inline-block px-1.5 py-0.5 rounded bg-orange-950/20">
-             طلبات لم تُشحن بعد
+             طلبات متبقية للفرز
           </div>
         </div>
 
-        {/* In-Office Stock Card */}
-        <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 text-center relative overflow-hidden">
-          <div className="absolute top-2 left-2 text-yellow-500/15">
-            <Package size={48} className="rotate-12" />
+        {/* Assigned Pending Card */}
+        <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 text-center relative overflow-hidden" id="assigned-pending-metric-card">
+          <div className="absolute top-2 left-2 text-blue-500/15">
+            <Truck size={48} className="rotate-12" />
           </div>
-          <div className="text-3xl font-black text-yellow-500">{inOfficeStock}</div>
-          <div className="text-[11px] font-bold text-slate-500 mt-1 uppercase tracking-wider">مخزون داخل المكتب</div>
-          <div className="text-[10px] text-slate-400 font-bold mt-1 inline-block px-1.5 py-0.5 rounded bg-yellow-950/20">
-             مسلم وعهد معلق
+          <div className="text-3xl font-black text-blue-400">{assignedPending}</div>
+          <div className="text-[11px] font-bold text-slate-500 mt-1 uppercase tracking-wider">شحنات قيد التوصيل مع المناديب</div>
+          <div className="text-[10px] text-slate-400 font-bold mt-1 inline-block px-1.5 py-0.5 rounded bg-blue-950/20">
+             قيد التسليم والمسندة
           </div>
         </div>
 
@@ -190,15 +188,6 @@ export default function Dashboard({ token }: DashboardProps) {
           </div>
           <div className="text-3xl font-black text-red-400">{s.returned}</div>
           <div className="text-[11px] font-bold text-slate-500 mt-1 uppercase tracking-wider">المرتجع والمرفوض</div>
-        </div>
-
-        {/* Active Orders with courier */}
-        <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 text-center relative overflow-hidden">
-          <div className="absolute top-2 left-2 text-blue-500/10">
-            <Truck size={48} />
-          </div>
-          <div className="text-3xl font-black text-blue-400">{s.active}</div>
-          <div className="text-[11px] font-bold text-slate-500 mt-1 uppercase tracking-wider">خارج مع المناديب</div>
         </div>
       </div>
 

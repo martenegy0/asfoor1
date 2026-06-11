@@ -1024,6 +1024,7 @@ app.post("/api", async (req: Request, res: Response) => {
           returned: 0,
           pending: 0,
           active: 0,
+          assignedPending: 0,
           totalCOD: 0,
           todayCOD: 0,
           profit: 0
@@ -1038,6 +1039,12 @@ app.post("/api", async (req: Request, res: Response) => {
 
           if (isToday) {
             stats.todayTotal++; // Today's Orders created today
+          }
+
+          const isClosed = ["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status);
+          const isAssigned = o.courier && o.courier !== "";
+          if (isAssigned && !isClosed) {
+            stats.assignedPending++;
           }
 
           if (o.status === "تم التسليم") {
@@ -1795,16 +1802,32 @@ app.post("/api", async (req: Request, res: Response) => {
         const { name, phone, region, base_fixed_salary, commission_success, commission_return } = d;
         if (!name) return err(res, "اسم المندوب مطلوب لتحديث بيانات الملف المالي");
 
-        const courier = db.couriers.find((c: any) => c.name === name);
-        if (!courier) return err(res, "الملف غير مسجل");
+        const trimmedName = name.toString().trim();
+        let courier = db.couriers.find(
+          (c: any) => c.name && c.name.toString().trim().toLowerCase() === trimmedName.toLowerCase()
+        );
 
-        courier.phone = phone || courier.phone || "—";
-        courier.region = region || courier.region || "—";
-        courier.salary = Number(base_fixed_salary !== undefined ? base_fixed_salary : (courier.salary || 3000));
-        courier.commission = Number(commission_success !== undefined ? commission_success : (courier.commission || 25));
-        courier.base_fixed_salary = Number(base_fixed_salary !== undefined ? base_fixed_salary : (courier.base_fixed_salary || 3000));
-        courier.commission_success = Number(commission_success !== undefined ? commission_success : (courier.commission_success || 25));
-        courier.commission_return = Number(commission_return !== undefined ? commission_return : (courier.commission_return || 10));
+        if (!courier) {
+          courier = {
+            name: trimmedName,
+            phone: phone || "—",
+            salary: Number(base_fixed_salary !== undefined ? base_fixed_salary : 3000),
+            commission: Number(commission_success !== undefined ? commission_success : 25),
+            region: region || "—",
+            base_fixed_salary: Number(base_fixed_salary !== undefined ? base_fixed_salary : 3000),
+            commission_success: Number(commission_success !== undefined ? commission_success : 25),
+            commission_return: Number(commission_return !== undefined ? commission_return : 10)
+          };
+          db.couriers.push(courier);
+        } else {
+          courier.phone = phone || courier.phone || "—";
+          courier.region = region || courier.region || "—";
+          courier.salary = Number(base_fixed_salary !== undefined ? base_fixed_salary : (courier.salary || 3000));
+          courier.commission = Number(commission_success !== undefined ? commission_success : (courier.commission || 25));
+          courier.base_fixed_salary = Number(base_fixed_salary !== undefined ? base_fixed_salary : (courier.base_fixed_salary || 3000));
+          courier.commission_success = Number(commission_success !== undefined ? commission_success : (courier.commission_success || 25));
+          courier.commission_return = Number(commission_return !== undefined ? commission_return : (courier.commission_return || 10));
+        }
 
         writeDB(db);
 

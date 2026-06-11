@@ -367,7 +367,7 @@ export default function Orders({ token, role, username, orders, couriers, onRefr
                 }`}
               >
                 {/* Header components */}
-                <div className="flex items-start justify-between">
+                <div className="flex items-start justify-between border-b border-white/4 pb-3">
                   <div className="flex items-center gap-3">
                     {canManage && (
                       <input
@@ -378,8 +378,27 @@ export default function Orders({ token, role, username, orders, couriers, onRefr
                       />
                     )}
                     <div>
-                      <div className="text-sm font-black text-amber-550 tracking-wider">
-                        {o.tracking}
+                      <div className="text-sm font-black text-amber-550 tracking-wider flex items-center gap-2">
+                        <span>{o.tracking}</span>
+                        {/* Edit & Delete panels inline with Tracking ID to prevent overlaps */}
+                        {isAdmin && (
+                          <div className="flex gap-1 mr-2">
+                            <button
+                              onClick={() => setEditOrder(o)}
+                              className="p-1 px-1.5 bg-slate-950 text-indigo-400 hover:text-indigo-200 rounded-md border border-white/6 cursor-pointer"
+                              title="تعديل الأوردر"
+                            >
+                              <Edit3 size={11} />
+                            </button>
+                            <button
+                              onClick={() => deleteOrderDirect(o.tracking)}
+                              className="p-1 px-1.5 bg-slate-950 text-red-400 hover:text-red-200 rounded-md border border-white/6 cursor-pointer"
+                              title="حذف الأوردر"
+                            >
+                              <Trash2 size={11} />
+                            </button>
+                          </div>
+                        )}
                       </div>
                       <div className="text-[10px] text-slate-500 font-bold mt-0.5">
                         {o.createdAt.substring(0, 10)} {o.supplier && `· ${o.supplier}`}
@@ -400,17 +419,11 @@ export default function Orders({ token, role, username, orders, couriers, onRefr
                     <span>العميل: <span className="font-bold text-slate-200">{o.customer || "غير مسجل"}</span></span>
                   </div>
 
-                  {/* Telephone calls and WhatsApp links */}
+                  {/* Telephone display without secondary a button duplication */}
                   {o.phone && (
-                    <div className="flex items-center justify-between gap-4 font-mono">
-                      <div className="flex items-center gap-2 text-slate-350">
-                        <Phone size={14} className="text-slate-500" />
-                        <span>الهاتف: {o.phone} {o.phone2 && ` / ${o.phone2}`}</span>
-                      </div>
-                      <div className="flex gap-2">
-                        <a href={`tel:${o.phone}`} className="p-1 px-2.5 text-[9px] bg-slate-950 rounded-md font-bold text-slate-400 hover:text-slate-200 border border-white/4">اتصال</a>
-                        <a href={`https://wa.me/${toWA(o.phone)}`} target="_blank" rel="noreferrer" className="p-1 px-2.5 text-[9px] bg-emerald-950/20 rounded-md font-bold text-emerald-400 hover:text-emerald-200 border border-emerald-900/40 font-sans">واتساب</a>
-                      </div>
+                    <div className="flex items-center gap-2 text-slate-350 font-mono">
+                      <Phone size={14} className="text-slate-500" />
+                      <span>الهاتف: <span className="text-slate-200 font-bold">{o.phone}</span> {o.phone2 && ` / ${o.phone2}`}</span>
                     </div>
                   )}
 
@@ -423,7 +436,7 @@ export default function Orders({ token, role, username, orders, couriers, onRefr
                   {/* Financial settle details */}
                   <div className="flex items-center justify-between gap-4">
                     <div className="text-slate-350 flex items-center gap-2">
-                      <span className="text-sm">💵</span>
+                       <span className="text-sm">💵</span>
                       <span>إجمالي التحصيل المستحق: <span className="text-sm font-black text-emerald-400 font-mono">{(o.totalCOD || o.prodPrice || 0).toLocaleString("ar")} ج.م</span></span>
                     </div>
                     <span className="text-[9px] text-slate-500 font-bold font-mono">
@@ -535,23 +548,25 @@ export default function Orders({ token, role, username, orders, couriers, onRefr
                   </div>
                 )}
 
-                {/* Edit & Delete panels (Only visible to Admin role per user rules!) */}
-                {isAdmin && (
-                  <div className="absolute top-4 left-4 flex gap-1">
-                    <button
-                      onClick={() => setEditOrder(o)}
-                      className="p-1 px-1.5 bg-slate-950 text-indigo-400 hover:text-indigo-200 rounded-md border border-white/6 cursor-pointer"
-                      title="تعديل الأوردر"
+                {/* Clean, isolated mobile connection row at the bottom of each order */}
+                {o.phone && (
+                  <div className="grid grid-cols-2 gap-2 pt-3 border-t border-white/6">
+                    <a
+                      href={`tel:${o.phone}`}
+                      className="flex items-center justify-center gap-1.5 py-2.5 hover:bg-blue-600/10 text-blue-400 bg-blue-950/20 border border-blue-900/30 rounded-xl text-xs font-black tracking-wide cursor-pointer transition-colors text-center"
                     >
-                      <Edit3 size={11} />
-                    </button>
-                    <button
-                      onClick={() => deleteOrderDirect(o.tracking)}
-                      className="p-1 px-1.5 bg-slate-950 text-red-400 hover:text-red-200 rounded-md border border-white/6 cursor-pointer"
-                      title="حذف الأوردر"
+                      <Phone size={13} />
+                      <span>اتصال هاتفي</span>
+                    </a>
+                    <a
+                      href={`https://wa.me/${toWA(o.phone)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center justify-center gap-1.5 py-2.5 hover:bg-emerald-600/10 text-emerald-400 bg-emerald-950/20 border border-emerald-950/30 rounded-xl text-xs font-black tracking-wide cursor-pointer transition-colors text-center font-sans"
                     >
-                      <Trash2 size={11} />
-                    </button>
+                      <MessageSquare size={13} />
+                      <span>اتصال واتساب</span>
+                    </a>
                   </div>
                 )}
               </div>

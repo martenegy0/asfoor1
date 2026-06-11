@@ -796,6 +796,7 @@ function getDashboardStats(sheets) {
   const shipping = orders.filter(o => o.status === "خارج مع المندوب" || o.status === "تم الإسناد").length;
 
   const rate = total > 0 ? ((delivered / (delivered + returned || 1)) * 100) : 0;
+  const assignedPending = orders.filter(o => o.courier && o.courier !== "" && !["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length;
 
   // حساب حركة الخزنة
   const cashIn = cashbox.filter(c => ["تحصيل مندوب", "إيداع خزنة direct", "إيداع"].includes(c.type)).reduce((sum, item) => sum + Number(item.amount || 0), 0);
@@ -809,6 +810,7 @@ function getDashboardStats(sheets) {
       delivered,
       returned,
       shipping,
+      assignedPending,
       rate: rate.toFixed(1) + "%",
       cashBalance,
       remainingStock: orders.filter(o => !["تم التسليم", "خارج مع المندوب", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)).length
@@ -1501,11 +1503,24 @@ function updateCourier(sheets, d) {
   if (!name) return { ok: false, error: "اسم المندوب مطلوب لتحديث البيانات" };
 
   const couriersSheet = sheets.couriers;
-  const courierIndex = findRowIndex(couriersSheet, "name", name);
-  if (courierIndex === -1) return { ok: false, error: "الملف التعريفي للمندوب غير مسجل" };
+  const trimmedName = name.toString().trim();
+  let courierIndex = -1;
+  const lastRow = couriersSheet.getLastRow();
+  if (lastRow > 1) {
+    const colIndex = getHeaderIndex(couriersSheet, "name");
+    if (colIndex !== -1) {
+      const vals = couriersSheet.getRange(2, colIndex, lastRow - 1, 1).getValues();
+      for (let i = 0; i < vals.length; i++) {
+        if (vals[i][0].toString().trim().toLowerCase() === trimmedName.toLowerCase()) {
+          courierIndex = i + 2;
+          break;
+        }
+      }
+    }
+  }
 
   const courierObj = {
-    name: name,
+    name: trimmedName,
     phone: phone || "—",
     salary: Number(base_fixed_salary !== undefined ? base_fixed_salary : 3000),
     commission: Number(commission_success !== undefined ? commission_success : 25),
@@ -1515,6 +1530,11 @@ function updateCourier(sheets, d) {
     commission_return: Number(commission_return !== undefined ? commission_return : 10)
   };
 
-  updateRowByObject(couriersSheet, courierIndex, courierObj);
+  if (courierIndex === -1) {
+    appendToSheet(couriersSheet, ["name", "phone", "commission", "salary", "region", "base_fixed_salary", "commission_success", "commission_return"], courierObj);
+  } else {
+    updateRowByObject(couriersSheet, courierIndex, courierObj);
+  }
+
   return { ok: true, msg: "تم تحديث وحفظ بيانات المندوب بنجاح بفولدر السيستم" };
 }
