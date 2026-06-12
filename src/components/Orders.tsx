@@ -1,6 +1,6 @@
 import React, { useState, useRef } from "react";
 import { Search, MapPin, Phone, MessageSquare, Check, Truck, User, Calendar, Trash2, Edit3, ShieldAlert, ArrowLeftRight, Download, FileSpreadsheet, Upload, Loader2, XCircle } from "lucide-react";
-import { apiCall, toWA } from "../utils";
+import { apiCall, toWA, getTodayDateStr, normalizeDateToYMD } from "../utils";
 
 interface OrdersProps {
   token: string;
@@ -28,15 +28,13 @@ export default function Orders({ token, role, username, orders, setOrders, couri
   const basicSalary = currentCourierProfile ? Number(currentCourierProfile.salary || 3000) : 3000;
   const rawCommission = currentCourierProfile ? Number(currentCourierProfile.commission || 25) : 25;
 
-  const nowEgypt = new Date();
-  nowEgypt.setHours(nowEgypt.getHours() + 3); // GMT+3 Egypt/Cairo offset
-  const todayDateStr = nowEgypt.toISOString().substring(0, 10);
+  const todayDateStr = getTodayDateStr();
 
   const todayDeliveredOrders = orders.filter((o: any) => {
     const isMyDeliv = o.courier === username && o.status === "تم التسليم";
     if (!isMyDeliv) return false;
-    const isDelivToday = o.delivDate && o.delivDate.substring(0, 10) === todayDateStr;
-    const isUpdatedToday = o.updatedAt && o.updatedAt.substring(0, 10) === todayDateStr;
+    const isDelivToday = o.delivDate && normalizeDateToYMD(o.delivDate) === todayDateStr;
+    const isUpdatedToday = o.updatedAt && normalizeDateToYMD(o.updatedAt) === todayDateStr;
     return isDelivToday || isUpdatedToday;
   });
   const todayDeliveredCount = todayDeliveredOrders.length;
@@ -211,6 +209,10 @@ export default function Orders({ token, role, username, orders, setOrders, couri
     // Strict role-based filter safety enforcement
     if (isAgent) {
       if (!o.courier || o.courier.toString().trim().toLowerCase() !== username.trim().toLowerCase()) return false;
+      // Exclude delayed / unanswered hold-ups from the main "all" tab list
+      if (activeFilter === "all" && ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)) {
+        return false;
+      }
     } else if (isSupplier) {
       if (!o.supplier || o.supplier.toString().trim().toLowerCase() !== username.trim().toLowerCase()) return false;
     } else if (isReturnsOfficer) {
@@ -229,6 +231,22 @@ export default function Orders({ token, role, username, orders, setOrders, couri
     }
     return true;
   });
+
+  // Today's hold-ups / suspended orders ("معلقات اليوم") for agent/courier view
+  const suspendedOrders = isAgent ? orders.filter((o) => {
+    if (!o.courier || o.courier.toString().trim().toLowerCase() !== username.trim().toLowerCase()) return false;
+    const isSuspended = ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status);
+    if (!isSuspended) return false;
+
+    if (search.trim()) {
+      const q = search.toLowerCase().trim();
+      return [o.tracking, o.supplier, o.courier, o.customer, o.phone, o.gov, o.region, o.address, o.notes, o.returnQueueStatus]
+        .join(" ")
+        .toLowerCase()
+        .includes(q);
+    }
+    return true;
+  }) : [];
 
   function toggleSelect(tracking: string) {
     const next = new Set(selected);
@@ -322,11 +340,27 @@ export default function Orders({ token, role, username, orders, setOrders, couri
     }
 
     // Add to pending status changes to disable repeating clicks visually
-    setPendingTrackings((prev) => {
-      const next = new Set(prev);
-      next.add(tracking);
-      return next;
-    });
+    if (!isAgent) {
+      setPendingTrackings((prev) => {
+        const next = new Set(prev);
+        next.add(tracking);
+        return next;
+      });
+    } else {
+      // For agents (couriers), let them feel instantaneous 100ms reaction time with zero blocking
+      setPendingTrackings((prev) => {
+        const next = new Set(prev);
+        next.add(tracking);
+        return next;
+      });
+      setTimeout(() => {
+        setPendingTrackings((prev) => {
+          const next = new Set(prev);
+          next.delete(tracking);
+          return next;
+        });
+      }, 100);
+    }
 
     // --- OPTIMISTIC UI UPDATE ---
     const nowEgyptStr = new Date().toISOString().replace("T", " ").substring(0, 16);
@@ -368,23 +402,33 @@ export default function Orders({ token, role, username, orders, setOrders, couri
     })
       .then((res) => {
         if (res && res.ok) {
-          console.log(`Successfully synced status of ${tracking} to [${status}]`);
-          onRefresh();
+          console.log(`Successfully synced status of ${tracking} to [${status}] in BG`);
+          if (!isAgent) {
+            onRefresh();
+          }
         } else {
-          alert(`⚠️ عطل مزامنة: فشل تحديث حالة الأوردر ${tracking} على السيرفر: ${res?.error || "خطأ غير معروف"}`);
-          onRefresh();
+          if (!isAgent) {
+            alert(`⚠️ عطل مزامنة: فشل تحديث حالة الأوردر ${tracking} على السيرفر: ${res?.error || "خطأ غير معروف"}`);
+            onRefresh();
+          } else {
+            console.error(`Courier BG sync issue for ${tracking}: ${res?.error}`);
+          }
         }
       })
       .catch((err) => {
         console.error("BG sync error", err);
-        onRefresh();
+        if (!isAgent) {
+          onRefresh();
+        }
       })
       .finally(() => {
-        setPendingTrackings((prev) => {
-          const next = new Set(prev);
-          next.delete(tracking);
-          return next;
-        });
+        if (!isAgent) {
+          setPendingTrackings((prev) => {
+            const next = new Set(prev);
+            next.delete(tracking);
+            return next;
+          });
+        }
       });
   }
 
@@ -554,6 +598,268 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       case "تم تسليم المرتجع للمورد": return "bg-purple-950/20 text-purple-400 border border-purple-900/30";
       default: return "bg-slate-900 text-slate-400 border border-slate-800";
     }
+  };
+
+  const renderOrderCard = (o: any) => {
+    const isSel = selected.has(o.tracking);
+    return (
+      <div
+        key={o.tracking}
+        className={`bg-slate-900 border rounded-2xl p-5 space-y-4 relative transition-all ${
+          isSel ? "border-amber-500 ring-2 ring-amber-500/10" : "border-white/6"
+        }`}
+      >
+        {/* Header components */}
+        <div className="flex items-start justify-between border-b border-white/4 pb-3">
+          <div className="flex items-center gap-3">
+            {canManage && (
+              <input
+                type="checkbox"
+                checked={isSel}
+                onChange={() => toggleSelect(o.tracking)}
+                className="w-4 h-4 rounded border-white/10 bg-slate-950 text-amber-500 accent-amber-500 cursor-pointer"
+              />
+            )}
+            <div>
+              <div className="text-sm font-black text-amber-500 tracking-wider flex items-center gap-2">
+                <span>{o.tracking}</span>
+                {/* Edit & Delete panels inline with Tracking ID to prevent overlaps */}
+                {isAdmin && (
+                  <div className="flex gap-1 mr-2 font-sans">
+                    <button
+                      onClick={() => setEditOrder(o)}
+                      className="p-1 px-1.5 bg-slate-950 text-indigo-400 hover:text-indigo-200 rounded-md border border-white/6 cursor-pointer"
+                      title="تعديل الأوردر"
+                    >
+                      <Edit3 size={11} />
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (confirm(`هل أنت متأكد من حذف الشحنة كلياً؟ ${o.tracking}`)) {
+                          apiCall("deleteOrder", token, { tracking: o.tracking }).then((res) => {
+                            if (res.ok) onRefresh();
+                            else alert("فشل الحذف: " + res.error);
+                          });
+                        }
+                      }}
+                      className="p-1 px-1.5 bg-slate-950 text-red-400 hover:text-red-200 rounded-md border border-white/6 cursor-pointer"
+                      title="حذف الأوردر"
+                    >
+                      <Trash2 size={11} />
+                    </button>
+                  </div>
+                )}
+              </div>
+              <span className="text-[10px] text-slate-500 font-bold block mt-0.5 font-mono">
+                {o.createdAt.substring(0, 10)} {o.supplier && `· ${o.supplier}`}
+              </span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            {o.returnShippingType && (
+              <span className="text-[8.5px] font-black bg-purple-950 text-purple-400 border border-purple-900/30 px-1.5 py-0.5 rounded">
+                شحن مرتجع: {o.returnShippingType === "paid" ? "مدفوع بالكامل" : "غير مدفوع"}
+              </span>
+            )}
+            <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full whitespace-nowrap ${getBadgeStyle(o.status)}`}>
+              {o.status}
+            </span>
+          </div>
+        </div>
+
+        {/* Info Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 text-xs text-slate-300">
+          <div className="space-y-1.5 col-span-1">
+            <div className="flex items-center gap-2 font-black text-slate-200">
+              <User size={13} className="text-slate-500 shrink-0" />
+              <span>العميل: {o.customer || "مجهول الاسم"}</span>
+            </div>
+            <div className="flex items-center gap-2 font-mono text-slate-200">
+              <Phone size={13} className="text-emerald-500 shrink-0" />
+              <span>الهاتف: {o.phone || "—"} {o.phone2 ? `· ${o.phone2}` : ""}</span>
+            </div>
+          </div>
+
+          <div className="space-y-1.5 border-t md:border-t-0 md:border-r border-white/4 pt-3.5 md:pt-0 md:pr-3.5 flex flex-col justify-between col-span-1">
+            <div className="flex items-start gap-1.5">
+              <MapPin size={13} className="text-slate-500 mt-0.5 shrink-0" />
+              <span className="text-xs">العنوان: <span className="font-bold text-slate-200">{o.gov} · {o.region} · {o.address}</span></span>
+            </div>
+            <a
+              href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${o.gov} ${o.region} ${o.address}`)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="shrink-0 bg-indigo-500/20 hover:bg-indigo-500/35 border border-indigo-500/30 text-indigo-300 font-bold text-[10px] px-2.5 py-1.5 rounded-lg flex items-center gap-1 transition active:scale-95 cursor-pointer max-w-fit mt-1"
+            >
+              <MapPin size={11} className="text-indigo-400 shrink-0" />
+              <span>توجيه الخرائط GPS</span>
+            </a>
+          </div>
+
+          {/* Settle info */}
+          <div className="flex items-center justify-between gap-4 col-span-1 md:col-span-2 pt-2 border-t border-white/4">
+            <div className="text-slate-300 flex items-center gap-2">
+              <span className="text-sm font-mono shrink-0">💵</span>
+              <span>إجمالي التحصيل المستحق: <span className="text-sm font-black text-emerald-400 font-mono">{(o.totalCOD || o.prodPrice || 0).toLocaleString("ar")} ج.م</span></span>
+            </div>
+            <span className="text-[9px] text-slate-500 font-bold font-mono">
+              منتج: {o.prodPrice} · شحن: {o.shipPrice}
+            </span>
+          </div>
+
+          {/* Hide or show sensitive courier assignments */}
+          {!isSupplier && o.courier && (
+            <div className="flex items-center gap-2 text-slate-300 col-span-1 md:col-span-2 border-t border-white/4 pt-2">
+              <Truck size={14} className="text-slate-500 shrink-0" />
+              <span>المندوب: <span className="font-bold text-indigo-400">{o.courier}</span></span>
+            </div>
+          )}
+
+          {o.notes && (
+            <div className="col-span-1 md:col-span-2 p-2.5 bg-slate-950/40 rounded-xl text-[11px] text-slate-400 border border-white/4 leading-relaxed">
+              💬 <span className="font-bold">ملاحظات:</span> {o.notes}
+            </div>
+          )}
+
+          {o.returnQueueStatus && (
+            <div className="col-span-1 md:col-span-2 p-3 bg-purple-950/10 border border-purple-900/30 rounded-xl text-[11px] text-purple-300 flex items-center justify-between">
+              <span className="font-semibold flex items-center gap-1.5">
+                <ArrowLeftRight size={13} className="shrink-0" />
+                قائمة المرتجع: <span className="font-black underline">{o.returnQueueStatus}</span>
+              </span>
+              <span>مسؤول المتابعة: <span className="font-bold underline">{o.returnQueueAgent || "لم يعين"}</span></span>
+            </div>
+          )}
+        </div>
+
+        {/* Action Controls */}
+        {o.status !== "تم التسليم" && !isSupplier && (
+          <div className="border-t border-white/6 pt-3 flex flex-wrap gap-2 justify-end">
+            {isAgent && o.courier === username && (
+              <>
+                <button
+                  onClick={() => triggerStatusUpdate(o.tracking, "تم التسليم")}
+                  disabled={pendingTrackings.has(o.tracking)}
+                  className={`px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-slate-950 font-black text-[10px] rounded-lg cursor-pointer flex items-center gap-1 ${
+                    pendingTrackings.has(o.tracking) ? "opacity-50 pointer-events-none" : ""
+                  }`}
+                >
+                  {pendingTrackings.has(o.tracking) && <Loader2 size={11} className="animate-spin text-slate-950" />}
+                  <span>✅ تم التسليم والتحصيل</span>
+                </button>
+                <button
+                  onClick={() => triggerStatusUpdate(o.tracking, "مرتجع")}
+                  disabled={pendingTrackings.has(o.tracking)}
+                  className={`px-3 py-1.5 bg-red-605 bg-red-650 hover:bg-red-750 text-slate-200 font-black text-[10px] rounded-lg cursor-pointer flex items-center gap-1 ${
+                    pendingTrackings.has(o.tracking) ? "opacity-50 pointer-events-none" : ""
+                  }`}
+                >
+                  {pendingTrackings.has(o.tracking) && <Loader2 size={11} className="animate-spin text-slate-200" />}
+                  <span>↩ اختيار مرتجع</span>
+                </button>
+                <button
+                  onClick={() => triggerStatusUpdate(o.tracking, "مؤجل")}
+                  disabled={pendingTrackings.has(o.tracking)}
+                  className={`px-3 py-1.5 bg-slate-800 text-slate-300 font-bold text-[10px] rounded-lg cursor-pointer flex items-center gap-1 ${
+                    pendingTrackings.has(o.tracking) ? "opacity-50 pointer-events-none" : ""
+                  }`}
+                >
+                  {pendingTrackings.has(o.tracking) && <Loader2 size={11} className="animate-spin text-slate-300" />}
+                  <span>⏰ تم التأجيل</span>
+                </button>
+                <button
+                  onClick={() => triggerStatusUpdate(o.tracking, "لا يوجد رد")}
+                  disabled={pendingTrackings.has(o.tracking)}
+                  className={`px-3 py-1.5 bg-slate-950 text-slate-400 font-bold text-[10px] rounded-lg cursor-pointer border border-white/4 flex items-center gap-1 ${
+                    pendingTrackings.has(o.tracking) ? "opacity-50 pointer-events-none" : ""
+                  }`}
+                >
+                  {pendingTrackings.has(o.tracking) && <Loader2 size={11} className="animate-spin text-slate-400" />}
+                  <span>📵 لا يرد</span>
+                </button>
+              </>
+            )}
+
+            {canManage && (
+              <>
+                <button
+                  onClick={() => triggerStatusUpdate(o.tracking, "خارج مع المندوب")}
+                  disabled={pendingTrackings.has(o.tracking)}
+                  className={`px-2.5 py-1 bg-slate-950 text-amber-500 border border-amber-500/20 text-[9px] font-black rounded hover:bg-slate-900 cursor-pointer flex items-center gap-1 ${
+                    pendingTrackings.has(o.tracking) ? "opacity-50 pointer-events-none" : ""
+                  }`}
+                >
+                  {pendingTrackings.has(o.tracking) && <Loader2 size={10} className="animate-spin text-amber-500" />}
+                  <span>🚚 خارج للتسليم</span>
+                </button>
+                <button
+                  onClick={() => triggerStatusUpdate(o.tracking, "تم التسليم")}
+                  disabled={pendingTrackings.has(o.tracking)}
+                  className={`px-2.5 py-1 bg-emerald-600 text-slate-950 text-[9px] font-black rounded hover:bg-emerald-700 cursor-pointer flex items-center gap-1 ${
+                    pendingTrackings.has(o.tracking) ? "opacity-50 pointer-events-none" : ""
+                  }`}
+                >
+                  {pendingTrackings.has(o.tracking) && <Loader2 size={10} className="animate-spin text-slate-950" />}
+                  <span>تسليم سريع</span>
+                </button>
+                <button
+                  onClick={() => triggerStatusUpdate(o.tracking, "مرتجع")}
+                  disabled={pendingTrackings.has(o.tracking)}
+                  className={`px-2.5 py-1 bg-slate-950 text-red-400 border border-red-900/20 text-[9px] font-black rounded hover:bg-slate-900 cursor-pointer flex items-center gap-1 ${
+                    pendingTrackings.has(o.tracking) ? "opacity-50 pointer-events-none" : ""
+                  }`}
+                >
+                  {pendingTrackings.has(o.tracking) && <Loader2 size={10} className="animate-spin text-red-500" />}
+                  <span>مرتجع سريع</span>
+                </button>
+              </>
+            )}
+
+            {isReturnsOfficer && (
+              <div className="flex gap-1 bg-slate-950 p-1 rounded-lg border border-white/6 items-center">
+                <span className="text-[9px] text-slate-500 font-bold px-1.5 font-sans">خط المرتجع:</span>
+                {["مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"].map((rs) => (
+                  <button
+                    key={rs}
+                    disabled={pendingTrackings.has(o.tracking)}
+                    onClick={() => triggerStatusUpdate(o.tracking, rs)}
+                    className={`px-2 py-1 text-[9px] font-bold rounded cursor-pointer flex items-center gap-0.5 ${
+                      o.returnQueueStatus === rs ? "bg-purple-650 text-slate-100" : "text-slate-500 hover:text-slate-305 hover:text-slate-300"
+                    } ${pendingTrackings.has(o.tracking) ? "opacity-50 pointer-events-none" : ""}`}
+                  >
+                    {pendingTrackings.has(o.tracking) && o.returnQueueStatus !== rs && <Loader2 size={8} className="animate-spin" />}
+                    <span>{rs.split(" ").slice(-1)[0]}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Clean isolated communication */}
+        {o.phone && (
+          <div className="grid grid-cols-2 gap-2 pt-3 border-t border-white/6 col-span-1 md:col-span-2">
+            <a
+              href={`tel:${o.phone}`}
+              className="flex items-center justify-center gap-1.5 py-2.5 hover:bg-blue-600/10 text-blue-400 bg-blue-950/20 border border-blue-900/30 rounded-xl text-xs font-black tracking-wide cursor-pointer transition-colors text-center"
+            >
+              <Phone size={13} className="shrink-0" />
+              <span>اتصال هاتفي</span>
+            </a>
+            <a
+              href={`https://wa.me/${toWA(o.phone)}`}
+              target="_blank"
+              rel="noreferrer"
+              className="flex items-center justify-center gap-1.5 py-2.5 hover:bg-emerald-600/10 text-emerald-400 bg-emerald-950/20 border border-emerald-950/30 rounded-xl text-xs font-black tracking-wide cursor-pointer transition-colors text-center font-sans"
+            >
+              <MessageSquare size={13} className="shrink-0" />
+              <span>اتصال واتساب</span>
+            </a>
+          </div>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -733,6 +1039,60 @@ export default function Orders({ token, role, username, orders, setOrders, couri
         </div>
       )}
 
+      {/* 📊 Courier Dashboard Operational Counters */}
+      {isAgent && (
+        <div className="mx-4 grid grid-cols-2 md:grid-cols-5 gap-3">
+          {/* Total Orders Today */}
+          <div className="bg-slate-900 border border-white/6 p-3.5 rounded-2xl flex flex-col justify-between space-y-1">
+            <span className="text-[10px] text-slate-400 font-bold">📦 إجمالي طلبات اليوم</span>
+            <span className="text-xl font-black text-slate-100 font-mono">
+              {orders.filter((o) => o.courier === username).length} <span className="text-[10px] font-medium text-slate-400">شحنة</span>
+            </span>
+          </div>
+
+          {/* Delivered 🟢 */}
+          <div className="bg-emerald-950/20 border border-emerald-950/30 p-3.5 rounded-2xl flex flex-col justify-between space-y-1">
+            <span className="text-[10px] text-emerald-400 font-bold">🟢 تم التسليم</span>
+            <span className="text-xl font-black text-emerald-400 font-mono">
+              {orders.filter((o) => o.courier === username && o.status === "تم التسليم").length} <span className="text-[10px] font-medium text-emerald-500">شحنة</span>
+            </span>
+          </div>
+
+          {/* Returned 🔴 */}
+          <div className="bg-red-950/20 border border-red-900/30 p-3.5 rounded-2xl flex flex-col justify-between space-y-1">
+            <span className="text-[10px] text-red-400 font-bold">🔴 مرتجع نهائي</span>
+            <span className="text-xl font-black text-red-400 font-mono">
+              {orders.filter((o) => o.courier === username && ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length} <span className="text-[10px] font-medium text-red-500">شحنة</span>
+            </span>
+          </div>
+
+          {/* Delayed / No Response 🟡 */}
+          <div className="bg-amber-950/20 border border-amber-900/30 p-3.5 rounded-2xl flex flex-col justify-between space-y-1">
+            <span className="text-[10px] text-amber-400 font-bold">🟡 مؤجل / لا يرد</span>
+            <span className="text-xl font-black text-amber-400 font-mono">
+              {orders.filter((o) => o.courier === username && ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)).length} <span className="text-[10px] font-medium text-amber-500">شحنة</span>
+            </span>
+          </div>
+
+          {/* Remaining in Bag 🔵 */}
+          <div className="bg-blue-950/30 border border-blue-900/40 p-3.5 rounded-2xl flex flex-col justify-between col-span-2 md:col-span-1 space-y-1 relative overflow-hidden">
+            <div className="absolute top-0 right-0 w-8 h-8 bg-blue-500/10 rounded-full blur-xl animate-pulse"></div>
+            <span className="text-[10px] text-blue-400 font-extrabold flex items-center gap-1.5">
+              <span>🔵 المتبقي في الشنطة</span>
+            </span>
+            <span className="text-xl font-black text-blue-400 font-mono">
+              {(() => {
+                const total = orders.filter((o) => o.courier === username).length;
+                const deliv = orders.filter((o) => o.courier === username && o.status === "تم التسليم").length;
+                const ret = orders.filter((o) => o.courier === username && ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length;
+                const dly = orders.filter((o) => o.courier === username && ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)).length;
+                return Math.max(0, total - deliv - ret - dly);
+              })()} <span className="text-[10px] font-medium text-blue-400">شحنة</span>
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* 💼 Beautiful Courier Financial & Performance Quick Summary Table */}
       {isAgent && (
         <div className="mx-4 p-5 bg-gradient-to-br from-slate-900 to-slate-950 border border-white/6 rounded-2xl space-y-4">
@@ -821,7 +1181,29 @@ export default function Orders({ token, role, username, orders, setOrders, couri
             <p>لا توجد شحنات مطابقة لخيارات التصفية الحالية</p>
           </div>
         ) : (
-          visibleOrders.map((o) => {
+          visibleOrders.map((o) => renderOrderCard(o))
+        )}
+      </div>
+
+      {/* Today's hold-ups ("معلقات اليوم") at the bottom of the courier screen */}
+      {isAgent && suspendedOrders.length > 0 && (
+        <div className="mt-8 pt-6 border-t border-white/10 space-y-4">
+          <div className="flex items-center justify-between px-4">
+            <h3 className="text-xs font-black text-amber-500 bg-amber-950/20 px-4 py-2 border border-amber-900/40 rounded-xl flex items-center gap-2">
+              <span>⏳ معلقات اليوم (المؤجلات وعدم الرد) ({suspendedOrders.length})</span>
+            </h3>
+            <p className="text-[10px] text-slate-400 font-bold">شحنات معلقة تحتاج إعادة محاولة لاحقاً</p>
+          </div>
+          <div className="px-4 space-y-4">
+            {suspendedOrders.map((o) => renderOrderCard(o))}
+          </div>
+        </div>
+      )}
+
+      {/* Swallow old list map compile-safely to bypass duplicate rendering logic */}
+      {false && (
+        <div className="hidden">
+          {visibleOrders.map((o) => {
             const isSel = selected.has(o.tracking);
             return (
               <div
@@ -1076,9 +1458,9 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                 )}
               </div>
             );
-          })
-        )}
-      </div>
+          })}
+        </div>
+      )}
 
       {/* --- MODAL 1: RETURN SHIPPING SELECTION POPUP (Third Point Fix!) --- */}
       {returnedSelectOpen && selectedReturnOrder && (

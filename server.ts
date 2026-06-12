@@ -604,64 +604,9 @@ const err = (res: Response, m: string) => res.json({ ok: false, error: m });
 // ─────────────────────────────────────────────────────────────
 const isDateToday = (dateInput: any): boolean => {
   if (!dateInput) return false;
-  const str = dateInput.toString().trim().toLowerCase();
-  
-  // Get Cairo today's metrics
-  const today = getCairoDateObj();
-  const ty = today.getFullYear(); // 2026
-  const tm = today.getMonth() + 1; // 6
-  const td = today.getDate(); // 11
-  
-  const pad = (n: number) => n.toString().padStart(2, "0");
-  const yStr = ty.toString();
-  const mStr = tm.toString();
-  const mPad = pad(tm);
-  const dStr = td.toString();
-  const dPad = pad(td);
-  
-  if (
-    str.includes(`${yStr}-${mPad}-${dPad}`) ||
-    str.includes(`${yStr}/${mPad}/${dPad}`) ||
-    str.includes(`${yStr}-${mStr}-${dStr}`) ||
-    str.includes(`${yStr}/${mStr}-${dStr}`)
-  ) {
-    return true;
-  }
-  
-  if (
-    str.includes(`${dPad}/${mPad}/${yStr}`) ||
-    str.includes(`${dPad}-${mPad}-${yStr}`) ||
-    str.includes(`${dStr}/${mStr}/${yStr}`) ||
-    str.includes(`${dStr}-${mStr}-${yStr}`) ||
-    str.includes(`${dPad}/${mStr}/${yStr}`) ||
-    str.includes(`${dStr}/${mPad}/${yStr}`)
-  ) {
-    return true;
-  }
-  
-  const parts = str.split(/[-/\s]+/);
-  if (parts.length >= 2) {
-    const hasDay = parts.some(p => Number(p) === td);
-    const hasMonth = parts.some(p => Number(p) === tm);
-    const hasYear = parts.some(p => Number(p) === ty || p === "26");
-    if (hasDay && hasMonth && (hasYear || parts.length === 2)) {
-      return true;
-    }
-  }
-  
-  try {
-    const dObj = new Date(str);
-    if (!isNaN(dObj.getTime())) {
-      const dy = dObj.getFullYear();
-      const dm = dObj.getMonth() + 1;
-      const dd = dObj.getDate();
-      if (dy === ty && dm === tm && dd === td) {
-        return true;
-      }
-    }
-  } catch(e) {}
-  
-  return false;
+  const normalizedInput = normalizeToDateString(dateInput);
+  const normalizedToday = tod();
+  return normalizedInput === normalizedToday;
 };
 
 interface CacheEntry {

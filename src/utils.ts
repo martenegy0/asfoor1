@@ -97,9 +97,61 @@ export async function apiCall(action: string, token: string, extraParams: any = 
   }
 }
 
-// Helper to get today's date in YYYY-MM-DD format
+// Helper to get today's date in YYYY-MM-DD format (Egypt/Cairo Timezone)
 export function getTodayDateStr(): string {
-  return new Date().toISOString().substring(0, 10);
+  try {
+    const s = new Date().toLocaleString("en-US", { timeZone: "Africa/Cairo" });
+    const d = new Date(s);
+    const pad = (n: number) => n.toString().padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  } catch (e) {
+    const d = new Date();
+    d.setHours(d.getHours() + 3); // Cairo offset fallback
+    return d.toISOString().substring(0, 10);
+  }
+}
+
+// Normalize any date formats to a standard YYYY-MM-DD string
+export function normalizeDateToYMD(dateInput: any): string {
+  if (!dateInput) return "";
+  const str = dateInput.toString().trim();
+
+  // 1. Matches YYYY-MM-DD or YYYY/MM/DD
+  const matchYMD = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (matchYMD) {
+    const y = matchYMD[1];
+    const m = matchYMD[2].padStart(2, "0");
+    const d = matchYMD[3].padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+
+  // 2. Matches DD/MM/YYYY or DD-MM-YYYY
+  const matchDMY = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+  if (matchDMY) {
+    const d = matchDMY[1].padStart(2, "0");
+    const m = matchDMY[2].padStart(2, "0");
+    const y = matchDMY[3];
+    return `${y}-${m}-${d}`;
+  }
+
+  // 3. Matches DD/MM or DD-MM (without year)
+  const matchDM = str.match(/^(\d{1,2})[-/](\d{1,2})/);
+  if (matchDM) {
+    const d = matchDM[1].padStart(2, "0");
+    const m = matchDM[2].padStart(2, "0");
+    const y = new Date().getFullYear().toString();
+    return `${y}-${m}-${d}`;
+  }
+
+  try {
+    const dateObj = new Date(str);
+    if (!isNaN(dateObj.getTime())) {
+      const pad = (n: number) => n.toString().padStart(2, "0");
+      return `${dateObj.getFullYear()}-${pad(dateObj.getMonth() + 1)}-${pad(dateObj.getDate())}`;
+    }
+  } catch (e) {}
+
+  return str.substring(0, 10);
 }
 
 // 1. Generate realistic hardcoded logistics Mock Orders matching Silver Team and Malik Brand specific requirements
