@@ -98,8 +98,20 @@ export default function Inputs({ token, role, user, onSuccess }: InputsProps) {
     setLoading(true);
     setFeedback("");
     try {
+      // Logic checking if phone number already exists in database before proceeding with insertion
+      if (!force) {
+        const checkRes = await apiCall("checkPhone", token, { phone: phClean });
+        if (checkRes.ok && checkRes.count > 0) {
+          const proceed = window.confirm(`⚠️ تنبيه هاتف مكرر: رقم الهاتف (${phClean}) لديه بالفعل ${checkRes.count} طلب سابق مسجل في النظام بنسبة تسليم ${checkRes.rate}%.\n\nهل أنت متأكد من رغبتك في تسجيل أوردر مكرر جديد لهذا العميل؟`);
+          if (!proceed) {
+            setLoading(false);
+            return;
+          }
+        }
+      }
+
       const res = await apiCall("addOrder", token, {
-        force,
+        force: true, // Approved or verified
         order: {
           supplier: isSupplier ? user : formSupplier.trim(),
           customer: formCustomer.trim(),
@@ -115,15 +127,6 @@ export default function Inputs({ token, role, user, onSuccess }: InputsProps) {
       });
 
       if (res.ok) {
-        if (res.dup && !force) {
-          if (confirm(`${res.msg}\n\nهل تود حفظ الطلب بالرغم من وجود تكرار؟`)) {
-            submitManual(true);
-          } else {
-            setLoading(false);
-          }
-          return;
-        }
-
         alert(res.msg || "تم حفظ الأوردر جديد بنجاح بنظام الإسناد اللاحق");
         resetForm();
         onSuccess();
@@ -307,7 +310,7 @@ export default function Inputs({ token, role, user, onSuccess }: InputsProps) {
       </div>
 
       {/* Inputs Mode switcher tabs (Ninth Point!) */}
-      <div className="grid grid-cols-3 gap-1 bg-slate-950 p-1.5 rounded-xl border border-white/6">
+      <div className="grid grid-cols-2 gap-1 bg-slate-950 p-1.5 rounded-xl border border-white/6">
         <button
           onClick={() => setActiveTab("manual")}
           className={`py-2 text-xs font-black rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
@@ -326,16 +329,6 @@ export default function Inputs({ token, role, user, onSuccess }: InputsProps) {
         >
           <FileSpreadsheet size={14} />
           <span>رفع Excel/CSV</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab("ocr")}
-          className={`py-2 text-xs font-black rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-            activeTab === "ocr" ? "bg-amber-500 text-slate-950" : "text-slate-400 hover:text-slate-200"
-          }`}
-        >
-          <Camera size={14} />
-          <span>سكان كاميرا OCR</span>
         </button>
       </div>
 
@@ -508,14 +501,19 @@ export default function Inputs({ token, role, user, onSuccess }: InputsProps) {
           <button
             onClick={() => submitManual(false)}
             disabled={loading}
-            className="w-full bg-amber-500 hover:bg-amber-600 active:scale-[0.99] text-slate-950 py-3.5 rounded-xl text-xs font-black cursor-pointer shadow-lg shadow-amber-500/10 flex items-center justify-center gap-2"
+            className="w-full bg-amber-500 hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.99] text-slate-950 py-3.5 rounded-xl text-xs font-black cursor-pointer shadow-lg shadow-amber-500/10 flex items-center justify-center gap-2"
           >
             {loading ? (
-              <Loader2 className="animate-spin" size={16} />
+              <>
+                <Loader2 className="animate-spin" size={16} />
+                <span>جاري الحفظ...</span>
+              </>
             ) : (
-              <PlusCircle size={15} />
+              <>
+                <PlusCircle size={15} />
+                <span>حفظ الطلب بنظام الإسناد اللاحق</span>
+              </>
             )}
-            <span>حفظ الطلب بنظام الإسناد اللاحق</span>
           </button>
         </div>
       )}
@@ -592,10 +590,16 @@ export default function Inputs({ token, role, user, onSuccess }: InputsProps) {
                 <button
                   onClick={submitBulkExcel}
                   disabled={loading}
-                  className="flex-1 bg-amber-500 hover:bg-amber-600 text-slate-950 py-2.5 rounded-lg text-xs font-black cursor-pointer flex items-center justify-center gap-1"
+                  className="flex-1 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 py-2.5 rounded-lg text-xs font-black cursor-pointer flex items-center justify-center gap-1.5"
                 >
-                  {loading && <Loader2 size={13} className="animate-spin" />}
-                  <span>رفع الطلبات كجديد</span>
+                  {loading ? (
+                    <>
+                      <Loader2 size={13} className="animate-spin" />
+                      <span>جاري الحفظ...</span>
+                    </>
+                  ) : (
+                    <span>رفع الطلبات كجديد</span>
+                  )}
                 </button>
                 <button
                   onClick={() => {

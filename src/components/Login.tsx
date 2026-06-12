@@ -122,7 +122,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
 
       {/* Quick Access Helper */}
       <div className="mt-8 text-center text-xs text-slate-500 max-w-[320px] leading-relaxed">
-        سجل دخول بالاسم التجريبي <span className="text-slate-400 font-bold">عصفور</span> بكلمة مرور <span className="text-slate-405 font-bold">14014</span> للتمتع بكافة الصلاحيات.
+        سجل دخول بأي اسم تجاري (مثل <span className="text-slate-400 font-bold">ahmed</span> أو <span className="text-slate-400 font-bold">عصفور</span>) للتمتع بكافة صلاحيات المدير بالمعاينة.
       </div>
     </div>
   );

@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { Search, MapPin, Phone, MessageSquare, Check, Truck, User, Calendar, Trash2, Edit3, ShieldAlert, ArrowLeftRight, Download } from "lucide-react";
+import React, { useState, useRef } from "react";
+import { Search, MapPin, Phone, MessageSquare, Check, Truck, User, Calendar, Trash2, Edit3, ShieldAlert, ArrowLeftRight, Download, FileSpreadsheet, Upload, Loader2, XCircle } from "lucide-react";
 import { apiCall, toWA } from "../utils";
 
 interface OrdersProps {
@@ -54,6 +54,102 @@ export default function Orders({ token, role, username, orders, couriers, onRefr
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
   const [bulkStatus, setBulkStatus] = useState("");
   const [bulkCourier, setBulkCourier] = useState("");
+
+  // --- Quick Reconciliation Portal States ---
+  const [showReconPortal, setShowReconPortal] = useState(false);
+  const [reconcileBarcode, setReconcileBarcode] = useState("");
+  const [reconcileStatus, setReconcileStatus] = useState("تم التسليم");
+  const [reconLoading, setReconLoading] = useState(false);
+  const [reconFeedback, setReconFeedback] = useState("");
+  const [reconExcelMsg, setReconExcelMsg] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const canReconcile = isAdmin || isSuper || isReturnsOfficer || (role || "").toString().includes("محاسب");
+
+  async function handleSingleReconciliation() {
+    if (!reconcileBarcode.trim()) {
+      alert("يرجى إدخال أو قراءة كود كشف التتبع أولاً");
+      return;
+    }
+    setReconLoading(true);
+    setReconFeedback("");
+    try {
+      const targetTracking = reconcileBarcode.trim().toUpperCase();
+      const res = await apiCall("updateStatus", token, {
+        tracking: targetTracking,
+        status: reconcileStatus,
+        reason: `تصفية سريعة عبر بوابة الباركود بالواجهة`
+      });
+      if (res.ok) {
+        setReconcileBarcode("");
+        setReconFeedback(`✅ نجح تحديث الأوردر ${targetTracking} إلى [${reconcileStatus}]`);
+        onRefresh();
+      } else {
+        setReconFeedback(`⚠️ خطأ: ${res.error || "الأوردر غير مسجل بالخادم"}`);
+      }
+    } catch (err: any) {
+      setReconFeedback("فشل الاتصال بالخادم لتصفية الأوردر");
+    } finally {
+      setReconLoading(false);
+    }
+  }
+
+  function handleReconExcelUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      const text = evt.target?.result as string;
+      if (!text) return;
+      const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+      if (lines.length <= 1) {
+        alert("الملف فارغ أو لا يحتوي على صفوف تتبع صحيحة");
+        return;
+      }
+      
+      const parsedTrackings: string[] = [];
+      for (let i = 0; i < lines.length; i++) {
+        const row = lines[i];
+        if (i === 0 && (row.toLowerCase().includes("tracking") || row.toLowerCase().includes("barcode") || row.includes("تتبع"))) {
+          continue;
+        }
+        const cols = row.split(",");
+        const tr = cols[0].replace(/["']/g, "").trim();
+        if (tr) parsedTrackings.push(tr.toUpperCase());
+      }
+
+      if (parsedTrackings.length === 0) {
+        alert("لم يتم العثور على أي أكواد تتبع صالحة بالملف");
+        return;
+      }
+
+      setReconExcelMsg(`✅ تم استخراج ${parsedTrackings.length} كود تتبع جاهزة للتحديث الجماعي إلى [${reconcileStatus}]`);
+      
+      if (confirm(`هل أنت متأكد من رغبتك في تحديث ${parsedTrackings.length} أوردر دفعة واحدة إلى [${reconcileStatus}]؟`)) {
+        setReconLoading(true);
+        setReconFeedback("");
+        try {
+          const res = await apiCall("bulkUpdate", token, {
+            trackings: parsedTrackings,
+            status: reconcileStatus
+          });
+          if (res.ok) {
+            setReconFeedback(`⚡ نجح الارتجاع والتصفية لـ ${res.done} أوردر بنجاح تام!`);
+            setReconExcelMsg("");
+            if (fileInputRef.current) fileInputRef.current.value = "";
+            onRefresh();
+          } else {
+            setReconFeedback(`⚠️ خطأ في التحديث الجماعي: ${res.error}`);
+          }
+        } catch (err) {
+          setReconFeedback("حدث خطأ أثناء الاتصال بالخادم للتصفية الجماعية");
+        } finally {
+          setReconLoading(false);
+        }
+      }
+    };
+    reader.readAsText(file);
+  }
 
   const EgyptGovs = [
     "القاهرة", "الجيزة", "الإسكندرية", "الدقهلية", "الشرقية", "القليوبية", "كفر الشيخ", "الغربية", "المنوفية",
@@ -301,6 +397,14 @@ export default function Orders({ token, role, username, orders, couriers, onRefr
           />
         </div>
         <div className="flex items-center gap-2">
+          {canReconcile && (
+            <button
+              onClick={() => setShowReconPortal(!showReconPortal)}
+              className="px-4 py-2 bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-605 text-slate-950 font-black text-[10px] rounded-xl flex items-center gap-1 cursor-pointer transition-all whitespace-nowrap"
+            >
+              <span>⚡ تصفية بالباركود والإكسيل</span>
+            </button>
+          )}
           {canManage && (
             <button
               onClick={toggleSelectAll}
@@ -350,6 +454,111 @@ export default function Orders({ token, role, username, orders, couriers, onRefr
           </button>
         ))}
       </div>
+
+      {/* ⚡ Quick Reconciliation and Returns Portal */}
+      {showReconPortal && canReconcile && (
+        <div className="mx-4 p-5 bg-[#070d1a] border-2 border-amber-500/40 rounded-2xl space-y-4 shadow-xl">
+          <div className="flex items-center justify-between border-b border-white/6 pb-3">
+            <div className="flex items-center gap-1.5 text-amber-500">
+              <span className="text-sm font-black">⚡ بوابــة التصفية وتقفيــل الشحنـات السريعة (التحكم السريع)</span>
+            </div>
+            <button
+              onClick={() => setShowReconPortal(false)}
+              className="text-slate-400 hover:text-slate-200 text-xs"
+            >
+              ✕ إغلاق
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Quick Single Scan / Paste */}
+            <div className="bg-slate-950 p-4 rounded-xl border border-white/4 space-y-3 text-right">
+              <div className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest text-right">
+                🔍 إدخال يدوي سريع للباركود / رقم التتبع
+              </div>
+              
+              <div className="space-y-2">
+                <label className="block text-[10px] text-slate-400 text-right">رقم التتبع (مثال: FP-1002-26)</label>
+                <input
+                  type="text"
+                  value={reconcileBarcode}
+                  onChange={(e) => setReconcileBarcode(e.target.value)}
+                  placeholder="اكتب رقم التتبع أو الباركود هنا..."
+                  className="w-full bg-slate-900 border border-white/8 rounded-lg px-3 py-2 text-xs font-black text-slate-200 outline-none text-right focus:border-amber-500/30"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleSingleReconciliation();
+                  }}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-[10px] text-slate-400 text-right">الحالة المستهدفة المعمدة الشحن</label>
+                <select
+                  value={reconcileStatus}
+                  onChange={(e) => setReconcileStatus(e.target.value)}
+                  className="w-full bg-slate-900 border border-white/8 rounded-lg px-3 py-2 text-xs font-bold text-slate-200 outline-none text-right focus:border-amber-500/30"
+                >
+                  <option value="تم التسليم">✅ تم التسليم</option>
+                  <option value="مرتجع">↩️ مرتجع (تجهيز تصفية)</option>
+                  <option value="التسليم للمورد">📦 التسليم للمورد (استرداد المرتجعات)</option>
+                  <option value="خارج مع المندوب">🚚 خارج للتوصيل مع المندوب</option>
+                </select>
+              </div>
+
+              <button
+                onClick={handleSingleReconciliation}
+                disabled={reconLoading}
+                className="w-full py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 font-black text-xs rounded-lg cursor-pointer transition-colors flex items-center justify-center gap-1"
+              >
+                {reconLoading && <Loader2 size={13} className="animate-spin" />}
+                <span>تثبيت وتحديث حالة الشحنة آلياً</span>
+              </button>
+            </div>
+
+            {/* Quick Bulk CSV / Excel File */}
+            <div className="bg-slate-950 p-4 rounded-xl border border-white/4 flex flex-col justify-between space-y-3 text-right">
+              <div className="space-y-2">
+                <div className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest text-right">
+                  📄 رفــع وتصفية ملف إكسيل / CSV دفعة واحدة
+                </div>
+                <p className="text-[9px] text-slate-400 leading-relaxed text-right font-bold">
+                  ارفع شيت CSV يتضمن قائمة أرقام التتبع في العمود الأول فقط. سيقوم النظام فوراً بتمرير وتحديث حالتها إلى [{reconcileStatus}] دفعة واحدة وبسرعة فائقة.
+                </p>
+              </div>
+
+              {reconExcelMsg && (
+                <div className="bg-emerald-950/20 text-emerald-400 border border-emerald-900/30 p-2.5 rounded-lg text-[10.5px]">
+                  {reconExcelMsg}
+                </div>
+              )}
+
+              <div className="space-y-2 pt-1 border-t border-white/4">
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={reconLoading}
+                  className="w-full py-3 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-slate-300 border border-white/8 rounded-lg text-xs font-bold flex items-center justify-center gap-2 cursor-pointer transition-all"
+                >
+                  <Upload size={14} />
+                  <span>اختار شيت للتصفية (Excel/CSV)</span>
+                </button>
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  accept=".csv"
+                  onChange={handleReconExcelUpload}
+                  className="hidden"
+                />
+              </div>
+            </div>
+          </div>
+
+          {reconFeedback && (
+            <div className="bg-slate-950 p-3 rounded-lg text-center font-bold text-xs border border-white/6 text-amber-400">
+              {reconFeedback}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 💼 Beautiful Courier Financial & Performance Quick Summary Table */}
       {isAgent && (

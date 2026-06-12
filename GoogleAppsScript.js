@@ -1226,12 +1226,30 @@ function addCourierAdjustment(sheets, d) {
     date: now(),
     type: type, // 'مكافأة' أو 'جزاء' أو 'خصم عجز تلقائي'
     tracking: "—",
-    amount: type === "جزاء" ? -val : val,
+    amount: (type === "جزاء" || type === "خصم" || type === "خصم عجز" || type === "خصم عجز تلقائي") ? -val : val,
     desc: desc || `تسوية مالية يدوية من نوع ${type}`
   });
 
-  // تسجيلها بالخزنة في حال كانت تسوية عجز مباشر
-  if (type === "خصم عجز تلقائي" || type === "استلام تصفية") {
+  // تسجيلها بالخزنة فوراً ليتطابق الحساب أوتوماتيكياً
+  if (type === "مكافأة") {
+    appendToSheet(sheets.cashbox, ["date", "desc", "type", "amount", "ref", "addedBy"], {
+      date: now(),
+      desc: `مكافأة منصرفة للمندوب: ${courier} - ${desc || ''}`,
+      type: "صرف",
+      amount: val,
+      ref: "BONUS",
+      addedBy: currentUser || "إدارة الحسابات"
+    });
+  } else if (type === "جزاء" || type === "خصم" || type === "خصم عجز" || type === "خصم عجز تلقائي") {
+    appendToSheet(sheets.cashbox, ["date", "desc", "type", "amount", "ref", "addedBy"], {
+      date: now(),
+      desc: `تسوية خصم/جزاء مستقطع للمندوب: ${courier} - ${desc || ''}`,
+      type: "استلام عهدة مندوب",
+      amount: val,
+      ref: "PENALTY",
+      addedBy: currentUser || "إدارة الحسابات"
+    });
+  } else if (type === "استلام تصفية") {
     appendToSheet(sheets.cashbox, ["date", "desc", "type", "amount", "ref", "addedBy"], {
       date: now(),
       desc: desc || `تسوية عجز مباشر مسترد للمندوب: ${courier}`,
