@@ -132,7 +132,22 @@ export default function App() {
       // If user is Courier (Agent), todayOnly true is enforced to prevent lagging
       const resOrd = await apiCall("getOrders", tk, { todayOnly: activeRole === "مندوب" });
       if (resOrd.ok) {
-        const orderList = resOrd.orders || [];
+        let orderList = resOrd.orders || [];
+
+        // Strict client-side role filtering safety boundary
+        const isAgent = activeRole === "مندوب";
+        const isSupplier = activeRole === "مورد";
+        const isReturnsOfficer = activeRole === "مسؤول مرتجعات";
+        const cleanUser = username?.trim().toLowerCase() || "";
+
+        if (isAgent) {
+          orderList = orderList.filter((o: any) => o.courier && o.courier.toString().trim().toLowerCase() === cleanUser);
+        } else if (isSupplier) {
+          orderList = orderList.filter((o: any) => o.supplier && o.supplier.toString().trim().toLowerCase() === cleanUser);
+        } else if (isReturnsOfficer) {
+          orderList = orderList.filter((o: any) => ["مرتجع", "التسليم للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) || o.returnQueueStatus);
+        }
+
         setOrders(orderList);
 
         // Compute quick stats counters for header

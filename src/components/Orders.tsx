@@ -63,8 +63,12 @@ export default function Orders({ token, role, username, orders, couriers, onRefr
 
   // Filters mapping
   const visibleOrders = orders.filter((o) => {
-    // Role permissions for returns officer
-    if (isReturnsOfficer) {
+    // Strict role-based filter safety enforcement
+    if (isAgent) {
+      if (!o.courier || o.courier.toString().trim().toLowerCase() !== username.trim().toLowerCase()) return false;
+    } else if (isSupplier) {
+      if (!o.supplier || o.supplier.toString().trim().toLowerCase() !== username.trim().toLowerCase()) return false;
+    } else if (isReturnsOfficer) {
       const isRet = ["مرتجع", "التسليم للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) || o.returnQueueStatus;
       if (!isRet) return false;
     }

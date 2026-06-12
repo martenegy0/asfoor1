@@ -6,6 +6,21 @@ const app = express();
 const PORT = 3000;
 const DB_PATH = path.join(process.cwd(), "src", "db.json");
 
+// Normalization Helper for account names and categories to prevent failures like "asfoor" / "Asfoor", "Silver Team" / "silverteam"
+export function normalizeName(name: string): string {
+  if (!name) return "";
+  return name.trim().toLowerCase().replace(/\s+/g, "");
+}
+
+export function isOrderReturned(status: string): boolean {
+  if (!status) return false;
+  const s = status.trim();
+  return [
+    "مرتجع", "مرتجع كلي", "مرتجع جزئي", "مرتجع جديد", "جاري تجهيز المرتجع",
+    "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد", "التسليم للمورد", "مرتجع تم تسليمه للمورد"
+  ].includes(s) || s.includes("مرتجع") || s.includes("المرتجع");
+}
+
 // Default Fallback Database to ensure successful startup & login under environments like Vercel with read-only/missing storage
 const DEFAULT_DB = {
   users: [
@@ -46,7 +61,7 @@ const DEFAULT_DB = {
       shipCost: 65,
       courier: "محمد حمدى",
       status: "تم التسليم",
-      notes: "تم التسليف بنجاح والتحصيل",
+      notes: "تم التسليم بنجاح والتحصيل",
       delivDate: "2026-06-10 12:00",
       retDate: "",
       addedBy: "محل الأناقة",
@@ -100,7 +115,7 @@ const DEFAULT_DB = {
   }
 };
 
-// Safe JSON Body Parsing: Bypasses parser if Vercel serverless has already populated req.body
+// Safe JSON Body Parsing
 app.use((req, res, next) => {
   if (req.body && typeof req.body === "object") {
     next();
@@ -109,36 +124,79 @@ app.use((req, res, next) => {
   }
 });
 
-// Atomic Database Helper
+// Atomic & Robust Database Helper with Retries and Healing
+function ensureDbFields(db: any): any {
+  if (!db) db = {};
+  if (!db.users) db.users = [];
+  if (!db.couriers) db.couriers = [];
+  if (!db.suppliers) db.suppliers = [];
+  if (!db.orders) db.orders = [];
+  if (!db.expenses) db.expenses = [];
+  if (!db.cashbox) db.cashbox = [];
+  if (!db.statusHistory) db.statusHistory = [];
+  if (!db.supplierLedger) db.supplierLedger = [];
+  if (!db.courierLedger) db.courierLedger = [];
+  if (!db.archivedOrders) db.archivedOrders = [];
+  if (!db.dailyClosings) db.dailyClosings = [];
+  if (!db.settings) db.settings = {};
+  return db;
+}
+
 function readDB(): any {
-  if (!fs.existsSync(DB_PATH)) {
-    console.warn(`Database file not found at ${DB_PATH}. Returning fallback structure.`);
-    return DEFAULT_DB;
+  let attempts = 5;
+  while (attempts > 0) {
+    try {
+      if (!fs.existsSync(DB_PATH)) {
+        console.warn(`Database file not found at ${DB_PATH}. Returning fallback structure.`);
+        return ensureDbFields(DEFAULT_DB);
+      }
+      const data = fs.readFileSync(DB_PATH, "utf-8");
+      if (!data || data.trim() === "") {
+        throw new Error("Empty database file content detected");
+      }
+      const parsed = JSON.parse(data);
+      return ensureDbFields(parsed);
+    } catch (error) {
+      attempts--;
+      if (attempts === 0) {
+        console.error("Critical: Error reading database file after multiple attempts:", error);
+        return ensureDbFields(DEFAULT_DB);
+      }
+      // Busy wait short sleep to yield operational lock thread
+      const start = Date.now();
+      while (Date.now() - start < 15) {}
+    }
   }
-  try {
-    const data = fs.readFileSync(DB_PATH, "utf-8");
-    return JSON.parse(data);
-  } catch (error) {
-    console.error("Error reading database:", error);
-    return DEFAULT_DB;
-  }
+  return ensureDbFields(DEFAULT_DB);
 }
 
 function writeDB(data: any): void {
-  try {
-    fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2), "utf-8");
-  } catch (error) {
-    console.error("Error writing database:", error);
+  let attempts = 5;
+  const TEMP_PATH = DB_PATH + ".tmp";
+  while (attempts > 0) {
+    try {
+      const ensuredData = ensureDbFields(data);
+      fs.writeFileSync(TEMP_PATH, JSON.stringify(ensuredData, null, 2), "utf-8");
+      fs.renameSync(TEMP_PATH, DB_PATH);
+      return;
+    } catch (error) {
+      attempts--;
+      if (attempts === 0) {
+        console.error("Critical: Error writing database file atomic replacement after multiple attempts:", error);
+      } else {
+        const start = Date.now();
+        while (Date.now() - start < 15) {}
+      }
+    }
   }
 }
 
-// Helpers
+// Cairo timezone helper
 const getCairoDateObj = () => {
   try {
     const s = new Date().toLocaleString("en-US", { timeZone: "Africa/Cairo" });
     return new Date(s);
   } catch (e) {
-    // Fallback if formatting error occurs
     return new Date();
   }
 };
@@ -153,50 +211,6 @@ const tod = () => {
   const date = getCairoDateObj();
   const pad = (n: number) => n.toString().padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-};
-
-const normalizeToDateString = (dateInput: any): string => {
-  if (!dateInput) return "";
-  const str = dateInput.toString().trim();
-
-  // 1. Matches YYYY-MM-DD or YYYY/MM/DD (with optional time)
-  const matchYMD = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
-  if (matchYMD) {
-    const y = matchYMD[1];
-    const m = matchYMD[2].padStart(2, "0");
-    const d = matchYMD[3].padStart(2, "0");
-    return `${y}-${m}-${d}`;
-  }
-
-  // 2. Matches DD/MM/YYYY or DD-MM-YYYY (Egyptian/Arabic standard, with optional time)
-  const matchDMY = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
-  if (matchDMY) {
-    const d = matchDMY[1].padStart(2, "0");
-    const m = matchDMY[2].padStart(2, "0");
-    const y = matchDMY[3];
-    return `${y}-${m}-${d}`;
-  }
-
-  // 3. Matches DD/MM or DD-MM (with optional time, missing year)
-  const matchDM = str.match(/^(\d{1,2})[-/](\d{1,2})/);
-  if (matchDM) {
-    const d = matchDM[1].padStart(2, "0");
-    const m = matchDM[2].padStart(2, "0");
-    let y = "2026";
-    try {
-      y = getCairoDateObj().getFullYear().toString();
-    } catch (e) {}
-    return `${y}-${m}-${d}`;
-  }
-
-  try {
-    const dateObj = new Date(str);
-    if (!isNaN(dateObj.getTime())) {
-      const pad = (n: number) => n.toString().padStart(2, "0");
-      return `${dateObj.getFullYear()}-${pad(dateObj.getMonth() + 1)}-${pad(dateObj.getDate())}`;
-    }
-  } catch (e) {}
-  return str.substring(0, 10);
 };
 
 function fixPhone(phone: any): string {
@@ -216,7 +230,7 @@ function generateID(db: any): string {
   return `FP-${counter}-${yearSuffix}`;
 }
 
-// Stateless Session Helpers
+// Stateless Session Token Creation & Verification
 function createStatelessToken(user: string, role: string, perms: string): string {
   const payload = {
     user,
@@ -229,28 +243,30 @@ function createStatelessToken(user: string, role: string, perms: string): string
 
 function verifyStatelessToken(token: string): { user: string; role: string; perms: string } | null {
   if (!token) return null;
-  if (token === "mock-token-asfour") return { user: "عصفور", role: "مدير", perms: "كاملة" };
-  if (token === "mock-token-abuyassin") return { user: "ابو ياسين", role: "مدير", perms: "كاملة" };
+  const normalizedToken = token.trim();
+  if (normalizedToken === "mock-token-asfour") return { user: "عصفور", role: "مدير", perms: "كاملة" };
+  if (normalizedToken === "mock-token-abuyassin") return { user: "ابو ياسين", role: "مدير", perms: "كاملة" };
   try {
-    const decoded = JSON.parse(Buffer.from(token, "base64").toString("utf-8"));
+    const decoded = JSON.parse(Buffer.from(normalizedToken, "base64").toString("utf-8"));
     if (decoded && decoded.exp && decoded.exp > Date.now()) {
       return { user: decoded.user, role: decoded.role, perms: decoded.perms };
     }
   } catch (e) {
-    // legacy token style or invalid
+    // Ignore invalid decoding
   }
   return null;
 }
 
-// Session simulated store
+// Local cache for Google Apps Script to stop excessive hits during high concurrency
 const SESSIONS: { [token: string]: { user: string; role: string; perms?: string } } = {};
 
 function getSession(token: string) {
   if (!token) return null;
-  if (SESSIONS[token]) {
-    return SESSIONS[token];
+  const trimT = token.trim();
+  if (SESSIONS[trimT]) {
+    return SESSIONS[trimT];
   }
-  const verified = verifyStatelessToken(token);
+  const verified = verifyStatelessToken(trimT);
   if (verified) {
     return { user: verified.user, role: verified.role, perms: verified.perms };
   }
@@ -263,77 +279,28 @@ function createSession(user: string, role: string, perms: string = "كاملة")
   return token;
 }
 
-// Seed admin sessions on demand so they don't expire easily
 SESSIONS["mock-token-asfour"] = { user: "عصفور", role: "مدير", perms: "كاملة" };
 SESSIONS["mock-token-abuyassin"] = { user: "ابو ياسين", role: "مدير", perms: "كاملة" };
 
-// Global Error / Response wrapping
+// Global Error / Response wraps
 const ok = (res: Response, d: any = {}) => res.json({ ok: true, ...d });
 const err = (res: Response, m: string) => res.json({ ok: false, error: m });
 
-// ─────────────────────────────────────────────────────────────
-// PROXY CACHING, DEDUPLICATION & ENHANCED DATE MATCHING (Stop API Spam)
-// ─────────────────────────────────────────────────────────────
+// Cash and date helpers
 const isDateToday = (dateInput: any): boolean => {
   if (!dateInput) return false;
   const str = dateInput.toString().trim().toLowerCase();
-  
-  // Get Cairo today's metrics
   const today = getCairoDateObj();
-  const ty = today.getFullYear(); // 2026
-  const tm = today.getMonth() + 1; // 6
-  const td = today.getDate(); // 11
+  const ty = today.getFullYear();
+  const tm = today.getMonth() + 1;
+  const td = today.getDate();
   
   const pad = (n: number) => n.toString().padStart(2, "0");
   const yStr = ty.toString();
-  const mStr = tm.toString();
   const mPad = pad(tm);
-  const dStr = td.toString();
   const dPad = pad(td);
   
-  if (
-    str.includes(`${yStr}-${mPad}-${dPad}`) ||
-    str.includes(`${yStr}/${mPad}/${dPad}`) ||
-    str.includes(`${yStr}-${mStr}-${dStr}`) ||
-    str.includes(`${yStr}/${mStr}-${dStr}`)
-  ) {
-    return true;
-  }
-  
-  if (
-    str.includes(`${dPad}/${mPad}/${yStr}`) ||
-    str.includes(`${dPad}-${mPad}-${yStr}`) ||
-    str.includes(`${dStr}/${mStr}/${yStr}`) ||
-    str.includes(`${dStr}-${mStr}-${yStr}`) ||
-    str.includes(`${dPad}/${mStr}/${yStr}`) ||
-    str.includes(`${dStr}/${mPad}/${yStr}`)
-  ) {
-    return true;
-  }
-  
-  const parts = str.split(/[-/\s]+/);
-  if (parts.length >= 2) {
-    const hasDay = parts.some(p => Number(p) === td);
-    const hasMonth = parts.some(p => Number(p) === tm);
-    const hasYear = parts.some(p => Number(p) === ty || p === "26");
-    if (hasDay && hasMonth && (hasYear || parts.length === 2)) {
-      return true;
-    }
-  }
-  
-  try {
-    const dObj = new Date(str);
-    if (!isNaN(dObj.getTime())) {
-      const dy = dObj.getFullYear();
-      const dm = dObj.getMonth() + 1;
-      const dd = dObj.getDate();
-      if (dy === ty && dm === tm && dd === td) {
-        return true;
-      }
-    }
-  } catch(e) {}
-  
-  return false;
+  return str.includes(`${yStr}-${mPad}-${dPad}`) || str.includes(`${yStr}/${mPad}/${dPad}`);
 };
 
 interface CacheEntry {
@@ -343,10 +310,10 @@ interface CacheEntry {
 
 const READ_CACHE = new Map<string, CacheEntry>();
 const ACTIVE_FETCHES = new Map<string, Promise<any>>();
-const CACHE_TTL_MS = 10000; // 10 seconds cache
+const CACHE_TTL_MS = 10000; // 10s caching to respect the spec
 
 function getCacheKey(payload: any): string {
-  const keyObj = {
+  return JSON.stringify({
     action: payload.action,
     todayOnly: payload.todayOnly,
     status: payload.status,
@@ -355,8 +322,7 @@ function getCacheKey(payload: any): string {
     courier: payload.courier,
     currentUser: payload.currentUser,
     currentRole: payload.currentRole
-  };
-  return JSON.stringify(keyObj);
+  });
 }
 
 async function executeProxyRequest(gscriptUrl: string, payload: any): Promise<any> {
@@ -379,7 +345,6 @@ async function executeProxyRequest(gscriptUrl: string, payload: any): Promise<an
   }
 
   const cacheKey = getCacheKey(payload);
-
   const cached = READ_CACHE.get(cacheKey);
   const nowMs = Date.now();
   if (cached && (nowMs - cached.timestamp < CACHE_TTL_MS)) {
@@ -387,9 +352,7 @@ async function executeProxyRequest(gscriptUrl: string, payload: any): Promise<an
   }
 
   const active = ACTIVE_FETCHES.get(cacheKey);
-  if (active) {
-    return active;
-  }
+  if (active) return active;
 
   const fetchPromise = (async () => {
     try {
@@ -414,24 +377,26 @@ async function executeProxyRequest(gscriptUrl: string, payload: any): Promise<an
 }
 
 // ─────────────────────────────────────────────────────────────
-// UNIFIED POST HANDLER
+// MAIN UNIFIED ENDPOINT
 // ─────────────────────────────────────────────────────────────
-app.post("/api", async (req: Request, res: Response) => {
+let apiWriteQueue = Promise.resolve();
+
+async function handleApiRequest(req: Request, res: Response) {
   try {
     const d = req.body;
     if (!d || !d.action) {
       return err(res, "Missing action parameter");
     }
 
-    // 🌐 Modern Google Sheets Integration Proxy Gateway
-    if (process.env.GOOGLE_SCRIPT_URL && process.env.GOOGLE_SCRIPT_URL.trim() !== "" && process.env.GOOGLE_SCRIPT_URL.startsWith("http")) {
-      const gscriptUrl = process.env.GOOGLE_SCRIPT_URL.trim();
+    const gscriptUrl = (process.env.GOOGLE_SCRIPT_URL || "").trim();
+    const hasProxy = gscriptUrl !== "" && gscriptUrl.startsWith("http");
 
-      // 1. Handle "login" action securely against Google Sheets
-      if (d.action === "login") {
-        const { name, pass } = d;
-        if (!name || !pass) return err(res, "اكتب الاسم وكلمة المرور");
-        
+    // 1. Authenticate / Login handles credentials
+    if (d.action === "login") {
+      const { name, pass } = d;
+      if (!name || !pass) return err(res, "اكتب الاسم وكلمة المرور");
+      
+      if (hasProxy) {
         try {
           const response = await fetch(gscriptUrl, {
             method: "POST",
@@ -441,7 +406,7 @@ app.post("/api", async (req: Request, res: Response) => {
           const resData = await response.json();
           if (resData.ok && resData.users) {
             const user = resData.users.find(
-              (u: any) => u.name?.toString().trim() === name.trim() && u.pass?.toString().trim() === pass.trim()
+              (u: any) => normalizeName(u.name) === normalizeName(name) && u.pass?.toString().trim() === pass.trim()
             );
             if (!user) return err(res, "اسم المستخدم أو كلمة المرور غلط");
             if (user.active === "لا") return err(res, "الحساب موقوف");
@@ -453,25 +418,72 @@ app.post("/api", async (req: Request, res: Response) => {
           }
         } catch (authErr: any) {
           console.error("Google Sheets Auth Proxy error:", authErr);
-          return err(res, `فشل الاتصال بجوجل شيت للتحقق من الحساب: ${authErr.message || authErr}`);
+          // Fall back to local DB lookup if Sheets access is failing temporarily
         }
       }
 
-      // 2. Process non-login requests
-      let currentUser = "زائر";
-      let currentRole = "زائر";
-
-      // Allow "checkPhone" temporarily or verify session for everything else
-      if (d.action !== "checkPhone") {
-        const sess = getSession(d.token);
-        if (!sess) {
-          return err(res, "انتهت الجلسة، الرجاء تسجيل الدخول مجدداً");
-        }
-        currentUser = sess.user;
-        currentRole = sess.role;
+      // Check local JSON DB
+      const db = readDB();
+      const user = db.users.find(
+        (u: any) => normalizeName(u.name) === normalizeName(name) && u.pass?.toString().trim() === pass.trim()
+      );
+      if (!user) {
+        return err(res, "اسم المستخدم أو كلمة المرور غلط");
+      }
+      if (user.active === "لا") {
+        return err(res, "الحساب موقوف");
       }
 
-      // Inject server-verified metadata & security ACCESS_TOKEN ("14014") for Google Sheets
+      const token = createSession(user.name, user.role, user.perms || "كاملة");
+      return ok(res, { user: user.name, role: user.role, token, perms: user.perms });
+    }
+
+    // 2. Resolve Session & Role for non-login actions
+    let currentUser = "زائر";
+    let currentRole = "زائر";
+
+    if (d.action !== "checkPhone") {
+      const sess = getSession(d.token);
+      if (!sess) {
+        return err(res, "انتهت الجلسة، الرجاء تسجيل الدخول مجدداً");
+      }
+      currentUser = sess.user;
+      currentRole = sess.role;
+    }
+
+    // Role calculations
+    const isAdmin = normalizeName(currentRole) === "admin" || currentRole === "مدير";
+    const isSupplier = currentRole === "مورد" || normalizeName(currentRole) === "supplier";
+    const isCourier = currentRole === "مندوب" || normalizeName(currentRole) === "courier";
+
+    // ─────────────────────────────────────────────────────────────
+    // SECURITY GUARD: ENFORCE ADMIN-ONLY DASHBOARD BOUNDARIES
+    // ─────────────────────────────────────────────────────────────
+    if (d.action === "dashboard") {
+      if (!isAdmin) {
+        return err(res, "صلاحية مرفوضة: لا يسمح لغير المسؤولين بطلب مؤشرات الخزانة أو الإحصائيات العامة للمركز.");
+      }
+    }
+
+    if (d.action === "getUsers") {
+      if (!isAdmin) {
+        return err(res, "صلاحية مرفوضة لعرض لوحة حسابات المستخدمين");
+      }
+    }
+
+    if (d.action === "expenses" || d.action === "cashbox") {
+      if (!isAdmin && currentRole !== "محاسب") {
+        return err(res, "صلاحية مرفوضة للتفتيش على الحسابات والخزنة اللحظية");
+      }
+    }
+
+    // Cleaned current users
+    const cleanCurrentUser = normalizeName(currentUser);
+
+    // ─────────────────────────────────────────────────────────────
+    // RUNNING FROM EXTERNAL GOOGLE SPREADSHEETS PROXY (IF ACTIVE)
+    // ─────────────────────────────────────────────────────────────
+    if (hasProxy) {
       const payloadToSheet: any = {
         ...d,
         token: "14014",
@@ -479,338 +491,59 @@ app.post("/api", async (req: Request, res: Response) => {
         currentRole
       };
 
-      // Enforce strict client-side role parameters security for Google Sheets proxy
-      if (currentRole === "مورد") {
+      // Force filtering parameters before sending to Sheets for security isolation
+      if (isSupplier) {
         payloadToSheet.supplier = currentUser;
-        if (payloadToSheet.order) {
-          payloadToSheet.order.supplier = currentUser;
-        }
-      } else if (currentRole === "مندوب") {
+      } else if (isCourier) {
         payloadToSheet.courier = currentUser;
-        if (payloadToSheet.order) {
-          payloadToSheet.order.courier = currentUser;
-        }
       }
 
-      if ((d.action === "addUser" || d.action === "registerUser") && !payloadToSheet.user) {
-        const getPermissionsForRole = (r: string) => {
-          const rTrim = (r || "").trim();
-          if (rTrim === "مدير") return "كاملة";
-          if (rTrim === "مشرف") return "توزيع ومتابعة";
-          if (rTrim === "مندوب") return "معاينة الشحنات والتقفيل";
-          return "متابعة محدودة";
-        };
+      const resData = await executeProxyRequest(gscriptUrl, payloadToSheet);
 
-        payloadToSheet.user = {
-          name: d.name,
-          role: d.role,
-          pass: d.pass,
-          active: d.active || "نعم",
-          email: d.email || "",
-          perms: getPermissionsForRole(d.role)
-        };
-      }
-
-      if (d.action === "updateUser" && !payloadToSheet.user) {
-        payloadToSheet.user = {
-          name: d.name,
-          role: d.role,
-          active: d.active,
-          perms: d.perms
-        };
-      }
-
-      // Fast Optimistic UI & Asynchronous Background Sync for Expenses & Transactions
-      if (d.action === "addExpense") {
-        if (!["مدير", "محاسب"].includes(currentRole)) {
-          return err(res, "لا توجد صلاحيات صرف لميزانية المصروفات");
-        }
-        const { cat, desc, amount } = d;
-        if (!amount) return err(res, "المبلغ مطلوب");
-        const val = Number(amount);
-
-        // 1. Invalidate cashbox & dashboard cache instantly
-        READ_CACHE.clear();
-        ACTIVE_FETCHES.clear();
-
-        // 2. Perform optimistic write to local memory
-        const db = readDB();
-        db.expenses.push({
-          date: now(),
-          cat: cat || "أخرى",
-          desc: desc || "",
-          amount: val,
-          by: currentUser
-        });
-        db.cashbox.push({
-          date: now(),
-          desc: `صرف مصروف: ${desc || cat}`,
-          type: "صادر",
-          amount: val,
-          ref: "EXPENSE",
-          addedBy: currentUser
-        });
-        writeDB(db);
-
-        // 3. Queue heavy sequential Google Sheets write asynchronously
-        executeProxyRequest(gscriptUrl, payloadToSheet).catch((syncErr) => {
-          console.error("Async Google Sheets synchronization for addExpense failed:", syncErr);
-        });
-
-        // 4. Return extremely fast response so UI doesn't freeze or wait
-        return ok(res, { msg: "تم إرساء بند الصرف بنجاح وسداده من الخزينة تلقائياً" });
-      }
-
-      if (d.action === "addCashbox") {
-        if (!["مدير", "محاسب"].includes(currentRole)) {
-          return err(res, "صلاحية مرفوضة لإدراج حركات الخزنة");
-        }
-        const { desc, type, amount, ref } = d;
-        if (!amount || !type) return err(res, "المبلغ والنوع مطلوبان");
-
-        // 1. Invalidate cashbox & dashboard cache instantly
-        READ_CACHE.clear();
-        ACTIVE_FETCHES.clear();
-
-        // 2. Perform optimistic write to local memory
-        const db = readDB();
-        db.cashbox.push({
-          date: now(),
-          desc: desc || "",
-          type: type,
-          amount: Number(amount),
-          ref: ref || "",
-          addedBy: currentUser
-        });
-        writeDB(db);
-
-        // 3. Queue heavy sequential Google Sheets write asynchronously
-        executeProxyRequest(gscriptUrl, payloadToSheet).catch((syncErr) => {
-          console.error("Async Google Sheets synchronization for addCashbox failed:", syncErr);
-        });
-
-        // 4. Return extremely fast response so UI doesn't freeze or wait
-        return ok(res, { msg: "تم إدراج بند الخزينة وتصفيته" });
-      }
-
-      if (d.action === "dashboard") {
-        try {
-          // One single async fetch call to GAS (internally using cached/deduplicated proxy helper)
-          const resOrders = await executeProxyRequest(gscriptUrl, {
-            action: "getOrders",
-            token: "14014",
-            currentUser,
-            currentRole
-          });
-          const ordersList = resOrders.orders || [];
-
-          const todayDate = tod();
-          let stats = {
-            total: ordersList.length,
-            todayTotal: 0,
-            delivered: 0,
-            returned: 0,
-            pending: 0,
-            active: 0,
-            assignedPending: 0,
-            totalCOD: 0,
-            todayCOD: 0,
-            profit: 0
-          };
-
-          const courierStats: { [name: string]: { total: number; delivered: number; returned: number; cod: number } } = {};
-          const supplierStats: { [name: string]: { total: number; delivered: number; returned: number } } = {};
-
-          for (const o of ordersList) {
-            const isToday = isDateToday(o.createdAt || o.orderDate);
-
-            if (isToday) {
-              stats.todayTotal++; // Today's Orders created today
-            }
-
-            const isClosed = ["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status);
-            const isAssigned = o.courier && o.courier !== "";
-            if (isAssigned && !isClosed) {
-              stats.assignedPending++;
-            }
-
-            if (o.status === "تم التسليم") {
-              stats.delivered++;
-              stats.totalCOD += Number(o.totalCOD || 0);
-              stats.profit += Number(o.shipPrice || o.shipCost || 0);
-
-              if (o.delivDate && isDateToday(o.delivDate)) {
-                stats.todayCOD += Number(o.totalCOD || 0);
-              }
-            } else if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)) {
-              stats.returned++;
-            } else if (["جديد", "تم الإسناد", "مؤجل", "لا يوجد رد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد"].includes(o.status)) {
-              stats.pending++;
-            } else if (o.status === "خارج مع المندوب") {
-              stats.active++;
-            }
-
-            // Courier Statistics
-            if (o.courier) {
-              const cName = o.courier.toString().trim();
-              if (cName) {
-                if (!courierStats[cName]) {
-                  courierStats[cName] = { total: 0, delivered: 0, returned: 0, cod: 0 };
-                }
-                courierStats[cName].total++;
-                if (o.status === "تم التسليم") {
-                  courierStats[cName].delivered++;
-                  courierStats[cName].cod += Number(o.totalCOD || 0);
-                } else if (["مرتجع", "التسليم للمورد"].includes(o.status)) {
-                  courierStats[cName].returned++;
-                }
-              }
-            }
-
-            // Supplier Statistics
-            if (o.supplier) {
-              const sName = o.supplier.toString().trim();
-              if (sName) {
-                if (!supplierStats[sName]) {
-                  supplierStats[sName] = { total: 0, delivered: 0, returned: 0 };
-                }
-                supplierStats[sName].total++;
-                if (o.status === "تم التسليم") {
-                  supplierStats[sName].delivered++;
-                } else if (["مرتجع", "التسليم للمورد"].includes(o.status)) {
-                  supplierStats[sName].returned++;
-                }
-              }
-            }
+      // Enforce security isolation on proxy output data
+      if (resData && resData.ok) {
+        if (d.action === "getOrders" && Array.isArray(resData.orders)) {
+          let list = [...resData.orders];
+          if (isSupplier) {
+            list = list.filter(o => normalizeName(o.supplier) === cleanCurrentUser);
+          } else if (isCourier) {
+            list = list.filter(o => normalizeName(o.courier) === cleanCurrentUser);
+          } else if (!isAdmin) {
+            // Block all other non-admins from getting random orders
+            return err(res, "غير مصرح لك بسحب قوائم الطلبات العامة");
           }
-
-          const formattedCouriers = Object.entries(courierStats).map(([name, cs]: any) => {
-            const rate = cs.total ? Math.round((cs.delivered / cs.total) * 100) : 0;
-            return { name, ...cs, rate };
-          });
-
-          const formattedSuppliers = Object.entries(supplierStats).map(([name, ss]: any) => {
-            const rate = ss.total ? Math.round((ss.delivered / ss.total) * 100) : 0;
-            return { name, ...ss, rate };
-          });
-
-          const bestCourierObj = [...formattedCouriers].sort((a, b) => b.delivered - a.delivered)[0];
-          const bestSupplierObj = [...formattedSuppliers].sort((a, b) => b.delivered - a.delivered)[0];
-
-          const rate = stats.total ? Math.round((stats.delivered / stats.total) * 100) : 0;
-          const remainingStock = ordersList.filter((o: any) => !["تم التسليم", "خارج مع المندوب", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)).length;
-          const inOfficeStock = stats.total - (stats.active + stats.returned);
-
-          return ok(res, {
-            stats: { ...stats, rate, remainingStock, inOfficeStock },
-            couriers: formattedCouriers.sort((a, b) => b.delivered - a.delivered),
-            suppliers: formattedSuppliers.sort((a, b) => b.delivered - a.delivered).slice(0, 10),
-            bestCourier: bestCourierObj ? bestCourierObj.name : "—",
-            bestSupplier: bestSupplierObj ? bestSupplierObj.name : "—"
-          });
-        } catch (dashError: any) {
-          console.error("Dashboard backend proxy calculation error:", dashError);
-          return err(res, "خطأ في حساب مؤشرات لوحة القيادة: " + dashError.message);
+          resData.orders = list;
         }
-      }
 
-      try {
-        const resData = await executeProxyRequest(gscriptUrl, payloadToSheet);
-
-        // Enforce secure client boundaries for proxied Google Sheets response data
-        if (resData && resData.ok) {
-          if (d.action === "getOrders" && Array.isArray(resData.orders)) {
-            const isAgent = currentRole === "مندوب";
-            const isSupplier = currentRole === "مورد";
-            const isReturnsOfficer = currentRole === "مسؤول مرتجعات";
-            let ordersList = [...resData.orders];
-
-            if (isAgent) {
-              ordersList = ordersList.filter((o: any) => o.courier === currentUser);
-              if (d.todayOnly) {
-                ordersList = ordersList.filter((o: any) => {
-                  const dt = o.createdAt?.substring(0, 10);
-                  const isToday = dt === tod();
-                  const isPending = ["جديد", "تم الإسناد", "خارج مع المندوب", "مؤجل", "لا يوجد رد"].includes(o.status);
-                  return isToday || isPending;
-                });
-              }
-            } else if (isSupplier) {
-              ordersList = ordersList.filter((o: any) => o.supplier === currentUser);
-            } else if (isReturnsOfficer) {
-              ordersList = ordersList.filter((o: any) => ["مرتجع", "التسليم للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) || o.returnQueueStatus);
-            }
-            resData.orders = ordersList;
-          }
-
-          if (d.action === "getSupplierLedger" && Array.isArray(resData.ledger)) {
-            const targetSupplier = currentRole === "مورد" ? currentUser : (d.supplier || "");
-            resData.ledger = resData.ledger.filter((l: any) => l.supplier === targetSupplier);
+        if (d.action === "getSupplierLedger" && Array.isArray(resData.ledger)) {
+          if (isSupplier) {
+            resData.ledger = resData.ledger.filter((l: any) => normalizeName(l.supplier) === cleanCurrentUser);
+          } else if (!isAdmin && currentRole !== "محاسب") {
+            return err(res, "صلاحية مرفوضة لسحب كشوفات الموردين");
           }
         }
-
-        return res.json(resData);
-      } catch (proxyError: any) {
-        console.error("Error proxying to Google Sheets Script URL:", proxyError);
-        return err(res, `خطأ في الاتصال بسكريبت جوجل شيت: ${proxyError.message || proxyError}`);
       }
+
+      return res.json(resData);
     }
 
+    // ─────────────────────────────────────────────────────────────
+    // STANDALONE INDEPENDENT LOCAL JSON DATABASE IMPLEMENTATION
+    // ─────────────────────────────────────────────────────────────
     const db = readDB();
-    const sess = getSession(d.token);
-
-    // Authentication Action (No Auth Required)
-    if (d.action === "login") {
-      const { name, pass } = d;
-      if (!name || !pass) return err(res, "اكتب الاسم وكلمة المرور");
-      const user = db.users.find(
-        (u: any) => u.name.trim() === name.trim() && u.pass.trim() === pass.trim()
-      );
-      if (!user) return err(res, "اسم المستخدم أو كلمة المرور غلط");
-      if (user.active === "لا") return err(res, "الحساب موقوف");
-
-      const token = createSession(user.name, user.role);
-      return ok(res, { user: user.name, role: user.role, token, perms: user.perms });
-    }
-
-    // From this point onward, session verification is required
-    if (!sess) {
-      return err(res, "انتهت الجلسة، الرجاء تسجيل الدخول مجدداً");
-    }
-
-    const currentUser = sess.user;
-    const currentRole = sess.role;
 
     switch (d.action) {
-      // ─────────────────────────────────────────────────────────────
-      // GET ORDERS
-      // ─────────────────────────────────────────────────────────────
       case "getOrders": {
-        const isAgent = currentRole === "مندوب";
-        const isSupplier = currentRole === "مورد";
-        const isReturnsOfficer = currentRole === "مسؤول مرتجعات";
         let ordersList = [...db.orders];
 
-        // Apply role filter
-        if (isAgent) {
-          ordersList = ordersList.filter((o: any) => o.courier === currentUser);
-          // If todayOnly is request, filter by today + pending
-          if (d.todayOnly) {
-            ordersList = ordersList.filter((o: any) => {
-              const dt = o.createdAt.substring(0, 10);
-              const isToday = dt === tod();
-              const isPending = ["جديد", "تم الإسناد", "خارج مع المندوب", "مؤجل", "لا يوجد رد"].includes(o.status);
-              return isToday || isPending;
-            });
-          }
-        } else if (isSupplier) {
-          ordersList = ordersList.filter((o: any) => o.supplier === currentUser);
-        } else if (isReturnsOfficer) {
-          // Returns Officer sees all orders that are returned (مرتجع) to manage them
-          ordersList = ordersList.filter((o: any) => ["مرتجع", "التسليم للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) || o.returnQueueStatus);
+        if (isSupplier) {
+          ordersList = ordersList.filter(o => normalizeName(o.supplier) === cleanCurrentUser);
+        } else if (isCourier) {
+          ordersList = ordersList.filter(o => normalizeName(o.courier) === cleanCurrentUser);
+        } else if (!isAdmin && currentRole !== "مشرف" && currentRole !== "موظف عمليات" && currentRole !== "محاسب" && currentRole !== "مسؤول مرتجعات") {
+          return err(res, "منطقة محظورة: لا يمكنك مطالعة قوائم الشحنات العامة");
         }
 
-        // Apply filters
         if (d.status && d.status !== "all") {
           ordersList = ordersList.filter((o: any) => o.status === d.status);
         }
@@ -825,29 +558,22 @@ app.post("/api", async (req: Request, res: Response) => {
           );
         }
 
-        // Return reverse chronological order
         ordersList.reverse();
         return ok(res, { orders: ordersList, count: ordersList.length });
       }
 
-      // ─────────────────────────────────────────────────────────────
-      // ADD ORDER
-      // ─────────────────────────────────────────────────────────────
       case "addOrder": {
-        // Create order: Allowed for Admin and Supplier only
-        if (currentRole !== "مدير" && currentRole !== "مورد") {
+        if (!isAdmin && !isSupplier && currentRole !== "مشرف") {
           return err(res, "ليس لديك صلاحية إضافة أوردرات");
         }
 
         const o = d.order || {};
         const phoneClean = fixPhone(o.phone || "");
-
-        // Validate Phone
         if (!phoneClean) {
           return err(res, "رقم الهاتف مطلوب");
         }
 
-        // Duplicate Check unless forced
+        // Duplicate screen check
         if (!d.force) {
           const dupOrders = db.orders.filter((x: any) => fixPhone(x.phone) === phoneClean || fixPhone(x.phone2) === phoneClean);
           if (dupOrders.length > 0) {
@@ -857,62 +583,57 @@ app.post("/api", async (req: Request, res: Response) => {
               dup: true,
               count: dupOrders.length,
               rate,
-              msg: `هذا العميل لديه ${dupOrders.length} طلب سابق (نسبة النجاح لطلباته ${rate}%)`
+              msg: `هذا العميل لديه ${dupOrders.length} طلب سابق (نسبة التسليم لطلباته ${rate}%)`
             });
           }
         }
 
-        // New orders ALWAYS created with courier = "" per system rule:
-        // "لا يتم اختيار مندوب أثناء إنشاء الأوردر. بعد ذلك فقط يقوم المشرف أو المدير بعملية الإسناد."
-         const id = generateID(db);
-         const tNow = now();
-         const shipPrice = Number(o.shipPrice || 60); // default 60
-         const totalCOD = Number(o.totalCOD || (Number(o.prodPrice || 0) + shipPrice));
-         // Formula: Supplier_Net_Balance = Total_Collected - Shipping_Fees
-         const prodPrice = totalCOD - shipPrice;
- 
-         const newOrder = {
-           tracking: id,
-           createdAt: tNow,
-           updatedAt: tNow,
-           orderDate: tod(),
-           supplier: currentRole === "مورد" ? currentUser : (o.supplier || ""),
-           customer: o.customer || "",
-           phone: phoneClean,
-           phone2: fixPhone(o.phone2 || ""),
-           gov: o.gov || "",
-           region: o.region || "",
-           address: o.address || "",
-           prodPrice: prodPrice,
-           shipPrice: shipPrice,
-           totalCOD: totalCOD,
-           shipCost: shipPrice, // ship cost defaults to ship price
-           courier: "", // MUST BE EMPTY during creation
-           status: "جديد", // ALWAYS starts as "جديد"
-           notes: o.notes || "",
-           delivDate: "",
-           retDate: "",
-           addedBy: currentUser,
-           commission: 0,
-           returnShippingType: "",
-           returnQueueStatus: "",
-           returnQueueAgent: ""
-         };
- 
-         db.orders.push(newOrder);
- 
-         // Record Supplier Ledger (COD values tracking)
-         // Order addition adds product sum as supplier ledger row
-         db.supplierLedger.push({
-           supplier: newOrder.supplier,
-           date: tNow,
-           type: "أوردر مستلم",
-           tracking: id,
-           amount: prodPrice,
-           desc: `أوردر جديد مستلم من المورد: ${id} (صافي حساب المورد: ${prodPrice} = المطلوب تحصيله ${totalCOD} - مصاريف الشحن ${shipPrice})`
-         });
+        const id = generateID(db);
+        const tNow = now();
+        const shipPrice = Number(o.shipPrice || 60);
+        const totalCOD = Number(o.totalCOD || (Number(o.prodPrice || 0) + shipPrice));
+        const prodPrice = totalCOD - shipPrice;
 
-        // Add to audit trail
+        const newOrder = {
+          tracking: id,
+          createdAt: tNow,
+          updatedAt: tNow,
+          orderDate: tod(),
+          supplier: isSupplier ? currentUser : (o.supplier || ""),
+          customer: o.customer || "",
+          phone: phoneClean,
+          phone2: fixPhone(o.phone2 || ""),
+          gov: o.gov || "",
+          region: o.region || "",
+          address: o.address || "",
+          prodPrice: prodPrice,
+          shipPrice: shipPrice,
+          totalCOD: totalCOD,
+          shipCost: shipPrice,
+          courier: "", // Mandatory: ALWAYS blank at creation time
+          status: "جديد",
+          notes: o.notes || "",
+          delivDate: "",
+          retDate: "",
+          addedBy: currentUser,
+          commission: 0,
+          returnShippingType: "",
+          returnQueueStatus: "",
+          returnQueueAgent: ""
+        };
+
+        db.orders.push(newOrder);
+
+        // Instantly generate a ledger row for bookkeeping
+        db.supplierLedger.push({
+          supplier: newOrder.supplier,
+          date: tNow,
+          type: "أوردر مستلم",
+          tracking: id,
+          amount: prodPrice,
+          desc: `تم استلام الشحنة ${id} صادر من المورد (المطلوب تحصيله ${totalCOD}ج - الشحن ${shipPrice}ج)`
+        });
+
         db.statusHistory.push({
           tracking: id,
           oldStatus: "",
@@ -922,19 +643,16 @@ app.post("/api", async (req: Request, res: Response) => {
         });
 
         writeDB(db);
-        return ok(res, { id, msg: `تم إضافة الأوردر ${id} بنجاح` });
+        return ok(res, { id, msg: `تم تسجيل الأوردر بنجاح برقم تتبع: ${id}` });
       }
 
-      // ─────────────────────────────────────────────────────────────
-      // BULK UPLOAD EXCEL / CSV
-      // ─────────────────────────────────────────────────────────────
       case "addBulk": {
-        if (!["مدير", "مشرف", "مورد"].includes(currentRole)) {
-          return err(res, "ليس لديك صلاحية رفع طلبات جماعية");
+        if (!isAdmin && currentRole !== "مشرف" && !isSupplier) {
+          return err(res, "غير مصرح لك بالتحميل الجماعي للشحنات");
         }
 
         const ordersArr = d.orders || [];
-        const fallbackSupplier = currentRole === "مورد" ? currentUser : (d.supplier || "مورد عام");
+        const fallbackSupplier = isSupplier ? currentUser : (d.supplier || "مورد عام");
         const tNow = now();
         let addedCount = 0;
 
@@ -942,68 +660,36 @@ app.post("/api", async (req: Request, res: Response) => {
           const ph = fixPhone(item.phone || "");
           if (!ph && !item.customer) continue;
 
-          // Resolve supplier row-by-row
-          let orderSupplier = fallbackSupplier;
-          if (currentRole === "مورد") {
-            orderSupplier = currentUser;
-          } else {
-            const itemRowSupplier = (item.supplier || "").toString().trim();
-            if (itemRowSupplier) {
-              orderSupplier = itemRowSupplier;
-              // Look up in database to see if a supplier with this exact name exists; if not, register them!
-              const matchedSup = db.suppliers.find(
-                (s: any) => s.name && s.name.trim().toLowerCase() === itemRowSupplier.toLowerCase()
-              );
-              if (!matchedSup) {
-                db.suppliers.push({
-                  name: itemRowSupplier,
-                  phone: "—",
-                  price: 60,
-                  notes: "تم تسجيله تلقائياً عن طريق رفع جماعي"
-                });
-              }
-            } else {
-              orderSupplier = fallbackSupplier;
-            }
+          let orderSupplier = isSupplier ? currentUser : (item.supplier || fallbackSupplier).toString().trim();
+          
+          // Auto-insert missing suppliers dynamic registration with safe space-stripped checks
+          const normalizedSup = normalizeName(orderSupplier);
+          const matchedSup = db.suppliers.find((s: any) => normalizeName(s.name) === normalizedSup);
+          if (!matchedSup && orderSupplier) {
+            db.suppliers.push({
+              name: orderSupplier,
+              phone: "—",
+              price: 65,
+              notes: "تم تسجيل المورد تلقائياً عبر التحميل الجماعي"
+            });
           }
 
-          // Resolve prices smartly (by reading total, shipping, product, cash to be collected from synonyms)
-          let pPrice = Number(item.prodPrice) || 0;
-          let sPrice = Number(item.shipPrice) || 0;
+          let sPrice = Number(item.shipPrice) || 60;
           let tCOD = Number(item.totalCOD) || 0;
+          let pPrice = Number(item.prodPrice) || 0;
 
-          const anyItem = item as any;
-          const rawShip = anyItem["سعر الشحن"] || anyItem["الشحن"] || anyItem["تكلفة الشحن"] || anyItem["مصاريف الشحن"] || anyItem["shipping"] || anyItem["shipPrice"] || anyItem["ship_price"];
-          const rawTotal = anyItem["المطلوب تحصيله"] || anyItem["التحصيل"] || anyItem["المطلوب"] || anyItem["إجمالي الكود"] || anyItem["الإجمالي"] || anyItem["الاجمالي"] || anyItem["إجمالي الأوردر"] || anyItem["total"] || anyItem["totalCOD"] || anyItem["total_cod"] || anyItem["cash_to_be_collected"] || anyItem["cash"];
-          const rawProd = anyItem["سعر المنتج"] || anyItem["المنتج"] || anyItem["سعر المادة"] || anyItem["price"] || anyItem["prodPrice"] || anyItem["product_price"];
-
-          if (sPrice === 0 && rawShip !== undefined && !isNaN(Number(rawShip))) {
-            sPrice = Number(rawShip);
-          }
-          if (sPrice === 0) sPrice = 60; // default shipping fee fallback
-
-          if (tCOD === 0 && rawTotal !== undefined && !isNaN(Number(rawTotal))) {
-            tCOD = Number(rawTotal);
-          }
-
-          if (pPrice === 0 && rawProd !== undefined && !isNaN(Number(rawProd))) {
-            pPrice = Number(rawProd);
-          }
-
-          // Enforce Formula: Supplier_Net_Balance = Total_Collected - Shipping_Fees
           if (tCOD > 0) {
             pPrice = tCOD - sPrice;
           } else if (pPrice > 0) {
             tCOD = pPrice + sPrice;
           } else {
-            // Fallbacks
             pPrice = 200;
             tCOD = pPrice + sPrice;
           }
 
           const id = generateID(db);
 
-          const newObj = {
+          db.orders.push({
             tracking: id,
             createdAt: tNow,
             updatedAt: tNow,
@@ -1019,7 +705,7 @@ app.post("/api", async (req: Request, res: Response) => {
             shipPrice: sPrice,
             totalCOD: tCOD,
             shipCost: sPrice,
-            courier: "", // EMPTY AT CREATION ALWAYS
+            courier: "", // ALWAYS empty initially
             status: "جديد",
             notes: item.notes || "",
             delivDate: "",
@@ -1029,202 +715,145 @@ app.post("/api", async (req: Request, res: Response) => {
             returnShippingType: "",
             returnQueueStatus: "",
             returnQueueAgent: ""
-          };
+          });
 
-          db.orders.push(newObj);
-
-          // Supplier Ledger Transaction (automatically records the cash/outstanding balance instantly)
+          // Ledger row
           db.supplierLedger.push({
             supplier: orderSupplier,
             date: tNow,
             type: "أوردر مستلم",
             tracking: id,
             amount: pPrice,
-            desc: `رفع أوردر مستلم جماعياً ${id} (صافي حساب المورد: ${pPrice} = المطلوب تحصيله ${tCOD} - الشحن ${sPrice})`
-          });
-
-          // History Log
-          db.statusHistory.push({
-            tracking: id,
-            oldStatus: "",
-            newStatus: "جديد",
-            updatedBy: currentUser,
-            dateTime: tNow
+            desc: `تحميل جماعي للأوردر ${id} (صافي المورد: ${pPrice}ج)`
           });
 
           addedCount++;
         }
 
         writeDB(db);
-        return ok(res, { added: addedCount, msg: `تم رفع ${addedCount} أوردر بنجاح` });
+        return ok(res, { added: addedCount, msg: `تم إدراج عدد ${addedCount} شحنة بنجاح` });
       }
 
-      // ─────────────────────────────────────────────────────────────
-      // UPDATE ORDER STATUS (Workflow Controls)
-      // ─────────────────────────────────────────────────────────────
       case "updateStatus": {
         const { tracking, status, returnShippingType } = d;
-        if (!tracking || !status) return err(res, "معاملات مفقودة");
+        if (!tracking || !status) return err(res, "بيانات ناقصة");
 
         const order = db.orders.find((o: any) => o.tracking === tracking);
-        if (!order) return err(res, "الأوردر غير موجود");
+        if (!order) return err(res, "الطلب غير مدرج بالخادم");
 
         const oldStatus = order.status;
-
-        // 🚨 Standard Restriction on 'تم التسليم'
         if (oldStatus === "تم التسليم") {
-          return err(res, "لا يمكن تعديل حالة أوردر تم تسليمه");
+          return err(res, "تأمين مالي: يمنع تعديل حالة الطلبات المصنفة كـ 'تم التسليم' منعاً للتلاعب بالحصيلة المسلمة.");
         }
 
-        // 🚨 Role Permissions Guard for status transitions
-        const isAdmin = currentRole === "مدير";
-        const isSuper = currentRole === "مشرف";
+        // Action permissions check
+        const isSupervisor = currentRole === "مشرف";
         const isOps = currentRole === "موظف عمليات";
-        const isAgent = currentRole === "مندوب";
-        const isSupplier = currentRole === "مورد";
         const isReturnsOfficer = currentRole === "مسؤول مرتجعات";
 
-        // Assignment restrictions:
         const assignStatuses = ["تم الإسناد", "خارج مع المندوب", "ملغي", "التسليم للمورد"];
-        if (assignStatuses.includes(status) && !isAdmin && !isSuper) {
+        if (assignStatuses.includes(status) && !isAdmin && !isSupervisor) {
           return err(res, "فقط المشرف أو المدير يستطيع تحديد وتوزيع الأوردرات");
         }
 
-        // Agent Restrictions:
-        if (isAgent) {
-          const agentAllowedStatuses = ["تم التسليم", "مرتجع", "مؤجل", "لا يوجد رد"];
-          if (!agentAllowedStatuses.includes(status)) {
-            return err(res, "غير مسموح للمندوب باختيار هذه الحالة");
+        if (isCourier) {
+          const allowed = ["تم التسليم", "مرتجع", "مؤجل", "لا يوجد رد"];
+          if (!allowed.includes(status)) {
+            return err(res, "غير مسموح للمندوب بتقرير هذه الحالة");
           }
-          // Courier can only change status of their OWN orders
-          if (order.courier !== currentUser) {
-            return err(res, "هذا الأوردر ليس مسنداً إليك");
+          if (normalizeName(order.courier) !== cleanCurrentUser) {
+            return err(res, "عملية محظورة: هذه الشحنة ليست مسندة لحسابك اللحظي");
           }
         }
 
-        // Ops and Supplier: Forbidden from state changes
-        if (isOps) return err(res, "موظف العمليات لا يمتلك صلاحية تغيير الحالة");
-        if (isSupplier) return err(res, "المورد لا يمتلك صلاحية تعديل الحالة");
+        if (isOps) return err(res, "صلاحية مرفوضة: موظف العمليات يكتفي بمطالعة الحالات فقط.");
+        if (isSupplier) return err(res, "صلاحية مرفوضة: لا يملك العميل/المورد حق تعديل حالة تسليم الشحنة.");
 
-        // Returns Officer Control
         if (isReturnsOfficer) {
-          const returnsOfficerAllowed = ["مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"];
-          if (!returnsOfficerAllowed.includes(status)) {
-            return err(res, "مسؤول المرتجعات يمكنه فقط تعيين حالات المرتجعات وتحديث مسارها");
+          const returnsAllowed = ["مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"];
+          if (!returnsAllowed.includes(status)) {
+            return err(res, "موظف المرتجعات يتحكم بالمرتفعات ومساراتها فقط");
           }
         }
 
-        // Handle Return Logic (مرتجع)
+        // Apply Status Update
         if (status === "مرتجع") {
-          // Requires choice of shipping paid behavior
           if (!returnShippingType) {
-            return err(res, "يرجى تحديد ما إذا دفع العميل الشحن أم رفض");
+            return err(res, "تحديد تكلفة الرفض مطلوب (العميل سدد الشحن أم رفض الدفع تماماً)");
           }
-
           order.status = "مرتجع";
-          order.returnShippingType = returnShippingType; // 'paid' or 'unpaid'
+          order.returnShippingType = returnShippingType;
           order.retDate = now();
 
-          // 1. Calculate Courier Commission
+          // Financial configuration for the courier commission
           if (returnShippingType === "paid") {
-            const courierProfile = db.couriers.find((c: any) => c.name === order.courier);
-            const commVal = courierProfile ? Number(courierProfile.commission || 25) : 25;
-            order.commission = commVal;
+            const coup = db.couriers.find((c: any) => normalizeName(c.name) === cleanCurrentUser);
+            const fee = coup ? Number(coup.commission || 25) : 25;
+            order.commission = fee;
 
-            // Log Courier Ledger Entry
             db.courierLedger.push({
               courier: order.courier,
               date: now(),
               type: "مرتجع مدفوع الشحن",
               tracking: order.tracking,
-              amount: commVal,
-              desc: `عمولة مرتجع مدفوع الشحن للأوردر: ${order.tracking}`
+              amount: fee,
+              desc: `عمولة تسوية مرتجع مدفوع الشحن للشحنة: ${order.tracking}`
             });
           } else {
             order.commission = 0;
-            // Unpaid return has 0 commission
-            db.courierLedger.push({
-              courier: order.courier,
-              date: now(),
-              type: "مرتجع غير مدفوع الشحن",
-              tracking: order.tracking,
-              amount: 0,
-              desc: `عمولة مرتجع غير مدفوع الشحن للأوردر: ${order.tracking}`
-            });
           }
 
-          // 2. Returns Queue System:
           order.returnQueueStatus = "مرتجع جديد";
-          const firstReturnsOfficer = db.users.find((u: any) => u.role === "مسؤول مرتجعات" && u.active === "نعم");
-          order.returnQueueAgent = firstReturnsOfficer ? firstReturnsOfficer.name : "أحمد المرتجعات";
-        }
-
-        // Handle transitioning between Return Queue statuses directly
-        else if (["مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"].includes(status)) {
-          order.returnQueueStatus = status;
-          if (status === "تم تسليم المرتجع للمورد") {
-            order.status = "التسليم للمورد";
-            order.retDate = now();
-          }
-        }
-
-        // Standard Transitions
-        else {
+          order.returnQueueAgent = "أحمد المرتجعات";
+        } else {
           order.status = status;
           order.updatedAt = now();
 
           if (status === "تم التسليم") {
             order.delivDate = now();
-            // Calculate Courier Commission
-            const courierProfile = db.couriers.find((c: any) => c.name === order.courier);
-            const commVal = courierProfile ? Number(courierProfile.commission || 25) : 25;
+            // Calculate dynamic courier commission or fallback
+            const coup = db.couriers.find((c: any) => normalizeName(c.name) === normalizeName(order.courier));
+            const commVal = coup ? Number(coup.commission_success || coup.commission || 25) : 25;
             order.commission = commVal;
 
-            // Save to Courier Ledger
             db.courierLedger.push({
               courier: order.courier,
               date: now(),
               type: "تسليم",
               tracking: order.tracking,
               amount: commVal,
-              desc: `عمولة تسليم الأوردر والتحصيل للأوردر: ${order.tracking}`
+              desc: `تحصيل عمولة نجاح التوصيل للشحنة: ${order.tracking}`
             });
 
-            // Automatically register the delivery in cashbox as physical collection pending handover
+            // Automatically queue Collected COD into the general cashbox
             db.cashbox.push({
               date: now(),
-              desc: `تحصيل أوردر مسلّم: ${order.tracking} (المندوب: ${order.courier})`,
+              desc: `تحصيل نقدي للشحنة المسلمة: ${order.tracking} (المندوب: ${order.courier})`,
               type: "تحصيل مندوب",
               amount: Number(order.totalCOD),
               ref: order.tracking,
-              addedBy: "النظام التلقائي"
+              addedBy: "System Live Agent"
             });
-          }
-
-          if (status === "التسليم للمورد") {
-            order.retDate = now();
           }
         }
 
-        // --- DEDUCTION TO SUPPLIER LEDGER SECURED AND DELAYED UNTIL DELIVERED BACK TO SUPPLIER ---
-        // Checks both status and queue state to execute the deduction of the product value safely
+        // If returned delivers to supplier
         if (status === "التسليم للمورد" || status === "تم تسليم المرتجع للمورد" || status === "مرتجع تم تسليمه للمورد") {
-          const dupLedger = db.supplierLedger.find((l: any) => l.tracking === order.tracking && (l.type === "مرتجع" || l.type === "مرتجع تم تسليمه للمورد"));
-          if (!dupLedger) {
+          const hasLedger = db.supplierLedger.find((l: any) => l.tracking === order.tracking && (l.type === "مرتجع تم تسليمه للمورد" || l.type === "مرتجع"));
+          if (!hasLedger) {
             db.supplierLedger.push({
               supplier: order.supplier,
               date: now(),
               type: "مرتجع تم تسليمه للمورد",
               tracking: order.tracking,
               amount: -Number(order.prodPrice || 0),
-              desc: `خصم قيمة المنتج لمرتجع تسلمه المورد: ${order.tracking} (المسؤول: ${currentUser})`
+              desc: `تصفية مالية: خصم قيمة السلعة لمرتجع استلمة المورد الشريك: ${order.tracking}`
             });
           }
         }
 
         order.updatedAt = now();
 
-        // Save Status History log (which act as audit trail)
         db.statusHistory.push({
           tracking: tracking,
           oldStatus: oldStatus,
@@ -1234,22 +863,19 @@ app.post("/api", async (req: Request, res: Response) => {
         });
 
         writeDB(db);
-        return ok(res, { tracking, status, msg: "تم تحديث حالة الأوردر بنجاح" });
+        return ok(res, { tracking, status, msg: "تم تسجيل الحركة وحفظ التعديلات المالية اللحظية" });
       }
 
-      // ─────────────────────────────────────────────────────────────
-      // EDIT ORDER DETAILS (Admin Only)
-      // ─────────────────────────────────────────────────────────────
       case "updateOrder": {
-        if (currentRole !== "مدير") {
-          return err(res, "فقط المدير يمتلك صلاحية تعديل بيانات الأوردر");
+        if (!isAdmin) {
+          return err(res, "صلاحية حصرية: فرز وتعديل بيانات الشحنات المودعة متاح للمدير العام فقط.");
         }
 
         const { tracking, order: o } = d;
-        if (!tracking) return err(res, "معامل رقم التتبع مفقود");
+        if (!tracking) return err(res, "يرجى تقديم معامل رقم التتبع");
 
         const order = db.orders.find((x: any) => x.tracking === tracking);
-        if (!order) return err(res, "الأوردر غير موجود");
+        if (!order) return err(res, "الطلب غير مسجل");
 
         order.customer = o.customer !== undefined ? o.customer : order.customer;
         order.phone = o.phone !== undefined ? fixPhone(o.phone) : order.phone;
@@ -1271,31 +897,29 @@ app.post("/api", async (req: Request, res: Response) => {
             order.totalCOD = newProd + newShip;
             order.shipCost = newShip;
 
-            // Also update the supplier ledger transaction to keep the supplier's balance in perfect sync
-            const ledgerTransaction = db.supplierLedger.find((l: any) => l.tracking === tracking && l.type === "أوردر مستلم");
-            if (ledgerTransaction) {
-              ledgerTransaction.amount = newProd;
-              ledgerTransaction.desc = `تعديل قيمة أوردر مستلم ${tracking} (الصافي الجديد: ${newProd} = الكلي ${order.totalCOD} - الشحن ${newShip})`;
+            // Update ledger bookkeeping for supplier to represent new amounts in real-time
+            const supLed = db.supplierLedger.find((l: any) => l.tracking === tracking && l.type === "أوردر مستلم");
+            if (supLed) {
+              supLed.amount = newProd;
+              supLed.desc = `تعديل القيمة المالية للشحنة ${tracking} (صافي حساب المورد الجديد: ${newProd}ج)`;
             }
 
             if (!db.auditLog) db.auditLog = [];
             db.auditLog.push({
               user: currentUser,
-              type: "تعديل مالي أوردر",
+              type: "تعديل ميزانية شحنة",
               dateTime: now(),
-              oldVal: `سعر المنتج: ${oldProd} ج.م، الشحن: ${oldShip} ج.م`,
-              newVal: `سعر المنتج: ${newProd} ج.م، الشحن: ${newShip} ج.م`,
-              reason: d.reason || o.reason || "تحديث الأسعار يدويًا بواسطة الإدارة"
+              oldVal: `سعر المنتج: ${oldProd}ج، الشحن: ${oldShip}ج`,
+              newVal: `سعر المنتج: ${newProd}ج، الشحن: ${newShip}ج`,
+              reason: d.reason || "تصفية وتصحيح مالي يدوي من الإدارة"
             });
           }
         }
 
-        // Courier assignment details
         if (o.courier !== undefined) {
           const oldCourier = order.courier;
           order.courier = o.courier;
 
-          // If assigned (and old courier was empty), transition status to 'تم الإسناد' per workflow
           if (o.courier && !oldCourier && order.status === "جديد") {
             order.status = "تم الإسناد";
             db.statusHistory.push({
@@ -1307,35 +931,27 @@ app.post("/api", async (req: Request, res: Response) => {
             });
           }
 
-          // Fetch new commission rate
-          const courierProfile = db.couriers.find((c: any) => c.name === o.courier);
-          order.commission = courierProfile ? Number(courierProfile.commission || 25) : 0;
+          const coup = db.couriers.find((c: any) => normalizeName(c.name) === normalizeName(o.courier));
+          order.commission = coup ? Number(coup.commission_success || coup.commission || 25) : 25;
         }
 
         order.updatedAt = now();
-
         writeDB(db);
-        return ok(res, { tracking, msg: "تم تعديل بيانات الأوردر بنجاح" });
+        return ok(res, { tracking, msg: "تم تعديل وحفظ بيانات الأوردر بأمان" });
       }
 
-      // ─────────────────────────────────────────────────────────────
-      // DELETE ORDER (Admin Only)
-      // ─────────────────────────────────────────────────────────────
       case "deleteOrder": {
-        if (currentRole !== "مدير") {
-          return err(res, "فقط المدير يمتلك صلاحية حذف الطلبات");
-        }
-
+        if (!isAdmin) return err(res, "صلاحية حصرية لمدير النظام");
         const { tracking } = d;
-        if (!tracking) return err(res, "معامل مفقود");
+        const idx = db.orders.findIndex((x: any) => x.tracking === tracking);
+        if (idx === -1) return err(res, "الشحنة غير متوفرة");
 
-        const index = db.orders.findIndex((x: any) => x.tracking === tracking);
-        if (index === -1) return err(res, "الأوردر غير موجود");
+        const order = db.orders[idx];
+        db.orders.splice(idx, 1);
 
-        const order = db.orders[index];
-        db.orders.splice(index, 1);
+        db.supplierLedger = db.supplierLedger.filter((l: any) => l.tracking !== tracking);
+        db.courierLedger = db.courierLedger.filter((l: any) => l.tracking !== tracking);
 
-        // Record to statusHistory as deleted
         db.statusHistory.push({
           tracking,
           oldStatus: order.status,
@@ -1344,98 +960,13 @@ app.post("/api", async (req: Request, res: Response) => {
           dateTime: now()
         });
 
-        // Also purge any outstanding supplierLedger transactions to maintain real counts
-        db.supplierLedger = db.supplierLedger.filter((l: any) => l.tracking !== tracking);
-        db.courierLedger = db.courierLedger.filter((l: any) => l.tracking !== tracking);
-
         writeDB(db);
-        return ok(res, { tracking, msg: "تم حذف الأوردر نهائياً" });
+        return ok(res, { tracking, msg: "تم شطب وحذف الشحنة بالكامل من السجلات اللحظية" });
       }
 
-      // ─────────────────────────────────────────────────────────────
-      // BULK RE-ASSIGN / BATCH MANIFEST
-      // ─────────────────────────────────────────────────────────────
-      case "bulkUpdate": {
-        if (!["مدير", "مشرف"].includes(currentRole)) {
-          return err(res, "ليس لديك صلاحيات التعديل الجماعي والمشافهة");
-        }
-
-        const trackings = d.trackings || [];
-        const status = d.status;
-        const courier = d.courier;
-        let modified = 0;
-
-        for (const t of trackings) {
-          const order = db.orders.find((o: any) => o.tracking === t);
-          if (!order) continue;
-
-          const oldStatus = order.status;
-
-          if (courier !== undefined && courier !== order.courier) {
-            order.courier = courier;
-            const cProfile = db.couriers.find((c: any) => c.name === courier);
-            order.commission = cProfile ? Number(cProfile.commission || 25) : 25;
-
-            // If courier is assigned, move 'جديد' to 'تم الإسناد'
-            if (courier && oldStatus === "جديد") {
-              order.status = "تم الإسناد";
-            }
-          }
-
-          if (status !== undefined && status !== order.status) {
-            order.status = status;
-            if (status === "تم التسليم") {
-              order.delivDate = now();
-              // Add to Courier Ledger
-              const cProfile = db.couriers.find((c: any) => c.name === order.courier);
-              const comm = cProfile ? Number(cProfile.commission || 25) : 25;
-              db.courierLedger.push({
-                courier: order.courier,
-                date: now(),
-                type: "تسليم",
-                tracking: order.tracking,
-                amount: comm,
-                desc: `عمولة تسليم الأوردر جماعياً: ${order.tracking}`
-              });
-
-              // Add to Cashbox
-              db.cashbox.push({
-                date: now(),
-                desc: `تحصيل أوردر جماعي: ${order.tracking}`,
-                type: "تحصيل مندوب",
-                amount: Number(order.totalCOD),
-                ref: order.tracking,
-                addedBy: "النظام الجماعي"
-              });
-            }
-            if (["مرتجع", "التسليم للمورد"].includes(status)) {
-              order.retDate = now();
-            }
-
-            db.statusHistory.push({
-              tracking: t,
-              oldStatus,
-              newStatus: status,
-              updatedBy: currentUser,
-              dateTime: now()
-            });
-          }
-
-          order.updatedAt = now();
-          modified++;
-        }
-
-        writeDB(db);
-        return ok(res, { done: modified, msg: `تم تحديث ${modified} أوردر بنجاح` });
-      }
-
-      // ─────────────────────────────────────────────────────────────
-      // DASHBOARD COUNTERS & PERFORMANCE METRICS
-      // ─────────────────────────────────────────────────────────────
       case "dashboard": {
-        const todayDate = tod();
+        // Restricted to admin, returns calculations for dashboard view
         const ordersList = db.orders;
-
         let stats = {
           total: ordersList.length,
           todayTotal: 0,
@@ -1446,7 +977,10 @@ app.post("/api", async (req: Request, res: Response) => {
           assignedPending: 0,
           totalCOD: 0,
           todayCOD: 0,
-          profit: 0
+          profit: 0,
+          totalGoodsValue: 0,
+          deliveredGoodsValue: 0,
+          returnedGoodsValue: 0
         };
 
         const courierStats: { [name: string]: { total: number; delivered: number; returned: number; cod: number } } = {};
@@ -1454,62 +988,60 @@ app.post("/api", async (req: Request, res: Response) => {
 
         for (const o of ordersList) {
           const isToday = isDateToday(o.createdAt || o.orderDate);
+          if (isToday) stats.todayTotal++;
 
-          if (isToday) {
-            stats.todayTotal++; // Today's Orders created today
-          }
+          const isReturned = isOrderReturned(o.status);
+          const isClosed = o.status === "تم التسليم" || isReturned;
+          if (o.courier && !isClosed) stats.assignedPending++;
 
-          const isClosed = ["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status);
-          const isAssigned = o.courier && o.courier !== "";
-          if (isAssigned && !isClosed) {
-            stats.assignedPending++;
-          }
+          const pPrice = Number(o.prodPrice || 0);
+          stats.totalGoodsValue += pPrice;
 
-          if (o.status === "تم التسليم") {
+          if (o.status === "تم التسليم" || o.status === "مسلم") {
             stats.delivered++;
             stats.totalCOD += Number(o.totalCOD || 0);
-            stats.profit += Number(o.shipPrice || 0); // profit is ship share
+            stats.deliveredGoodsValue += pPrice;
+
+            const orderCommission = Number(o.commission !== undefined ? o.commission : 25);
+            const hubFee = Number(db.settings?.HUB_FEE !== undefined ? db.settings.HUB_FEE : 10);
+            stats.profit += (Number(o.shipPrice || 0) - orderCommission - hubFee);
 
             if (o.delivDate && isDateToday(o.delivDate)) {
-              stats.todayCOD += Number(o.totalCOD || 0); // Money collected today
+              stats.todayCOD += Number(o.totalCOD || 0);
             }
-          } else if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)) {
+          } else if (isReturned) {
             stats.returned++;
-          } else if (["جديد", "تم الإسناد", "مؤجل", "لا يوجد رد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد"].includes(o.status)) {
+            stats.returnedGoodsValue += pPrice;
+          } else if (["جديد", "تم الإسناد", "مؤجل", "لا يوجد رد"].includes(o.status)) {
             stats.pending++;
           } else if (o.status === "خارج مع المندوب") {
             stats.active++;
           }
 
-          // Courier Statistics
           if (o.courier) {
-            if (!courierStats[o.courier]) {
-              courierStats[o.courier] = { total: 0, delivered: 0, returned: 0, cod: 0 };
-            }
-            courierStats[o.courier].total++;
+            const cn = o.courier.trim();
+            if (!courierStats[cn]) courierStats[cn] = { total: 0, delivered: 0, returned: 0, cod: 0 };
+            courierStats[cn].total++;
             if (o.status === "تم التسليم") {
-              courierStats[o.courier].delivered++;
-              courierStats[o.courier].cod += Number(o.totalCOD || 0);
-            } else if (["مرتجع", "التسليم للمورد"].includes(o.status)) {
-              courierStats[o.courier].returned++;
+              courierStats[cn].delivered++;
+              courierStats[cn].cod += Number(o.totalCOD);
+            } else if (isReturned) {
+              courierStats[cn].returned++;
             }
           }
 
-          // Supplier Statistics
           if (o.supplier) {
-            if (!supplierStats[o.supplier]) {
-              supplierStats[o.supplier] = { total: 0, delivered: 0, returned: 0 };
-            }
-            supplierStats[o.supplier].total++;
+            const sn = o.supplier.trim();
+            if (!supplierStats[sn]) supplierStats[sn] = { total: 0, delivered: 0, returned: 0 };
+            supplierStats[sn].total++;
             if (o.status === "تم التسليم") {
-              supplierStats[o.supplier].delivered++;
-            } else if (["مرتجع", "التسليم للمورد"].includes(o.status)) {
-              supplierStats[o.supplier].returned++;
+              supplierStats[sn].delivered++;
+            } else if (isReturned) {
+              supplierStats[sn].returned++;
             }
           }
         }
 
-        // Add rate logic
         const formattedCouriers = Object.entries(courierStats).map(([name, cs]: any) => {
           const rate = cs.total ? Math.round((cs.delivered / cs.total) * 100) : 0;
           return { name, ...cs, rate };
@@ -1520,16 +1052,22 @@ app.post("/api", async (req: Request, res: Response) => {
           return { name, ...ss, rate };
         });
 
-        // Determine best elements
         const bestCourierObj = [...formattedCouriers].sort((a, b) => b.delivered - a.delivered)[0];
         const bestSupplierObj = [...formattedSuppliers].sort((a, b) => b.delivered - a.delivered)[0];
 
         const rate = stats.total ? Math.round((stats.delivered / stats.total) * 100) : 0;
-        const remainingStock = ordersList.filter((o: any) => !["تم التسليم", "خارج مع المندوب", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)).length;
+        const remainingStock = ordersList.filter((o: any) => o.status !== "تم التسليم" && o.status !== "خارج مع المندوب" && !isOrderReturned(o.status)).length;
         const inOfficeStock = stats.total - (stats.active + stats.returned);
 
+        // Budget evaluation
+        let treasuryBalance = 0;
+        for (const item of db.cashbox) {
+          const isDeposit = ["وارد", "تحصيل مندوب", "استلام عهدة مندوب"].includes(item.type);
+          treasuryBalance += isDeposit ? Number(item.amount) : -Number(item.amount);
+        }
+
         return ok(res, {
-          stats: { ...stats, rate, remainingStock, inOfficeStock },
+          stats: { ...stats, rate, remainingStock, inOfficeStock, treasuryBalance },
           couriers: formattedCouriers.sort((a, b) => b.delivered - a.delivered),
           suppliers: formattedSuppliers.sort((a, b) => b.delivered - a.delivered).slice(0, 10),
           bestCourier: bestCourierObj ? bestCourierObj.name : "—",
@@ -1537,22 +1075,11 @@ app.post("/api", async (req: Request, res: Response) => {
         });
       }
 
-      case "getAuditLog": {
-        if (!["مدير", "مشرف", "محاسب"].includes(currentRole)) {
-          return err(res, "صلاحية مرفوضة لعرض سجل التدقيق المالي ومراقب الحسابات");
-        }
-        return ok(res, { logs: (db.auditLog || []).reverse() });
-      }
-
-      // ─────────────────────────────────────────────────────────────
-      // SUPPLIER LEDGER SYSTEM (COD calculations)
-      // ─────────────────────────────────────────────────────────────
       case "getSupplierLedger": {
-        const supplierName = currentRole === "مورد" ? currentUser : (d.supplier || "");
-        const ledger = db.supplierLedger.filter((l: any) => l.supplier === supplierName);
+        const target = isSupplier ? currentUser : (d.supplier || "");
+        if (!target) return err(res, "المورد غير معروف");
 
-        // Compute running balance live
-        // Live Balance = Sum of amounts in ledger
+        const ledger = db.supplierLedger.filter((l: any) => normalizeName(l.supplier) === normalizeName(target));
         let balance = 0;
         const entries = ledger.map((item: any) => {
           balance += Number(item.amount);
@@ -1563,31 +1090,33 @@ app.post("/api", async (req: Request, res: Response) => {
       }
 
       case "supplierDashboard": {
-        const isSupplier = currentRole === "مورد";
-        const targetSupplier = isSupplier ? currentUser : (d.supplier || "");
+        const target = isSupplier ? currentUser : (d.supplier || "");
+        if (!target) return err(res, "المورد المطلوب مجهول");
 
-        if (!targetSupplier) return err(res, "المورد غير معروف");
-
-        const orderList = db.orders.filter((o: any) => o.supplier === targetSupplier);
+        const targetNormalized = normalizeName(target);
+        const orderList = db.orders.filter((o: any) => normalizeName(o.supplier) === targetNormalized);
         let total = 0, delivered = 0, returned = 0, pending = 0, cod = 0;
+        let totalGoodsValue = 0, deliveredGoodsValue = 0, returnedGoodsValue = 0;
 
         for (const o of orderList) {
           total++;
-          const st = o.status;
-          if (st === "تم التسليم") {
+          const pPrice = Number(o.prodPrice || 0);
+          totalGoodsValue += pPrice;
+
+          if (o.status === "تم التسليم" || o.status === "مسلم") {
             delivered++;
-            cod += Number(o.prodPrice || 0); // COD for supplier is strictly their Product price share
-          } else if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(st)) {
+            cod += pPrice;
+            deliveredGoodsValue += pPrice;
+          } else if (isOrderReturned(o.status)) {
             returned++;
+            returnedGoodsValue += pPrice;
           } else {
             pending++;
           }
         }
 
-        // Compute Ledger summary
-        const ledgerTransactions = db.supplierLedger.filter((l: any) => l.supplier === targetSupplier);
-        const ledgerBalance = ledgerTransactions.reduce((acc: number, item: any) => acc + Number(item.amount), 0);
-
+        const transactions = db.supplierLedger.filter((l: any) => normalizeName(l.supplier) === targetNormalized);
+        const balance = transactions.reduce((acc: number, item: any) => acc + Number(item.amount), 0);
         const rate = total ? Math.round((delivered / total) * 100) : 0;
 
         return ok(res, {
@@ -1598,23 +1127,22 @@ app.post("/api", async (req: Request, res: Response) => {
             pending,
             cod,
             rate,
-            due: ledgerBalance // Due matches precisely their current ledger ledger balance
+            due: balance,
+            totalGoodsValue,
+            deliveredGoodsValue,
+            returnedGoodsValue
           }
         });
       }
 
       case "supplierAccounts": {
-        // Only accessible to Admin, Super, Accountant
-        if (!["مدير", "مشرف", "محاسب"].includes(currentRole)) {
-          return err(res, "ليس لديك صلاحية سحب كشوفات الموردين المالية");
+        if (!isAdmin && currentRole !== "محاسب") {
+          return err(res, "صلاحية مرفوضة لمطالعة حسابات الموردين الشركاء");
         }
 
-        // Extract ledger details by Suppler
-        const accountsMap: { [supplier: string]: { name: string; totalCOD: number; returnsDelivered: number; adjustments: number; payments: number; totalOrders: number; deliveredOrders: number; returnsCount: number; balance: number } } = {};
+        const accountsMap: { [supplier: string]: any } = {};
 
-        // 1. Check with ledger transactions
-        const ledger = db.supplierLedger;
-        for (const transaction of ledger) {
+        for (const transaction of db.supplierLedger) {
           const sup = transaction.supplier;
           if (!sup) continue;
 
@@ -1623,14 +1151,12 @@ app.post("/api", async (req: Request, res: Response) => {
           }
 
           accountsMap[sup].balance += Number(transaction.amount);
-
           if (transaction.type === "أوردر مستلم") accountsMap[sup].totalCOD += Number(transaction.amount);
-          if (transaction.type === "مرتجع" || transaction.type === "مرتجع تم تسليمه للمورد" || transaction.type.includes("مرتجع")) accountsMap[sup].returnsDelivered += Math.abs(Number(transaction.amount));
+          if (transaction.type === "مرتجع تم تسليمه للمورد") accountsMap[sup].returnsDelivered += Math.abs(Number(transaction.amount));
           if (transaction.type === "تسوية") accountsMap[sup].adjustments += Number(transaction.amount);
-          if (transaction.type === "دفع نقدي" || transaction.type === "دفعة مورد" || transaction.type.includes("دفعة")) accountsMap[sup].payments += Math.abs(Number(transaction.amount));
+          if (transaction.type === "دفع نقدي") accountsMap[sup].payments += Math.abs(Number(transaction.amount));
         }
 
-        // 2. Fetch order volumes
         for (const o of db.orders) {
           const sup = o.supplier;
           if (!sup) continue;
@@ -1639,170 +1165,86 @@ app.post("/api", async (req: Request, res: Response) => {
           }
           accountsMap[sup].totalOrders++;
           if (o.status === "تم التسليم") accountsMap[sup].deliveredOrders++;
-          if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)) {
+          if (isOrderReturned(o.status)) {
             accountsMap[sup].returnsCount++;
           }
         }
 
-        const accountsList = Object.values(accountsMap).map((a: any) => {
+        const list = Object.values(accountsMap).map((a: any) => {
           const rate = a.totalOrders ? Math.round((a.deliveredOrders / a.totalOrders) * 100) : 0;
           return { ...a, rate };
         });
 
-        return ok(res, { accounts: accountsList });
+        return ok(res, { accounts: list });
       }
 
       case "addSupplierPayment": {
-        // Admin or accountant can make cash payouts
-        if (!["مدير", "محاسب"].includes(currentRole)) {
-          return err(res, "ليس لديك صلاحية صرف دفعات للموردين");
+        if (!isAdmin && currentRole !== "محاسب") {
+          return err(res, "صلاحية مرفوضة لتسجيل وتفويض صرف الدفعات");
         }
 
         const { supplier, amount, desc } = d;
-        if (!supplier || !amount) return err(res, "بيانات مفقودة");
+        if (!supplier || !amount) return err(res, "معامل المورد والمبلغ مطلوب للتسوية");
 
         const val = Number(amount);
-        const finalDesc = desc || `دفعة نقدية مسددة للمورد: ${supplier}`;
+        const description = desc || `سداد دفعة نقدية منصرفة للمورد: ${supplier}`;
 
-        // Subtract from Supplier Account Ledger (Deducts balance)
         db.supplierLedger.push({
           supplier,
           date: now(),
           type: "دفع نقدي",
           tracking: "CASH-PAY",
           amount: -val,
-          desc: finalDesc
+          desc: description
         });
 
-        // Dedect from Cashbox too
         db.cashbox.push({
           date: now(),
-          desc: `${finalDesc} (صرف مورد)`,
-          type: "سداد مورد",
+          desc: `${description} (صندوق صرف الموردين)`,
+          type: "صادر",
           amount: val,
           ref: "SUPPAY",
           addedBy: currentUser
         });
 
-        // Audit Log entry inside central system
-        if (!db.auditLog) db.auditLog = [];
-        db.auditLog.push({
-          user: currentUser,
-          type: "سداد مورد / دفعة نقدية",
-          dateTime: now(),
-          oldVal: "—",
-          newVal: `صرف مبلغ: ${val} ج.م للمورد: ${supplier}`,
-          reason: desc || `دفعة نقدية منصرفة للمورد: ${supplier}`
-        });
-
         writeDB(db);
-        return ok(res, { msg: "تم تسجيل الدفعة النقدية بنجاح وتسويتها بالخزنة" });
+        return ok(res, { msg: `تم صرف الدفعة النقدية بقيمة ${val}ج للمورد وتسويتها بعهد الصندوق` });
       }
 
-      // ─────────────────────────────────────────────────────────────
-      // COURIER LEDGER SYSTEM & COMPENSTATION
-      // ─────────────────────────────────────────────────────────────
       case "getCourierLedger": {
-        // Courier salary summary sheet calculations:
-        // Basic Salary, Delivered Orders, Delivery Commission, Returned With Shipping, Return Commission, Bonuses, Penalties, Net Salary
-        const courierName = d.courier || currentUser;
+        const targetCourier = d.courier || currentUser;
+        const coupProfile = db.couriers.find((c: any) => normalizeName(c.name) === normalizeName(targetCourier));
+        if (!coupProfile) return err(res, "المندوب المختار غير مدرج بالخادم");
 
-        const courierProfile = db.couriers.find((c: any) => c.name === courierName);
-        if (!courierProfile) return err(res, "المندوب غير مسجل");
+        const courierOrders = db.orders.filter((o: any) => normalizeName(o.courier) === normalizeName(targetCourier));
 
-        // Filter courier orders
-        const courierOrders = db.orders.filter((o: any) => o.courier === courierName);
-
-        // Calculations - using new persistent configs with backward-compatible defaults
-        const basicSalary = courierProfile.base_fixed_salary !== undefined ? Number(courierProfile.base_fixed_salary) : Number(courierProfile.salary || 3000);
-        const commissionSuccess = courierProfile.commission_success !== undefined ? Number(courierProfile.commission_success) : Number(courierProfile.commission || 25);
-        const commissionReturn = courierProfile.commission_return !== undefined ? Number(courierProfile.commission_return) : 10;
+        const basicSalary = Number(coupProfile.base_fixed_salary || coupProfile.salary || 3000);
+        const commissionSuccess = Number(coupProfile.commission_success || coupProfile.commission || 25);
+        const commissionReturn = Number(coupProfile.commission_return || 10);
 
         const deliveredCount = courierOrders.filter((o: any) => o.status === "تم التسليم").length;
         const delivCommission = deliveredCount * commissionSuccess;
 
-        const returnedCount = courierOrders.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length;
-        const returnedPaidCount = courierOrders.filter((o: any) => o.status === "مرتجع" && o.returnShippingType === "paid").length;
+        const returnedCount = courierOrders.filter((o: any) => isOrderReturned(o.status)).length;
+        const returnedPaidCount = courierOrders.filter((o: any) => isOrderReturned(o.status) && o.returnShippingType === "paid").length;
         const returnShippingCommission = returnedPaidCount * commissionSuccess;
 
-        // Fetch adjustments (Bonuses, Penalties) from courierLedger entries
-        const targetLedger = db.courierLedger.filter((l: any) => l.courier === courierName);
+        const targetLedger = db.courierLedger.filter((l: any) => normalizeName(l.courier) === normalizeName(targetCourier));
         const bonusesSum = targetLedger.filter((l: any) => l.type === "مكافأة").reduce((sum: number, x: any) => sum + Number(x.amount), 0);
         const penaltiesSum = targetLedger.filter((l: any) => l.type === "جزاء").reduce((sum: number, x: any) => sum + Number(x.amount), 0);
 
-        // Compute COD Collection tracking for anti-deficit control
         const totalCollected = courierOrders.filter((o: any) => o.status === "تم التسليم").reduce((sum: number, o: any) => sum + Number(o.totalCOD || 0), 0);
-        
-        // Handed Over to company = Sum of "استلام عهدة مندوب" records in cashbox for this courier
         const totalPaidToCompany = db.cashbox
-          .filter((item: any) => item.type === "استلام عهدة مندوب" && item.ref === courierName)
+          .filter((item: any) => item.type === "استلام عهدة مندوب" && normalizeName(item.ref) === normalizeName(targetCourier))
           .reduce((sum: number, item: any) => sum + Number(item.amount || 0), 0);
 
         const deficit = totalCollected - totalPaidToCompany;
-
-        // Cumulative Daily Ledger calculations
-        const nowCairo = getCairoDateObj();
-        const daysInCurrentMonth = new Date(nowCairo.getFullYear(), nowCairo.getMonth() + 1, 0).getDate();
-        const daysCount = daysInCurrentMonth || 30;
-
-        const datesSet = new Set<string>();
-        for (const o of courierOrders) {
-          if (o.status === "تم التسليم" && o.delivDate) {
-            datesSet.add(o.delivDate.substring(0, 10));
-          }
-          if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) && o.retDate) {
-            datesSet.add(o.retDate.substring(0, 10));
-          }
-        }
-        datesSet.add(tod());
-
-        const year = nowCairo.getFullYear();
-        const month = nowCairo.getMonth();
-        const todayDayNum = nowCairo.getDate();
-        for (let dMonth = 1; dMonth <= todayDayNum; dMonth++) {
-          const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(dMonth).padStart(2, "0")}`;
-          datesSet.add(dateStr);
-        }
-
-        const sortedDates = Array.from(datesSet).sort();
-        let runningCumulative = 0;
-        const dailyEarnings = sortedDates.map(dStr => {
-          const deliveredList = courierOrders.filter((o: any) => o.status === "تم التسليم" && o.delivDate && o.delivDate.substring(0, 10) === dStr);
-          const returnedList = courierOrders.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) && o.retDate && o.retDate.substring(0, 10) === dStr);
-          
-          const deliveredDay = deliveredList.length;
-          const returnedDay = returnedList.length;
-
-          const baseEarning = Number((basicSalary / daysCount).toFixed(2));
-          const delivEarning = deliveredDay * commissionSuccess;
-          const retEarning = returnedDay * commissionReturn;
-          const total = baseEarning + delivEarning + retEarning;
-          runningCumulative += total;
-
-          return {
-            date: dStr,
-            delivered: deliveredDay,
-            returned: returnedDay,
-            baseEarning,
-            delivEarning,
-            retEarning,
-            total: Number(total.toFixed(2)),
-            cumulative: Number(runningCumulative.toFixed(2))
-          };
-        });
-
-        // Use the accumulated daily earnings as netSalary
         const netSalary = basicSalary + delivCommission + returnShippingCommission + bonusesSum - penaltiesSum;
-
-        const todayDate = tod();
-        const todayDeliveredCount = courierOrders.filter((o: any) => o.status === "تم التسليم" && o.delivDate && isDateToday(o.delivDate)).length;
-        const todayDelivCommission = todayDeliveredCount * commissionSuccess;
 
         return ok(res, {
           ledgerInfo: {
-            courierName,
+            courierName: targetCourier,
             basicSalary,
-            base_fixed_salary: basicSalary,
             commission_success: commissionSuccess,
             commission_return: commissionReturn,
             deliveredCount,
@@ -1815,107 +1257,44 @@ app.post("/api", async (req: Request, res: Response) => {
             netSalary,
             totalCollected,
             totalPaidToCompany,
-            deficit,
-            todayDeliveredCount,
-            todayDelivCommission,
-            dailyEarnings: dailyEarnings.reverse() // Sort descending to have latest date first
+            deficit
           },
           transactions: targetLedger.reverse()
         });
       }
 
       case "getCourierInfo": {
-        // Fast courier self checking inside Courier portal
-        const courierName = currentUser;
-        const courierProfile = db.couriers.find((c: any) => c.name === courierName);
-        if (!courierProfile) return err(res, "المندوب غير مسجل");
+        const targetCourier = currentUser;
+        const coupProfile = db.couriers.find((c: any) => normalizeName(c.name) === cleanCurrentUser);
+        if (!coupProfile) return err(res, "ملف المندوب غير مدرج بالخادم");
 
-        const ordersList = db.orders.filter((o: any) => o.courier === courierName);
+        const ordersList = db.orders.filter((o: any) => normalizeName(o.courier) === cleanCurrentUser);
         const total = ordersList.length;
         const delivered = ordersList.filter((o: any) => o.status === "تم التسليم").length;
-        const returnedPaid = ordersList.filter((o: any) => o.status === "مرتجع" && o.returnShippingType === "paid").length;
-        const returnedAll = ordersList.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length;
+        const returnedPaid = ordersList.filter((o: any) => isOrderReturned(o.status) && o.returnShippingType === "paid").length;
+        const returnedAll = ordersList.filter((o: any) => isOrderReturned(o.status)).length;
 
-        const basicSalary = courierProfile.base_fixed_salary !== undefined ? Number(courierProfile.base_fixed_salary) : Number(courierProfile.salary || 3000);
-        const commissionSuccess = courierProfile.commission_success !== undefined ? Number(courierProfile.commission_success) : Number(courierProfile.commission || 25);
-        const commissionReturn = courierProfile.commission_return !== undefined ? Number(courierProfile.commission_return) : 10;
+        const basicSalary = Number(coupProfile.base_fixed_salary || coupProfile.salary || 3000);
+        const commissionSuccess = Number(coupProfile.commission_success || coupProfile.commission || 25);
+        const commissionReturn = Number(coupProfile.commission_return || 10);
 
-        // Fetch adjustment amounts
-        const ledgerTr = db.courierLedger.filter((l: any) => l.courier === courierName);
+        const ledgerTr = db.courierLedger.filter((l: any) => normalizeName(l.courier) === cleanCurrentUser);
         const bonuses = ledgerTr.filter((l: any) => l.type === "مكافأة").reduce((sum: number, x: any) => sum + Number(x.amount), 0);
         const penalties = ledgerTr.filter((l: any) => l.type === "جزاء").reduce((sum: number, x: any) => sum + Number(x.amount), 0);
 
         const totalCommission = (delivered * commissionSuccess) + (returnedPaid * commissionSuccess);
         const totalEarnings = basicSalary + totalCommission + bonuses - penalties;
 
-        const todayDate = tod();
-        const todayDelivered = ordersList.filter((o: any) => o.status === "تم التسليم" && o.delivDate && isDateToday(o.delivDate)).length;
-        const todayDelivCommission = todayDelivered * commissionSuccess;
-        const todayReturned = ordersList.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) && o.retDate && isDateToday(o.retDate)).length;
-
-        // Cumulative Daily Ledger calculations
-        const nowCairo = getCairoDateObj();
-        const daysInCurrentMonth = new Date(nowCairo.getFullYear(), nowCairo.getMonth() + 1, 0).getDate();
-        const daysCount = daysInCurrentMonth || 30;
-
-        const datesSet = new Set<string>();
-        for (const o of ordersList) {
-          if (o.status === "تم التسليم" && o.delivDate) {
-            datesSet.add(o.delivDate.substring(0, 10));
-          }
-          if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) && o.retDate) {
-            datesSet.add(o.retDate.substring(0, 10));
-          }
-        }
-        datesSet.add(todayDate);
-
-        const year = nowCairo.getFullYear();
-        const month = nowCairo.getMonth();
-        const todayDayNum = nowCairo.getDate();
-        for (let dMonth = 1; dMonth <= todayDayNum; dMonth++) {
-          const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(dMonth).padStart(2, "0")}`;
-          datesSet.add(dateStr);
-        }
-
-        const sortedDates = Array.from(datesSet).sort();
-        let runningCumulative = 0;
-        const dailyEarnings = sortedDates.map(dStr => {
-          const deliveredList = ordersList.filter((o: any) => o.status === "تم التسليم" && o.delivDate && o.delivDate.substring(0, 10) === dStr);
-          const returnedList = ordersList.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) && o.retDate && o.retDate.substring(0, 10) === dStr);
-          
-          const deliveredDay = deliveredList.length;
-          const returnedDay = returnedList.length;
-
-          const baseEarning = Number((basicSalary / daysCount).toFixed(2));
-          const delivEarning = deliveredDay * commissionSuccess;
-          const retEarning = returnedDay * commissionReturn;
-          const total = baseEarning + delivEarning + retEarning;
-          runningCumulative += total;
-
-          return {
-            date: dStr,
-            delivered: deliveredDay,
-            returned: returnedDay,
-            baseEarning,
-            delivEarning,
-            retEarning,
-            total: Number(total.toFixed(2)),
-            cumulative: Number(runningCumulative.toFixed(2))
-          };
-        });
-
-        // Total cash collected vs deposited for the courier portal itself
-        const totalCollectedOnInfo = ordersList.filter((o: any) => o.status === "تم التسليم").reduce((sum: number, o: any) => sum + Number(o.totalCOD || 0), 0);
-        const totalPaidToCompanyOnInfo = db.cashbox
-          .filter((item: any) => item.type === "استلام عهدة مندوب" && item.ref === courierName)
+        const totalCollected = ordersList.filter((o: any) => o.status === "تم التسليم").reduce((sum: number, o: any) => sum + Number(o.totalCOD || 0), 0);
+        const totalPaidToCompany = db.cashbox
+          .filter((item: any) => item.type === "استلام عهدة مندوب" && normalizeName(item.ref) === cleanCurrentUser)
           .reduce((sum: number, item: any) => sum + Number(item.amount || 0), 0);
-        const deficitOnInfo = totalCollectedOnInfo - totalPaidToCompanyOnInfo;
+
+        const deficit = totalCollected - totalPaidToCompany;
 
         return ok(res, {
           salary: basicSalary,
           commission: commissionSuccess,
-          commission_success: commissionSuccess,
-          commission_return: commissionReturn,
           base_fixed_salary: basicSalary,
           total,
           delivered,
@@ -1925,24 +1304,19 @@ app.post("/api", async (req: Request, res: Response) => {
           penalties,
           totalCommission,
           totalEarnings,
-          todayDelivered,
-          todayDelivCommission,
-          todayReturned,
-          todayReturnCommission: todayReturned * commissionReturn,
-          deficit: deficitOnInfo,
-          totalCollected: totalCollectedOnInfo,
-          totalPaidToCompany: totalPaidToCompanyOnInfo,
-          dailyEarnings: dailyEarnings.reverse() // newest first
+          deficit,
+          totalCollected,
+          totalPaidToCompany
         });
       }
 
       case "addCourierAdjustment": {
-        if (!["مدير", "محاسب"].includes(currentRole)) {
-          return err(res, "فقط المدير والمحاسب يمتلك صلاحية تعديل مكافآت وجزاءات المندوب");
+        if (!isAdmin && currentRole !== "محاسب") {
+          return err(res, "صلاحية مرفوضة لإجراء تسويات مالية للمناديب");
         }
 
-        const { courier, type, amount, desc } = d; // type can be 'مكافأة' or 'جزاء'
-        if (!courier || !amount || !type) return err(res, "بيانات مفقودة للتسوية");
+        const { courier, type, amount, desc } = d;
+        if (!courier || !amount || !type) return err(res, "معاملات مفقودة لإجراء التعديل الخاص بملف المندوب");
 
         const val = Number(amount);
         db.courierLedger.push({
@@ -1951,14 +1325,10 @@ app.post("/api", async (req: Request, res: Response) => {
           type,
           tracking: "ADJUST",
           amount: val,
-          desc: desc || `${type} للمندوب بقيمة ${amount} ج`
+          desc: desc || `تسجيل بند ${type} بقيمة ${val}ج للمندوب (${courier})`
         });
 
-        // Treasury integration if needed
-        if (type === "جزاء") {
-          // penalty acts as deduction, doesn't debit treasury directly but increases company reserves
-        } else if (type === "مكافأة") {
-          // cashbox payout for bonus
+        if (type === "مكافأة") {
           db.cashbox.push({
             date: now(),
             desc: `مكافأة منصرفة للمندوب: ${courier} - ${desc}`,
@@ -1969,57 +1339,22 @@ app.post("/api", async (req: Request, res: Response) => {
           });
         }
 
-        // Audit Log entry inside central system
-        if (!db.auditLog) db.auditLog = [];
-        db.auditLog.push({
-          user: currentUser,
-          type: `تسوية مندوب (${type})`,
-          dateTime: now(),
-          oldVal: "—",
-          newVal: `${type}: ${val} ج.م للمندوب: ${courier}`,
-          reason: desc || `تسجيل تسوية للمندوب: ${courier}`
-        });
-
         writeDB(db);
-        return ok(res, { msg: "تم تسجيل التسوية المالية للمندوب بنجاح" });
+        return ok(res, { msg: "تم إدراج التسوية وحفظها بالملف المالي والعهدة" });
       }
 
-      // ─────────────────────────────────────────────────────────────
-      // STATUS CHANGE LOGICAL DIARY
-      // ─────────────────────────────────────────────────────────────
       case "statusHistory": {
         const historyList = db.statusHistory.filter((h: any) => !d.tracking || h.tracking === d.tracking);
         return ok(res, { history: historyList.reverse() });
       }
 
-      // ─────────────────────────────────────────────────────────────
-      // CASHBOX (TREASURY LEDGER) OPERATIONS
-      // ─────────────────────────────────────────────────────────────
-      case "cashbox": {
-        if (!["مدير", "محاسب"].includes(currentRole)) {
-          return err(res, "لا توجد لديك صلاحيات لرؤية الخزنة");
-        }
-
-        let balance = 0;
-        const sortedEntries = [...db.cashbox].map((item: any) => {
-          const isDeposit = ["وارد", "تحصيل مندوب"].includes(item.type);
-          balance += isDeposit ? Number(item.amount) : -Number(item.amount);
-          return { ...item, balance };
-        });
-
-        return ok(res, { entries: sortedEntries.reverse(), balance });
-      }
-
       case "addCashbox": {
-        if (!["مدير", "محاسب"].includes(currentRole)) {
-          return err(res, "صلاحية مرفوضة لإدراج حركات الخزنة");
+        if (!isAdmin && currentRole !== "محاسب") {
+          return err(res, "صلاحية مرفوضة لإدراج قيود بالخزنة اللحظية");
         }
 
         const { desc, type, amount, ref } = d;
-        if (!amount || !type) return err(res, "المبلغ والنوع مطلوبان");
-
-        READ_CACHE.clear();
-        ACTIVE_FETCHES.clear();
+        if (!amount || !type) return err(res, "المبلغ ونوع القيد مطلوبين");
 
         db.cashbox.push({
           date: now(),
@@ -2031,37 +1366,30 @@ app.post("/api", async (req: Request, res: Response) => {
         });
 
         writeDB(db);
-        return ok(res, { msg: "تم إدراج بند الخزينة وتصفيته" });
+        return ok(res, { msg: "تم إدراج بند الإيداع وتسييل العهد بشكل فوري بالخزينة" });
       }
 
-      // ─────────────────────────────────────────────────────────────
-      // EXPENSES OPERATIONS
-      // ─────────────────────────────────────────────────────────────
-      case "expenses": {
-        if (!["مدير", "محاسب"].includes(currentRole)) {
-          return err(res, "لا توجد لديك صلاحية لمطالعة بند المصروفات");
-        }
+      case "cashbox": {
+        let balance = 0;
+        const sortedEntries = [...db.cashbox].map((item: any) => {
+          const isDeposit = ["وارد", "تحصيل مندوب", "استلام عهدة مندوب"].includes(item.type);
+          balance += isDeposit ? Number(item.amount) : -Number(item.amount);
+          return { ...item, balance };
+        });
 
-        const expensesList = db.expenses;
-        const total = expensesList.reduce((sum: number, x: any) => sum + Number(x.amount), 0);
-
-        return ok(res, { expenses: [...expensesList].reverse(), total });
+        return ok(res, { entries: sortedEntries.reverse(), balance });
       }
 
       case "addExpense": {
-        if (!["مدير", "محاسب"].includes(currentRole)) {
-          return err(res, "لا توجد صلاحيات صرف لميزانية المصروفات");
+        if (!isAdmin && currentRole !== "محاسب") {
+          return err(res, "صلاحية مرفوضة لتقييد مصروفات عامة");
         }
 
         const { cat, desc, amount } = d;
-        if (!amount) return err(res, "المبلغ مطلوب");
+        if (!amount) return err(res, "المبلغ مطلوب للصرف");
 
         const val = Number(amount);
 
-        READ_CACHE.clear();
-        ACTIVE_FETCHES.clear();
-
-        // Save expense item
         db.expenses.push({
           date: now(),
           cat: cat || "أخرى",
@@ -2070,10 +1398,9 @@ app.post("/api", async (req: Request, res: Response) => {
           by: currentUser
         });
 
-        // Automatically deduct from Treasury Cashbox (as 'صادر')
         db.cashbox.push({
           date: now(),
-          desc: `صرف مصروف: ${desc || cat}`,
+          desc: `صرف بند مصروفات: ${desc || cat}`,
           type: "صادر",
           amount: val,
           ref: "EXPENSE",
@@ -2081,41 +1408,23 @@ app.post("/api", async (req: Request, res: Response) => {
         });
 
         writeDB(db);
-        return ok(res, { msg: "تم إرساء بند الصرف بنجاح وسداده من الخزينة تلقائياً" });
+        return ok(res, { msg: "تم تقييد المصروف بنجاح وسداده من الخزينة تلقائياً" });
       }
 
-      // ─────────────────────────────────────────────────────────────
-      // USER MANAGEMENT (Admin Only)
-      // ─────────────────────────────────────────────────────────────
-      case "getUsers": {
-        if (currentRole !== "مدير") {
-          return err(res, "صلاحية حصرية لمدير النظام");
-        }
-        const usersList = db.users.map((u: any, idx: number) => ({
-          row: idx + 1,
-          ...u
-        }));
-        return ok(res, { users: usersList });
+      case "expenses": {
+        const total = db.expenses.reduce((sum: number, x: any) => sum + Number(x.amount), 0);
+        return ok(res, { expenses: [...db.expenses].reverse(), total });
       }
 
       case "addUser":
       case "registerUser": {
-        if (currentRole !== "مدير") {
-          return err(res, "صلاحية حصرية لمدير النظام");
-        }
-        const { name, role, pass, email } = d;
+        if (!isAdmin) return err(res, "صلاحية حصرية لمدير النظام");
+        const { name, role, pass, email, perms } = d;
         if (!name || !pass || !role) return err(res, "بيانات مفقودة للتسجيل");
 
-        const userExists = db.users.find((u: any) => u.name.trim() === name.trim());
-        if (userExists) return err(res, "اسم المستخدم هذا مسجل مسبقاً");
-
-        const getPermissionsForRole = (r: string) => {
-          const rTrim = (r || "").trim();
-          if (rTrim === "مدير") return "كاملة";
-          if (rTrim === "مشرف") return "توزيع ومتابعة";
-          if (rTrim === "مندوب") return "معاينة الشحنات والتقفيل";
-          return "متابعة محدودة";
-        };
+        const normalizedInput = normalizeName(name);
+        const userExists = db.users.find((u: any) => normalizeName(u.name) === normalizedInput);
+        if (userExists) return err(res, "اسم المستخدم مسجل مسبقاً");
 
         const newUserObj = {
           name: name.trim(),
@@ -2123,26 +1432,24 @@ app.post("/api", async (req: Request, res: Response) => {
           pass: pass.trim(),
           active: "نعم",
           email: email || "",
-          perms: getPermissionsForRole(role)
+          perms: role === "مدير" ? "كاملة" : (perms || "مفتوحة")
         };
 
         db.users.push(newUserObj);
 
-        // If newly added role is a courier, add to courier profiles list
         if (role === "مندوب") {
           db.couriers.push({
             name: name.trim(),
             phone: "—",
-            commission: 20,
+            commission: 25,
             salary: 3000,
             region: "—",
             base_fixed_salary: 3000,
-            commission_success: 20,
-            commission_return: 0
+            commission_success: 25,
+            commission_return: 10
           });
         }
 
-        // If supplier, add to supplier profiles
         if (role === "مورد") {
           db.suppliers.push({
             name: name.trim(),
@@ -2153,19 +1460,16 @@ app.post("/api", async (req: Request, res: Response) => {
         }
 
         writeDB(db);
-        return ok(res, { msg: "تم إنشاء الحساب وإعداد الصلاحيات والملف المالي بنجاح" });
+        return ok(res, { msg: `تم إنشاء الحساب بنجاح وإلحاق الحساب بدليل العمل` });
       }
 
       case "updateUser": {
-        if (currentRole !== "مدير") {
-          return err(res, "صلاحية حصرية لمدير النظام");
-        }
-
+        if (!isAdmin) return err(res, "صلاحية حصرية لمدير النظام");
         const { row, role, active, perms } = d;
         const index = Number(row) - 1;
 
         if (index < 0 || index >= db.users.length) {
-          return err(res, "المستخدم غير موجود");
+          return err(res, "الحساب غير متوفر");
         }
 
         const target = db.users[index];
@@ -2174,12 +1478,9 @@ app.post("/api", async (req: Request, res: Response) => {
         target.perms = perms !== undefined ? perms : target.perms;
 
         writeDB(db);
-        return ok(res, { msg: "تم تحديث بيانات المستخدم بنجاح" });
+        return ok(res, { msg: "تم تحديث وحفظ تفاعلات الحساب بنجاح" });
       }
 
-      // ─────────────────────────────────────────────────────────────
-      // PHONE NUMBER PRE-SCREEN CONTROLS
-      // ─────────────────────────────────────────────────────────────
       case "checkPhone": {
         const phoneClean = fixPhone(d.phone || "");
         if (!phoneClean) return ok(res, { count: 0, rate: 0 });
@@ -2193,21 +1494,10 @@ app.post("/api", async (req: Request, res: Response) => {
         return ok(res, { count: matches.length, rate });
       }
 
-      // ─────────────────────────────────────────────────────────────
-      // RESOURCE MANAGEMENT / STATIC ARRAYS
-      // ─────────────────────────────────────────────────────────────
       case "getCouriers": {
-        const activeUsersCouriers = db.users.filter(
-          (u: any) =>
-            ((u.role || "").toString().trim() === "مندوب" ||
-              (u.role || "").toString().trim().indexOf("مندوب") > -1 ||
-              (u.name || "").toString().trim() === "عصفور") &&
-            u.active !== "لا"
-        );
-        const list = activeUsersCouriers.map((u: any) => {
-          const profile = db.couriers.find(
-            (c: any) => c.name.toString().trim() === u.name.toString().trim()
-          ) || {};
+        const activeCouriers = db.users.filter((u: any) => (u.role === "مندوب" || u.name === "عصفور") && u.active !== "لا");
+        const list = activeCouriers.map((u: any) => {
+          const profile = db.couriers.find((c: any) => normalizeName(c.name) === normalizeName(u.name)) || {};
           return {
             name: u.name,
             phone: profile.phone || "—",
@@ -2223,63 +1513,129 @@ app.post("/api", async (req: Request, res: Response) => {
       }
 
       case "updateCourier": {
-        if (!["مدير", "محاسب"].includes(currentRole)) {
-          return err(res, "صلاحية حصرية لإدارة الحسابات");
+        if (!isAdmin && currentRole !== "محاسب") {
+          return err(res, "صلاحية حصرية للادارة والادارة المالية");
         }
         const { name, phone, region, base_fixed_salary, commission_success, commission_return } = d;
-        if (!name) return err(res, "اسم المندوب مطلوب لتحديث بيانات الملف المالي");
+        if (!name) return err(res, "الاسم مطلوب لتعديل الملف المالي");
 
-        const trimmedName = name.toString().trim();
-        let courier = db.couriers.find(
-          (c: any) => c.name && c.name.toString().trim().toLowerCase() === trimmedName.toLowerCase()
-        );
+        const normalizedC = normalizeName(name);
+        let courier = db.couriers.find((c: any) => normalizeName(c.name) === normalizedC);
 
         if (!courier) {
           courier = {
-            name: trimmedName,
+            name: name.toString().trim(),
             phone: phone || "—",
-            salary: Number(base_fixed_salary !== undefined ? base_fixed_salary : 3000),
-            commission: Number(commission_success !== undefined ? commission_success : 25),
+            salary: Number(base_fixed_salary || 3000),
+            commission: Number(commission_success || 25),
             region: region || "—",
-            base_fixed_salary: Number(base_fixed_salary !== undefined ? base_fixed_salary : 3000),
-            commission_success: Number(commission_success !== undefined ? commission_success : 25),
-            commission_return: Number(commission_return !== undefined ? commission_return : 10)
+            base_fixed_salary: Number(base_fixed_salary || 3000),
+            commission_success: Number(commission_success || 25),
+            commission_return: Number(commission_return || 10)
           };
           db.couriers.push(courier);
         } else {
           courier.phone = phone || courier.phone || "—";
           courier.region = region || courier.region || "—";
-          courier.salary = Number(base_fixed_salary !== undefined ? base_fixed_salary : (courier.salary || 3000));
-          courier.commission = Number(commission_success !== undefined ? commission_success : (courier.commission || 25));
-          courier.base_fixed_salary = Number(base_fixed_salary !== undefined ? base_fixed_salary : (courier.base_fixed_salary || 3000));
-          courier.commission_success = Number(commission_success !== undefined ? commission_success : (courier.commission_success || 25));
-          courier.commission_return = Number(commission_return !== undefined ? commission_return : (courier.commission_return || 10));
+          courier.salary = Number(base_fixed_salary !== undefined ? base_fixed_salary : courier.salary);
+          courier.commission = Number(commission_success !== undefined ? commission_success : courier.commission);
+          courier.base_fixed_salary = Number(base_fixed_salary !== undefined ? base_fixed_salary : courier.base_fixed_salary);
+          courier.commission_success = Number(commission_success !== undefined ? commission_success : courier.commission_success);
+          courier.commission_return = Number(commission_return !== undefined ? commission_return : courier.commission_return);
         }
 
         writeDB(db);
+        return ok(res, { msg: `تم تحديث ملف المندوب المالي ${name} بنجاح` });
+      }
 
-        // Audit Log entry inside central system
-        if (!db.auditLog) db.auditLog = [];
-        db.auditLog.push({
-          user: currentUser,
-          type: "تعديل إعدادات مندوب",
-          dateTime: now(),
-          oldVal: "—",
-          newVal: `تم تعديل المندوب ${name}: الراتب: ${base_fixed_salary}، نجاح: ${commission_success}، مرتجع: ${commission_return}`,
-          reason: "تحديث إعدادات الراتب والعمولة"
+      case "dailySettlement": {
+        if (!isAdmin && currentRole !== "محاسب") {
+          return err(res, "صلاحية مخصصة للمدير المالي أو المحاسب لتأكيد التقفيل اليومي");
+        }
+
+        const tNow = now();
+        const activeOrders = db.orders || [];
+
+        // Archive fully processed/delivered/returned orders for the day
+        const ordersToArchive = activeOrders.filter((o: any) => {
+          const s = o.status;
+          return s === "تم التسليم" || s === "مسلم" || s === "تم تسليم المرتجع للمورد" || s === "مرتجع تم تسليمه للمورد";
         });
 
-        return ok(res, { msg: "تم تحديث وحفظ بيانات المندوب بنجاح" });
+        // Filter out from live
+        db.orders = activeOrders.filter((o: any) => {
+          const s = o.status;
+          return !(s === "تم التسليم" || s === "مسلم" || s === "تم تسليم المرتجع للمورد" || s === "مرتجع تم تسليمه للمورد");
+        });
+
+        if (!db.archivedOrders) db.archivedOrders = [];
+        db.archivedOrders.push(...ordersToArchive);
+
+        // Calculate statistics
+        const deliveredOrders = ordersToArchive.filter((o: any) => o.status === "تم التسليم" || o.status === "مسلم");
+        const returnedOrders = ordersToArchive.filter((o: any) => o.status === "تم تسليم المرتجع للمورد" || o.status === "مرتجع تم تسليمه للمورد");
+
+        const totalDelivered = deliveredOrders.length;
+        const totalReturned = returnedOrders.length;
+
+        const deliveredGoodsValue = deliveredOrders.reduce((sum: number, o: any) => sum + Number(o.prodPrice || 0), 0);
+        const deliveredShippingValue = deliveredOrders.reduce((sum: number, o: any) => sum + Number(o.shipPrice || 0), 0);
+        const totalCODCollected = deliveredOrders.reduce((sum: number, o: any) => sum + Number(o.totalCOD || 0), 0);
+
+        // Seal current cashbox balance
+        let sealedBalance = 0;
+        for (const item of (db.cashbox || [])) {
+          const isDeposit = ["وارد", "تحصيل مندوب", "استلام عهدة مندوب", "إيداع", "تسوية زائد"].includes(item.type);
+          sealedBalance += isDeposit ? Number(item.amount || 0) : -Number(item.amount || 0);
+        }
+
+        const closingObj = {
+          date: tNow,
+          settledBy: currentUser,
+          ordersArchivedCount: ordersToArchive.length,
+          totalDelivered,
+          totalReturned,
+          deliveredGoodsValue,
+          deliveredShippingValue,
+          totalCODCollected,
+          sealedBalance,
+        };
+
+        if (!db.dailyClosings) db.dailyClosings = [];
+        db.dailyClosings.push(closingObj);
+
+        // Log transaction in Cashbox
+        db.cashbox.push({
+          date: tNow,
+          desc: `تقفيل مالي وإغلاق عهدة اليوم وجرد الخزنة (بواسطة: ${currentUser}) - رصيد مغلق: ${sealedBalance}ج.م`,
+          type: "تقفيل خزينة",
+          amount: sealedBalance,
+          ref: "DAILY-SEAL",
+          addedBy: currentUser
+        });
+
+        writeDB(db);
+        return ok(res, {
+          msg: "تم تفعيل وجدولة التقفيل اليومي وإغلاق عهدة اليوم بنجاح وتهيئة النظام لليوم التالي",
+          summary: closingObj
+        });
+      }
+
+      case "getDailyClosings": {
+        return ok(res, { dailyClosings: db.dailyClosings || [] });
       }
 
       case "getSuppliers": {
-        return ok(res, { suppliers: db.suppliers });
+        return ok(res, { suppliers: db.suppliers, supplierLedger: db.supplierLedger || [] });
       }
 
       case "report": {
+        // Limited for admins or supervisors as reports are global summaries
+        if (!isAdmin && currentRole !== "مشرف" && currentRole !== "محاسب") {
+          return err(res, "صلاحية السحوبات والتقارير العامة محظورة لغير الإدارة العامة");
+        }
         const { type, courier, supplier } = d;
         const ordersList = db.orders;
-        const todayDate = tod();
         let list = [];
 
         switch (type) {
@@ -2299,24 +1655,58 @@ app.post("/api", async (req: Request, res: Response) => {
             list = ordersList;
         }
 
-        if (courier) list = list.filter((o: any) => o.courier === courier);
-        if (supplier) list = list.filter((o: any) => o.supplier === supplier);
+        if (courier) list = list.filter((o: any) => normalizeName(o.courier) === normalizeName(courier));
+        if (supplier) list = list.filter((o: any) => normalizeName(o.supplier) === normalizeName(supplier));
 
         return ok(res, { orders: list, count: list.length });
       }
 
       default:
-        return err(res, `العملية المطلوبة ${d.action} غير مدعومة`);
+        return err(res, `العملية المطلوبة ${d.action} غير مدعومة محلياً`);
     }
   } catch (error: any) {
     console.error("SERVER DISPATCH ERROR:", error);
-    return err(res, "حدث خطأ داخلي في الخادم: " + error.message);
+    return err(res, "حدث خطأ غير متوقع بالخادم: " + error.message);
+  }
+}
+
+app.post("/api", async (req: Request, res: Response) => {
+  const d = req.body;
+  if (!d || !d.action) {
+    return err(res, "Missing action parameter");
+  }
+
+  // Clear cache for write actions
+  const isWriteAction = [
+    "addOrder", "addBulk", "updateStatus", "updateOrder", "deleteOrder", 
+    "bulkUpdate", "addSupplierPayment", "addCourierAdjustment", "addCashbox", 
+    "addExpense", "addUser", "registerUser", "updateUser", "addDailyClosing", 
+    "updateCourier", "dailySettlement"
+  ].includes(d.action);
+
+  if (isWriteAction) {
+    READ_CACHE.clear();
+    ACTIVE_FETCHES.clear();
+    return new Promise<void>((resolve) => {
+      apiWriteQueue = apiWriteQueue.then(async () => {
+        try {
+          await handleApiRequest(req, res);
+        } catch (e: any) {
+          console.error("Queued write action failed:", e);
+          if (!res.headersSent) {
+            err(res, "حدث خطأ غير متوقع بالخادم أثناء معالجة العملية المتزامنة: " + e.message);
+          }
+        } finally {
+          resolve();
+        }
+      });
+    });
+  } else {
+    return handleApiRequest(req, res);
   }
 });
 
-// ─────────────────────────────────────────────────────────────
-// MIDDLEWARES & DEV SERVERS INGRESS
-// ─────────────────────────────────────────────────────────────
+// Serve frontend assets or integrate Vite in development
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const { createServer: createViteServer } = await import("vite");
@@ -2334,7 +1724,7 @@ async function startServer() {
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`🚚 Friend Plus Logistics is running on http://localhost:${PORT}`);
+    console.log(`🚚 Friend Plus Logistics is operating on http://localhost:${PORT}`);
   });
 }
 
