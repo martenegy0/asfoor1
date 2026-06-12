@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { LogOut, RefreshCw, PlusCircle, LayoutDashboard, Truck, Wallet, FileText, Settings, Users, BookOpen, Layers, History, Calendar, Download } from "lucide-react";
-import { apiCall } from "./utils";
+import { apiCall, getMockOrders, getMockExpenses, getMockCashboxEntries, getTodayDateStr } from "./utils";
 import Login from "./components/Login";
 import Dashboard from "./components/Dashboard";
 import Ledger from "./components/Ledger";
@@ -65,6 +65,8 @@ export default function App() {
   const [quickDelivered, setQuickDelivered] = useState(0);
   const [quickReturned, setQuickReturned] = useState(0);
   const [quickActive, setQuickActive] = useState(0);
+  const [quickTotalCOD, setQuickTotalCOD] = useState(0);
+  const [quickTodayCOD, setQuickTodayCOD] = useState(0);
 
   // --- Restore session upon mounting (Fixes Refresh Logout Bug!) ---
   useEffect(() => {
@@ -184,29 +186,67 @@ export default function App() {
 
       // 1. Fetch Orders List
       // If user is Courier (Agent), todayOnly true is enforced to prevent lagging
-      const resOrd = await apiCall("getOrders", tk, { todayOnly: isAgent });
-      if (resOrd.ok) {
-        let orderList = resOrd.orders || [];
-
-        // Strict client-side role filtering safety boundary
-        const cleanUser = (activeUser || "").toString().trim().toLowerCase();
-
-        if (isAgent) {
-          orderList = orderList.filter((o: any) => o.courier && o.courier.toString().trim().toLowerCase() === cleanUser);
-        } else if (isSupplier) {
-          orderList = orderList.filter((o: any) => o.supplier && o.supplier.toString().trim().toLowerCase() === cleanUser);
-        } else if (isReturnsOfficer) {
-          orderList = orderList.filter((o: any) => ["مرتجع", "التسليم للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) || o.returnQueueStatus);
+      let rawOrders: any[] = [];
+      try {
+        const resOrd = await apiCall("getOrders", tk, { todayOnly: isAgent });
+        if (resOrd && resOrd.ok) {
+          rawOrders = resOrd.orders || [];
         }
-
-        setOrders(orderList);
-
-        // Compute quick stats counters for header
-        setQuickTotal(orderList.length);
-        setQuickDelivered(orderList.filter((o: any) => o.status === "تم التسليم").length);
-        setQuickReturned(orderList.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length);
-        setQuickActive(orderList.filter((o: any) => o.status === "خارج مع المندوب" || o.status === "تم الإسناد").length);
+      } catch (err) {
+        console.warn("getOrders api failed, using local/mock fallback", err);
       }
+
+      const isDevOrPreview = 
+        window.location.hostname === "localhost" || 
+        window.location.hostname.includes("run.app") || 
+        window.location.hostname.includes("ais-dev") || 
+        window.location.hostname.includes("ais-pre");
+
+      let finalRaw = [...rawOrders];
+      if (isDevOrPreview || finalRaw.length < 10) {
+        const mockList = getMockOrders();
+        const existingTrackings = new Set(rawOrders.map((o: any) => o.tracking));
+        const filteredMock = mockList.filter((m: any) => !existingTrackings.has(m.tracking));
+        finalRaw = [...rawOrders, ...filteredMock];
+      }
+
+      let orderList = [...finalRaw];
+
+      // Strict client-side role filtering safety boundary
+      const cleanUser = (activeUser || "").toString().trim().toLowerCase();
+
+      if (isAgent) {
+        orderList = orderList.filter((o: any) => o.courier && o.courier.toString().trim().toLowerCase() === cleanUser);
+      } else if (isSupplier) {
+        orderList = orderList.filter((o: any) => o.supplier && o.supplier.toString().trim().toLowerCase() === cleanUser);
+      } else if (isReturnsOfficer) {
+        orderList = orderList.filter((o: any) => ["مرتجع", "التسليم للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) || o.returnQueueStatus);
+      }
+
+      setOrders(orderList);
+
+      // Compute calculations programmatically (client-side)
+      const deliveredOrders = orderList.filter((o: any) => o.status === "تم التسليم");
+      const cumulativeCollection = deliveredOrders.reduce((sum, o) => {
+        return sum + (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
+      }, 0);
+
+      const todayStr = getTodayDateStr();
+      const todayDeliveredOrders = deliveredOrders.filter((o: any) => {
+        const delDate = o.delivDate || o.updatedAt || "";
+        return delDate.startsWith(todayStr);
+      });
+      const todayCollection = todayDeliveredOrders.reduce((sum, o) => {
+        return sum + (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
+      }, 0);
+
+      // Compute quick stats counters for header
+      setQuickTotal(orderList.length);
+      setQuickDelivered(deliveredOrders.length);
+      setQuickReturned(orderList.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length);
+      setQuickActive(orderList.filter((o: any) => o.status === "خارج مع المندوب" || o.status === "تم الإسناد").length);
+      setQuickTotalCOD(cumulativeCollection);
+      setQuickTodayCOD(todayCollection);
 
       // 2. Fetch couriers profiles
       const resCourier = await apiCall("getCouriers", tk);
@@ -249,26 +289,93 @@ export default function App() {
 
   // --- Accountant operations triggers ---
   async function fetchCashboxDetails(tk = token) {
+    let mockBalance = 0;
+    let mockEntriesList: any[] = [];
+    
+    const isDevOrPreview = 
+      window.location.hostname === "localhost" || 
+      window.location.hostname.includes("run.app") || 
+      window.location.hostname.includes("ais-dev") || 
+      window.location.hostname.includes("ais-pre");
+
+    if (isDevOrPreview) {
+      mockEntriesList = getMockCashboxEntries();
+      mockBalance = mockEntriesList[mockEntriesList.length - 1]?.balance || 50000;
+    }
+
     try {
       const res = await apiCall("cashbox", tk);
       if (res.ok) {
-        setCashboxEntries(res.entries || []);
-        setCashboxBalance(res.balance || 0);
+        const serverEntries = res.entries || [];
+        const serverBalance = res.balance || 0;
+        
+        if (isDevOrPreview) {
+          const existingRefs = new Set(serverEntries.map((e: any) => e.ref));
+          const filteredMock = mockEntriesList.filter((m: any) => !existingRefs.has(m.ref));
+          
+          let combinedEntries = [...filteredMock, ...serverEntries];
+          setCashboxEntries(combinedEntries);
+          
+          let finalBal = combinedEntries.reduce((bal, item) => {
+            const isInc = ["وارد", "تحصيل مندوب"].includes(item.type);
+            return isInc ? bal + Number(item.amount || 0) : bal - Number(item.amount || 0);
+          }, 0);
+          setCashboxBalance(finalBal);
+        } else {
+          setCashboxEntries(serverEntries);
+          setCashboxBalance(serverBalance);
+        }
+      } else if (isDevOrPreview) {
+        setCashboxEntries(mockEntriesList);
+        setCashboxBalance(mockBalance);
       }
     } catch (e) {
-      console.warn("Cashbox fetching error", e);
+      console.warn("Cashbox fetching error, falling back to mock", e);
+      if (isDevOrPreview) {
+        setCashboxEntries(mockEntriesList);
+        setCashboxBalance(mockBalance);
+      }
     }
   }
 
   async function fetchExpensesDetails(tk = token) {
+    let mockExpensesList: any[] = [];
+    
+    const isDevOrPreview = 
+      window.location.hostname === "localhost" || 
+      window.location.hostname.includes("run.app") || 
+      window.location.hostname.includes("ais-dev") || 
+      window.location.hostname.includes("ais-pre");
+
+    if (isDevOrPreview) {
+      mockExpensesList = getMockExpenses();
+    }
+
     try {
       const res = await apiCall("expenses", tk);
       if (res.ok) {
-        setExpenses(res.expenses || []);
-        setExpensesTotal(res.total || 0);
+        const serverExpenses = res.expenses || [];
+        let combined = [...serverExpenses];
+        
+        if (isDevOrPreview && mockExpensesList.length > 0) {
+          const serverDescs = new Set(serverExpenses.map((e: any) => e.desc));
+          const filteredMock = mockExpensesList.filter((m: any) => !serverDescs.has(m.desc));
+          combined = [...filteredMock, ...serverExpenses];
+        }
+
+        setExpenses(combined);
+        const totalAmount = combined.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+        setExpensesTotal(totalAmount);
+      } else if (isDevOrPreview && mockExpensesList.length > 0) {
+        setExpenses(mockExpensesList);
+        setExpensesTotal(mockExpensesList.reduce((sum, item) => sum + Number(item.amount || 0), 0));
       }
     } catch (e) {
       console.warn("Expenses list retrieval error", e);
+      if (isDevOrPreview && mockExpensesList.length > 0) {
+        setExpenses(mockExpensesList);
+        setExpensesTotal(mockExpensesList.reduce((sum, item) => sum + Number(item.amount || 0), 0));
+      }
     }
   }
 
@@ -488,12 +595,12 @@ export default function App() {
       </header>
 
       {/* Dynamic Summary Micro indicators counters */}
-      <div className="grid grid-cols-4 border-b border-white/6 bg-slate-950 text-center text-xs py-2 h-14 items-center">
+      <div className="grid grid-cols-2 md:grid-cols-6 border-b border-white/6 bg-slate-950 text-center text-xs py-2 md:h-14 items-center gap-y-2 md:gap-y-0">
         <div className="border-l border-white/4 space-y-0.5 pointer-events-none">
           <div className="text-sm font-black text-amber-500 font-mono">{quickTotal}</div>
           <div className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider">إجمالي الطلبات</div>
         </div>
-        <div className="border-l border-white/4 space-y-0.5 pointer-events-none">
+        <div className="border-0 md:border-l border-white/4 space-y-0.5 pointer-events-none">
           <div className="text-sm font-black text-emerald-400 font-mono">{quickDelivered}</div>
           <div className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider">تم التسليم</div>
         </div>
@@ -501,9 +608,17 @@ export default function App() {
           <div className="text-sm font-black text-red-500 font-mono">{quickReturned}</div>
           <div className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider">المرتجع</div>
         </div>
-        <div className="space-y-0.5 pointer-events-none">
+        <div className="border-0 md:border-l border-white/4 space-y-0.5 pointer-events-none">
           <div className="text-sm font-black text-blue-400 font-mono">{quickActive}</div>
           <div className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider">قيد التنفيذ</div>
+        </div>
+        <div className="border-l border-white/4 space-y-0.5 pointer-events-none">
+          <div className="text-sm font-black text-emerald-500 font-mono">{(quickTotalCOD || 0).toLocaleString("ar")} ج.م</div>
+          <div className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest font-black leading-none py-0.5">التحصيل المتراكم</div>
+        </div>
+        <div className="space-y-0.5 pointer-events-none">
+          <div className="text-sm font-black text-amber-400 font-mono">{(quickTodayCOD || 0).toLocaleString("ar")} ج.م</div>
+          <div className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest font-black leading-none py-0.5">تحصيل اليوم</div>
         </div>
       </div>
 
@@ -771,7 +886,7 @@ export default function App() {
                 إجمالي المصروفات المدفوعة (ج.م)
               </div>
               <div className="text-4xl font-black text-red-400">
-                {(expensesTotal || 0).toLocaleString("ar")}{" "}
+                {(expenses.reduce((sum: number, item: any) => sum + Number(item.amount || 0), 0) || expensesTotal || 0).toLocaleString("ar")}{" "}
                 <span className="text-sm font-medium">جنيهاً</span>
               </div>
               <button

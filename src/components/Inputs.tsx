@@ -19,7 +19,7 @@ export default function Inputs({ token, role, user, onSuccess }: InputsProps) {
   const [formSupplier, setFormSupplier] = useState(isSupplier ? user : "");
   const [formCustomer, setFormCustomer] = useState("");
   const [formPhone, setFormPhone] = useState("");
-  const [formPhone2, setFormPhone2] = useState("");
+  const [formProductType, setFormProductType] = useState("");
   const [formGov, setFormGov] = useState("القاهرة");
   const [formRegion, setFormRegion] = useState("");
   const [formAddress, setFormAddress] = useState("");
@@ -33,13 +33,26 @@ export default function Inputs({ token, role, user, onSuccess }: InputsProps) {
   const [bulkSupplier, setBulkSupplier] = useState(isSupplier ? user : "");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [suppliersList, setSuppliersList] = useState<any[]>([]);
+  const [suppliersList, setSuppliersList] = useState<any[]>(() => {
+    try {
+      const cached = localStorage.getItem("cached_suppliers");
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
+
   React.useEffect(() => {
     async function loadSuppliers() {
       try {
         const res = await apiCall("getSuppliers", token);
         if (res.ok && res.suppliers) {
           setSuppliersList(res.suppliers);
+          try {
+            localStorage.setItem("cached_suppliers", JSON.stringify(res.suppliers));
+          } catch (e) {
+            console.warn("Storage write blocked", e);
+          }
         }
       } catch (err) {
         console.error("Failed to load suppliers in Inputs", err);
@@ -116,7 +129,8 @@ export default function Inputs({ token, role, user, onSuccess }: InputsProps) {
           supplier: isSupplier ? user : formSupplier.trim(),
           customer: formCustomer.trim(),
           phone: phClean,
-          phone2: fixPhoneJS(formPhone2),
+          phone2: "", // phone2 is sunsetted
+          prodType: formProductType.trim(),
           gov: formGov,
           region: formRegion.trim(),
           address: formAddress.trim(),
@@ -143,7 +157,7 @@ export default function Inputs({ token, role, user, onSuccess }: InputsProps) {
   function resetForm() {
     setFormCustomer("");
     setFormPhone("");
-    setFormPhone2("");
+    setFormProductType("");
     setFormRegion("");
     setFormAddress("");
     setFormProdPrice("");
@@ -417,13 +431,13 @@ export default function Inputs({ token, role, user, onSuccess }: InputsProps) {
 
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
             <div className="space-y-1">
-              <label className="block text-[10px] font-extrabold text-slate-400">رقم الهاتف البديل للعميل</label>
+              <label className="block text-[10px] font-extrabold text-slate-400">نوع المنتج*</label>
               <input
-                type="tel"
-                value={formPhone2}
-                onChange={(e) => setFormPhone2(e.target.value)}
-                placeholder="تليفون بديل (اختياري)..."
-                className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-xl px-4 py-2.5 text-xs focus:border-amber-500/30 outline-none text-right font-mono"
+                type="text"
+                value={formProductType}
+                onChange={(e) => setFormProductType(e.target.value)}
+                placeholder="مثال: ملابس، أحذية..."
+                className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-xl px-4 py-2.5 text-xs focus:border-amber-500/30 outline-none text-right"
               />
             </div>
 
@@ -488,11 +502,11 @@ export default function Inputs({ token, role, user, onSuccess }: InputsProps) {
           </div>
 
           <div className="space-y-1">
-            <label className="block text-[10px] font-extrabold text-slate-400">ملاحظات إضافية</label>
+            <label className="block text-[10px] font-extrabold text-slate-400">ملاحظات الشحنة</label>
             <textarea
               value={formNotes}
               onChange={(e) => setFormNotes(e.target.value)}
-              placeholder="اكتب أي ملاحظة للمندوب..."
+              placeholder="اكتب أي ملاحظات للشركة أو مندوب الشحن..."
               rows={2}
               className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-xl px-4 py-2.5 text-xs focus:border-amber-500/30 outline-none text-right"
             />

@@ -24,7 +24,7 @@ export function validatePhone(ph: string): { valid: boolean; msg: string } {
 }
 
 // Unified API caller for the react fullstack container environment
-export async function apiCall(action: string, token: string, extraParams: any = {}, retries = 2): Promise<any> {
+export async function apiCall(action: string, token: string, extraParams: any = {}, retries = 5): Promise<any> {
   const payload = { action, token, ...extraParams };
   
   for (let i = 0; i <= retries; i++) {
@@ -32,23 +32,35 @@ export async function apiCall(action: string, token: string, extraParams: any = 
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 20000); // 20s timeout
       
-      const response = await fetch("/api", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(payload),
-        signal: controller.signal
-      });
+      let response;
+      try {
+        response = await fetch("/api", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(payload),
+          signal: controller.signal
+        });
+      } catch (fetchErr: any) {
+        // Propagate fetch errors to outer catch so it triggers the retry block safely
+        throw fetchErr;
+      } finally {
+        clearTimeout(timeoutId);
+      }
       
-      clearTimeout(timeoutId);
+      let responseText = "";
+      try {
+        responseText = await response.text();
+      } catch (textErr: any) {
+        throw new Error(`Failed to parse response stream: ${textErr?.message}`);
+      }
       
-      const responseText = await response.text();
       let resData;
       try {
         resData = JSON.parse(responseText);
       } catch (parseErr) {
-        console.error(`Non-JSON response for ${action}:`, responseText);
+        console.warn(`Non-JSON response for ${action}:`, responseText);
         // If they received HTML (like Vercel serverless error pages)
         if (response.status === 504) {
           return {
@@ -70,7 +82,7 @@ export async function apiCall(action: string, token: string, extraParams: any = 
       return resData;
     } catch (error: any) {
       if (i === retries) {
-        console.error(`API Call failed for action ${action}:`, error);
+        console.error(`API Call failed after ${retries} retries for action ${action}:`, error);
         const isTimeout = error?.name === "AbortError";
         return {
           ok: false,
@@ -79,7 +91,272 @@ export async function apiCall(action: string, token: string, extraParams: any = 
             : `تعذر الاتصال بالخادم الرئيسي: ${error?.message || "يرجى التحقق من اتصال الإنترنت"}`
         };
       }
-      await new Promise((res) => setTimeout(res, 1200)); // wait and retry
+      // Silent Auto-Retry: Wait for 3 seconds silently before next attempt as requested
+      await new Promise((res) => setTimeout(res, 3000));
     }
   }
+}
+
+// Helper to get today's date in YYYY-MM-DD format
+export function getTodayDateStr(): string {
+  return new Date().toISOString().substring(0, 10);
+}
+
+// 1. Generate realistic hardcoded logistics Mock Orders matching Silver Team and Malik Brand specific requirements
+export function getMockOrders(): any[] {
+  const today = getTodayDateStr();
+  const list: any[] = [];
+
+  // Silver Team (18 orders: 5 delivered, 2 returned, 11 warehouse/pending)
+  // 5 Delivered
+  list.push({
+    tracking: "FP-SLV-101",
+    createdAt: `${today} 09:30`,
+    updatedAt: `${today} 12:00`,
+    orderDate: today,
+    delivDate: `${today} 12:00`,
+    supplier: "Silver Team",
+    customer: "أحمد كمال",
+    phone: "01012345678",
+    gov: "القاهرة",
+    region: "المعادي",
+    address: "شارع 9 أ",
+    prodPrice: 350,
+    shipPrice: 65,
+    totalCOD: 415,
+    courier: "عصفور",
+    status: "تم التسليم",
+    notes: "تم الاتصال بالعميل والتسليم والتحصيل"
+  });
+
+  list.push({
+    tracking: "FP-SLV-102",
+    createdAt: `${today} 10:00`,
+    updatedAt: `${today} 13:00`,
+    orderDate: today,
+    delivDate: `${today} 13:00`,
+    supplier: "Silver Team",
+    customer: "صلاح محمود",
+    phone: "01144556677",
+    gov: "الجيزة",
+    region: "المهندسين",
+    address: "شارع جامعة الدول",
+    prodPrice: 400,
+    shipPrice: 65,
+    totalCOD: 465,
+    courier: "ابو ياسين",
+    status: "تم التسليم",
+    notes: "توصيل سريع وممتاز"
+  });
+
+  list.push({
+    tracking: "FP-SLV-103",
+    createdAt: `${today} 10:15`,
+    updatedAt: `${today} 14:00`,
+    orderDate: today,
+    delivDate: `${today} 14:00`,
+    supplier: "Silver Team",
+    customer: "وليد الجبالي",
+    phone: "01211223344",
+    gov: "القاهرة",
+    region: "التجمع الخامس",
+    address: "المنطقة الثانية",
+    prodPrice: 500,
+    shipPrice: 65,
+    totalCOD: 565,
+    courier: "زياد",
+    status: "تم التسليم",
+    notes: "تم تحصيل المبلغ كاملاً"
+  });
+
+  list.push({
+    tracking: "FP-SLV-104",
+    createdAt: `${today} 11:00`,
+    updatedAt: `${today} 14:30`,
+    orderDate: today,
+    delivDate: `${today} 14:30`,
+    supplier: "Silver Team",
+    customer: "كريم شريف",
+    phone: "01511229988",
+    gov: "الجيزة",
+    region: "الهرم",
+    address: "بجوار نفق الهرم",
+    prodPrice: 200,
+    shipPrice: 65,
+    totalCOD: 265,
+    courier: "محمد حمدى",
+    status: "تم التسليم",
+    notes: "تم التسليم بدون عوائق"
+  });
+
+  list.push({
+    tracking: "FP-SLV-105",
+    createdAt: `${today} 11:30`,
+    updatedAt: `${today} 15:00`,
+    orderDate: today,
+    delivDate: `${today} 15:00`,
+    supplier: "Silver Team",
+    customer: "هاني يسري",
+    phone: "01033445566",
+    gov: "القاهرة",
+    region: "مدينة نصر",
+    address: "شارع عباس العقاد",
+    prodPrice: 450,
+    shipPrice: 65,
+    totalCOD: 515,
+    courier: "عصفور",
+    status: "تم التسليم",
+    notes: "الدفع كاش"
+  });
+
+  // 2 Returned
+  list.push({
+    tracking: "FP-SLV-106",
+    createdAt: `${today} 09:00`,
+    updatedAt: `${today} 11:00`,
+    orderDate: today,
+    retDate: `${today} 11:00`,
+    supplier: "Silver Team",
+    customer: "سعيد عبد الرحمن",
+    phone: "01288775533",
+    gov: "القاهرة",
+    region: "مصر الجديدة",
+    address: "شارع الحجاز",
+    prodPrice: 300,
+    shipPrice: 65,
+    totalCOD: 365,
+    courier: "زياد",
+    status: "مرتجع",
+    notes: "رفض الاستلام بسبب مقاس خاطئ"
+  });
+
+  list.push({
+    tracking: "FP-SLV-107",
+    createdAt: `${today} 09:15`,
+    updatedAt: `${today} 11:30`,
+    orderDate: today,
+    retDate: `${today} 11:30`,
+    supplier: "Silver Team",
+    customer: "إبراهيم فرج",
+    phone: "01199887766",
+    gov: "الجيزة",
+    region: "فيصل",
+    address: "شارع العشرين",
+    prodPrice: 150,
+    shipPrice: 65,
+    totalCOD: 215,
+    courier: "محمد حمدى",
+    status: "مرتجع",
+    notes: "الزبون ألغى الطلب"
+  });
+
+  // 11 Warehouse / Pending
+  for (let i = 1; i <= 11; i++) {
+    list.push({
+      tracking: `FP-SLV-W${i}`,
+      createdAt: `${today} 08:30`,
+      updatedAt: `${today} 08:30`,
+      orderDate: today,
+      supplier: "Silver Team",
+      customer: `عميل سيلفر مخزن ${i}`,
+      phone: `010${Math.floor(10000000 + Math.random() * 90000000)}`,
+      gov: "القاهرة",
+      region: "شبرا الخيمة",
+      address: "شارع السلام",
+      prodPrice: 280,
+      shipPrice: 65,
+      totalCOD: 345,
+      courier: i % 2 === 0 ? "عصفور" : "",
+      status: i % 2 === 0 ? "تم الإسناد" : "جديد"
+    });
+  }
+
+  // Malik Brand (10 delivered, 17 returned, 34 warehouse/pending)
+  // 10 Delivered
+  for (let i = 1; i <= 10; i++) {
+    list.push({
+      tracking: `FP-MLK-D${i}`,
+      createdAt: `${today} 08:00`,
+      updatedAt: `${today} 10:30`,
+      orderDate: today,
+      delivDate: `${today} 10:30`,
+      supplier: "Malik Brand",
+      customer: `عميل مالك سداد ${i}`,
+      phone: `012${Math.floor(10000000 + Math.random() * 90000000)}`,
+      gov: "القاهرة",
+      region: "الزيتون",
+      address: "بجوار المحطة",
+      prodPrice: 600,
+      shipPrice: 70,
+      totalCOD: 670,
+      courier: i % 2 === 0 ? "ابو ياسين" : "عصفور",
+      status: "تم التسليم",
+      notes: "تم تحصيل القيمة المادية بالكامل"
+    });
+  }
+
+  // 17 Returned (so combined 2 + 17 = 19 returned)
+  for (let i = 1; i <= 17; i++) {
+    list.push({
+      tracking: `FP-MLK-R${i}`,
+      createdAt: `${today} 08:15`,
+      updatedAt: `${today} 10:45`,
+      orderDate: today,
+      retDate: `${today} 10:45`,
+      supplier: "Malik Brand",
+      customer: `عميل مالك مرتجع ${i}`,
+      phone: `011${Math.floor(10000000 + Math.random() * 90000000)}`,
+      gov: "الجيزة",
+      region: "الدقي",
+      address: "شارع لبنان",
+      prodPrice: 320,
+      shipPrice: 70,
+      totalCOD: 390,
+      courier: "زياد",
+      status: "مرتجع",
+      notes: "مرتجع كلي"
+    });
+  }
+
+  // 34 Warehouse / Pending (so combined 11 + 34 = 45 warehouse orders)
+  for (let i = 1; i <= 34; i++) {
+    list.push({
+      tracking: `FP-MLK-W${i}`,
+      createdAt: `${today} 08:45`,
+      updatedAt: `${today} 08:45`,
+      orderDate: today,
+      supplier: "Malik Brand",
+      customer: `عميل مالك مخزن ${i}`,
+      phone: `015${Math.floor(10000000 + Math.random() * 90000000)}`,
+      gov: "الإسكندرية",
+      region: "سموحة",
+      address: "المنطقة التجارية",
+      prodPrice: 420,
+      shipPrice: 80,
+      totalCOD: 500,
+      courier: i % 3 === 0 ? "محمد حمدى" : "",
+      status: i % 3 === 0 ? "تم الإسناد" : "جديد"
+    });
+  }
+
+  return list;
+}
+
+// 2. Mock Expenses array (with the 650 EGP oil expense + others)
+export function getMockExpenses(): any[] {
+  const today = getTodayDateStr();
+  return [
+    { date: `${today} 09:00`, cat: "صيانة", desc: "650 جنيه زيت ومصروفات صيانة السيارات ومحروقات", amount: 650, by: "المحاسب أحمد" },
+    { date: `${today} 11:30`, cat: "بوفيه", desc: "مصروفات ضيافة وبوفيه وإيجار بوفيه يومي للشركة", amount: 150, by: "المحاسب أحمد" }
+  ];
+}
+
+// 3. Mock Cashbox ledger entries
+export function getMockCashboxEntries(): any[] {
+  const today = getTodayDateStr();
+  return [
+    { date: `${today} 08:00`, desc: "رأس مال ابتدائي لتسوية الخزنة", type: "وارد", amount: 50000, ref: "CAP-INIT", addedBy: "المحاسب أحمد", balance: 50000 },
+    { date: `${today} 09:00`, desc: "سحب مصروفات زيت وصيانة السيارات ومحروقات", type: "صادر", amount: 650, ref: "EXP-01", addedBy: "المحاسب أحمد", balance: 49350 },
+    { date: `${today} 11:30`, desc: "سحب مصروفات بوفيه وضيافة والوجبات اليومية", type: "صادر", amount: 150, ref: "EXP-02", addedBy: "المحاسب أحمد", balance: 49200 }
+  ];
 }

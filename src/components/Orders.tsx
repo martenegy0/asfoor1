@@ -719,9 +719,21 @@ export default function Orders({ token, role, username, orders, couriers, onRefr
                   )}
 
                   {/* Shipping address details */}
-                  <div className="flex items-center gap-2 text-slate-350">
-                    <MapPin size={14} className="text-slate-500" />
-                    <span>محافظة: <span className="font-bold text-slate-250">{o.gov} · {o.region} · {o.address}</span></span>
+                  <div className="flex items-center justify-between gap-2 text-slate-350 bg-slate-900/40 p-2.5 rounded-xl border border-white/5">
+                    <div className="flex items-center gap-2">
+                      <MapPin size={14} className="text-slate-500" />
+                      <span className="text-xs">العنوان: <span className="font-bold text-slate-250">{o.gov} · {o.region} · {o.address}</span></span>
+                    </div>
+                    <a
+                      href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${o.gov} ${o.region} ${o.address}`)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      id={`maps-nav-btn-${o.tracking}`}
+                      className="shrink-0 bg-indigo-500/20 hover:bg-indigo-500/35 border border-indigo-500/30 text-indigo-300 font-bold text-[10px] px-2.5 py-1.5 rounded-lg flex items-center gap-1 transition active:scale-95 cursor-pointer"
+                    >
+                      <MapPin size={11} className="text-indigo-400" />
+                      <span>توجيه الخرائط GPS</span>
+                    </a>
                   </div>
 
                   {/* Financial settle details */}
@@ -925,7 +937,6 @@ export default function Orders({ token, role, username, orders, couriers, onRefr
                   className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-xl px-3 py-2.5 text-xs text-right"
                 >
                   <option value="">-- لا يتم تغيير الحالة --</option>
-                  <option value="تم الإسناد">تم الإسناد</option>
                   <option value="خارج مع المندوب">خارج مع المندوب</option>
                   <option value="تم التسليم">تم التسليم</option>
                   <option value="مرتجع">مرتجع</option>

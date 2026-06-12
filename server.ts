@@ -427,6 +427,39 @@ function writeDB(data: any): void {
   }
 }
 
+function getSanitizedSupplierLedger(db: any): any[] {
+  if (!db || !db.supplierLedger || !db.orders) return [];
+  return db.supplierLedger.map((item: any) => {
+    if (item && item.tracking) {
+      // If it's a cash payment, general adjustment or settlement, it is not an order shipment
+      const isPaymentOrAdjustment = ["دفع نقدي", "دفعة مورد", "تسوية", "طرح", "اضافة"].includes(item.type) || item.tracking === "CASH-PAY";
+      
+      if (!isPaymentOrAdjustment) {
+        const order = db.orders.find((o: any) => o.tracking === item.tracking);
+        if (order) {
+          if (order.status === "تم التسليم") {
+            // الشحنات المسلمة حصراً: طرح عمولات الشحن من إجمالي ثمن المنتجات الكلي المسلمة
+            const share = Number(order.totalCOD || 0) - Number(order.shipPrice || 0);
+            return { 
+              ...item, 
+              amount: share, 
+              desc: `حقوق أوردر تم تسليمه مصفى: ${order.tracking} (إجمالي ثمن المنتج ${order.totalCOD} - عمولة الشحن ${order.shipPrice})` 
+            };
+          } else {
+            // إلغاء أي جمع لقيم الشحنات المعلقة لإنهاء خطأ التراكم المالي
+            return { 
+              ...item, 
+              amount: 0, 
+              desc: `[شحنة معلقة مصفاة] ${item.desc} (الحالة الحالية: ${order.status})` 
+            };
+          }
+        }
+      }
+    }
+    return item;
+  });
+}
+
 // Helpers
 const getCairoDateObj = () => {
   try {
@@ -1549,9 +1582,16 @@ app.post("/api", async (req: Request, res: Response) => {
         const { tracking, status, returnShippingType } = d;
         if (!tracking || !status) return err(res, "معاملات مفقودة");
 
-        const order = db.orders.find((o: any) => o.tracking === tracking);
-        if (!order) return err(res, "الأوردر غير موجود");
+        const sc = tracking.toString().trim().toUpperCase();
+        const order = db.orders.find((o: any) => {
+          const ot = o.tracking.toString().trim().toUpperCase();
+          const phoneClean = (o.phone || "").toString().trim();
+          const phone2Clean = (o.phone2 || "").toString().trim();
+          return ot === sc || sc.includes(ot) || ot.includes(sc) || phoneClean === sc || phone2Clean === sc;
+        });
+        if (!order) return err(res, "لم يتم العثور على الأوردر بأي باركود مُدخل");
 
+        const matchedTracking = order.tracking;
         const oldStatus = order.status;
 
         // 🚨 Standard Restriction on 'تم التسليم'
@@ -1682,6 +1722,20 @@ app.post("/api", async (req: Request, res: Response) => {
               ref: order.tracking,
               addedBy: "النظام التلقائي"
             });
+
+            // Credit the Supplier Ledger under the formula: Product_Price - Shipping_Price
+            const dupLedger = db.supplierLedger.find((l: any) => l.tracking === order.tracking && (l.type === "أوردر مستلم" || l.type === "تسليم"));
+            if (!dupLedger) {
+              const supplierShare = Number(order.prodPrice || 0) - Number(order.shipPrice || 0);
+              db.supplierLedger.push({
+                supplier: order.supplier,
+                date: now(),
+                type: "أوردر مستلم",
+                tracking: order.tracking,
+                amount: supplierShare,
+                desc: `حقوق أوردر تم تسليمه: ${order.tracking} (سعر المنتج ${order.prodPrice} - شحن الشركة ${order.shipPrice})`
+              });
+            }
           }
 
           if (status === "التسليم للمورد") {
@@ -1689,27 +1743,14 @@ app.post("/api", async (req: Request, res: Response) => {
           }
         }
 
-        // --- DEDUCTION TO SUPPLIER LEDGER SECURED AND DELAYED UNTIL DELIVERED BACK TO SUPPLIER ---
-        // Checks both status and queue state to execute the deduction of the product value safely
-        if (status === "التسليم للمورد" || status === "تم تسليم المرتجع للمورد" || status === "مرتجع تم تسليمه للمورد") {
-          const dupLedger = db.supplierLedger.find((l: any) => l.tracking === order.tracking && (l.type === "مرتجع" || l.type === "مرتجع تم تسليمه للمورد"));
-          if (!dupLedger) {
-            db.supplierLedger.push({
-              supplier: order.supplier,
-              date: now(),
-              type: "مرتجع تم تسليمه للمورد",
-              tracking: order.tracking,
-              amount: -Number(order.prodPrice || 0),
-              desc: `خصم قيمة المنتج لمرتجع تسلمه المورد: ${order.tracking} (المسؤول: ${currentUser})`
-            });
-          }
-        }
+        // --- DEDUCTION TO SUPPLIER LEDGER SYSTEM (DISABLED FOR STABILITY AND NO PRE-DELIVERY CREDITING) ---
 
         order.updatedAt = now();
 
         // Save Status History log (which act as audit trail)
+        if (!db.statusHistory) db.statusHistory = [];
         db.statusHistory.push({
-          tracking: tracking,
+          tracking: matchedTracking,
           oldStatus: oldStatus,
           newStatus: status,
           updatedBy: currentUser,
@@ -1717,7 +1758,7 @@ app.post("/api", async (req: Request, res: Response) => {
         });
 
         writeDB(db);
-        return ok(res, { tracking, status, msg: "تم تحديث حالة الأوردر بنجاح" });
+        return ok(res, { tracking: matchedTracking, status, msg: "تم تحديث حالة الأوردر بنجاح وتصفيته" });
       }
 
       // ─────────────────────────────────────────────────────────────
@@ -2032,7 +2073,8 @@ app.post("/api", async (req: Request, res: Response) => {
       // ─────────────────────────────────────────────────────────────
       case "getSupplierLedger": {
         const supplierName = currentRole === "مورد" ? currentUser : (d.supplier || "");
-        const ledger = db.supplierLedger.filter((l: any) => l.supplier === supplierName);
+        const sanitizedLedger = getSanitizedSupplierLedger(db);
+        const ledger = sanitizedLedger.filter((l: any) => l.supplier === supplierName && l.amount !== 0);
 
         // Compute running balance live
         // Live Balance = Sum of amounts in ledger
@@ -2059,7 +2101,7 @@ app.post("/api", async (req: Request, res: Response) => {
           const st = o.status;
           if (st === "تم التسليم") {
             delivered++;
-            cod += Number(o.prodPrice || 0); // COD for supplier is strictly their Product price share
+            cod += Number(o.totalCOD || 0) - Number(o.shipPrice || 0); // Correct net Supplier Share COD
           } else if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(st)) {
             returned++;
           } else {
@@ -2068,7 +2110,8 @@ app.post("/api", async (req: Request, res: Response) => {
         }
 
         // Compute Ledger summary
-        const ledgerTransactions = db.supplierLedger.filter((l: any) => l.supplier === targetSupplier);
+        const sanitizedLedger = getSanitizedSupplierLedger(db);
+        const ledgerTransactions = sanitizedLedger.filter((l: any) => l.supplier === targetSupplier);
         const ledgerBalance = ledgerTransactions.reduce((acc: number, item: any) => acc + Number(item.amount), 0);
 
         const rate = total ? Math.round((delivered / total) * 100) : 0;
@@ -2081,7 +2124,7 @@ app.post("/api", async (req: Request, res: Response) => {
             pending,
             cod,
             rate,
-            due: ledgerBalance // Due matches precisely their current ledger ledger balance
+            due: ledgerBalance // Due matches precisely their current ledger balance
           }
         });
       }
@@ -2092,12 +2135,12 @@ app.post("/api", async (req: Request, res: Response) => {
           return err(res, "ليس لديك صلاحية سحب كشوفات الموردين المالية");
         }
 
-        // Extract ledger details by Suppler
+        // Extract ledger details by Supplier
         const accountsMap: { [supplier: string]: { name: string; totalCOD: number; returnsDelivered: number; adjustments: number; payments: number; totalOrders: number; deliveredOrders: number; returnsCount: number; balance: number } } = {};
 
-        // 1. Check with ledger transactions
-        const ledger = db.supplierLedger;
-        for (const transaction of ledger) {
+        // 1. Check with sanitized ledger transactions
+        const sanitizedLedger = getSanitizedSupplierLedger(db);
+        for (const transaction of sanitizedLedger) {
           const sup = transaction.supplier;
           if (!sup) continue;
 
@@ -2107,10 +2150,18 @@ app.post("/api", async (req: Request, res: Response) => {
 
           accountsMap[sup].balance += Number(transaction.amount);
 
-          if (transaction.type === "أوردر مستلم") accountsMap[sup].totalCOD += Number(transaction.amount);
-          if (transaction.type === "مرتجع" || transaction.type === "مرتجع تم تسليمه للمورد" || transaction.type.includes("مرتجع")) accountsMap[sup].returnsDelivered += Math.abs(Number(transaction.amount));
-          if (transaction.type === "تسوية") accountsMap[sup].adjustments += Number(transaction.amount);
-          if (transaction.type === "دفع نقدي" || transaction.type === "دفعة مورد" || transaction.type.includes("دفعة")) accountsMap[sup].payments += Math.abs(Number(transaction.amount));
+          if (transaction.type === "أوردر مستلم" || transaction.type === "تسليم") {
+            accountsMap[sup].totalCOD += Number(transaction.amount);
+          }
+          if (transaction.type === "مرتجع" || transaction.type === "مرتجع تم تسليمه للمورد" || transaction.type.includes("مرتجع")) {
+            accountsMap[sup].returnsDelivered += Math.abs(Number(transaction.amount));
+          }
+          if (transaction.type === "تسوية") {
+            accountsMap[sup].adjustments += Number(transaction.amount);
+          }
+          if (transaction.type === "دفع نقدي" || transaction.type === "دفعة مورد" || transaction.type.includes("دفعة")) {
+            accountsMap[sup].payments += Math.abs(Number(transaction.amount));
+          }
         }
 
         // 2. Fetch order volumes

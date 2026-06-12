@@ -18,6 +18,9 @@ interface ClosingRecord {
   totalCOD: number;
   shippingCost: number;
   addedBy: string;
+  pendingCount?: number;
+  pendingCOD?: number;
+  courierCommissions?: number;
 }
 
 export default function DailyClosing({ token, role, user }: DailyClosingProps) {
@@ -153,14 +156,27 @@ export default function DailyClosing({ token, role, user }: DailyClosingProps) {
         let returned = 0;
         let cod = 0;
         let shipping = 0;
+        let pendingCount = 0;
+        let pendingCOD = 0;
+        let courierCommissions = 0;
 
-        if (aggregationBasis === "delivery") {
-          // Basis 1: Real-life action updates on that specific day
-          ordersList.forEach((o: any) => {
+        ordersList.forEach((o: any) => {
+          // Calculate outstanding (pending) orders created on this target date
+          if (isCreatedOnDate(o)) {
+            const isClosed = ["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status);
+            if (!isClosed) {
+              pendingCount++;
+              pendingCOD += Number(o.totalCOD || 0);
+            }
+          }
+
+          if (aggregationBasis === "delivery") {
+            // Basis 1: Real-life action updates on that specific day
             if (isDeliveredOnDate(o)) {
               delivered++;
               cod += Number(o.totalCOD || 0);
               shipping += Number(o.shipCost || o.shipPrice || 0);
+              courierCommissions += Number(o.commission || 25);
             }
             if (isReturnedOnDate(o)) {
               returned++;
@@ -168,25 +184,26 @@ export default function DailyClosing({ token, role, user }: DailyClosingProps) {
               if (o.returnShippingType === "paid") {
                 shipping += Number(o.shipCost || o.shipPrice || 0);
               }
+              courierCommissions += Number(o.commission || 0);
             }
-          });
-        } else {
-          // Basis 2: Cumulative Order date booking (when the order was registered)
-          ordersList.forEach((o: any) => {
+          } else {
+            // Basis 2: Cumulative Order date booking (when the order was registered)
             if (isCreatedOnDate(o)) {
               if (o.status === "تم التسليم") {
                 delivered++;
                 cod += Number(o.totalCOD || 0);
                 shipping += Number(o.shipCost || o.shipPrice || 0);
+                courierCommissions += Number(o.commission || 25);
               } else if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)) {
                 returned++;
                 if (o.returnShippingType === "paid") {
                   shipping += Number(o.shipCost || o.shipPrice || 0);
                 }
+                courierCommissions += Number(o.commission || 0);
               }
             }
-          });
-        }
+          }
+        });
 
         setCalculatedDraft({
           date: targetDate,
@@ -194,7 +211,10 @@ export default function DailyClosing({ token, role, user }: DailyClosingProps) {
           returnedCount: returned,
           totalCOD: cod,
           shippingCost: shipping,
-          addedBy: user
+          addedBy: user,
+          pendingCount,
+          pendingCOD,
+          courierCommissions
         });
       } else {
         setErrorMsg("تعذر تحميل قائمة الأوردرات لحساب التقفيل اللحظي: " + (res.error || ""));
@@ -415,9 +435,33 @@ export default function DailyClosing({ token, role, user }: DailyClosingProps) {
                 </div>
 
                 <div className="bg-slate-900/60 p-3 rounded-xl border border-white/4">
-                  <div className="text-[10px] text-slate-500 font-black">إجمالي تكلفة الشحن</div>
+                  <div className="text-[10px] text-slate-500 font-black">إجمالي إيراد الشحن</div>
                   <div className="text-lg font-black text-cyan-400 mt-1 font-mono">
                     {calculatedDraft.shippingCost.toLocaleString("ar")} <span className="text-[10px] font-medium text-slate-400">ج.م</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Robust calculations for company net profits and outstanding daily balances */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="bg-slate-900/60 p-3 rounded-xl border border-amber-500/20">
+                  <div className="text-[10px] text-amber-400 font-black">💼 المتبقي في ذمة اليوم (لأوردرات معلقة)</div>
+                  <div className="text-sm font-black text-amber-300 mt-1.5 font-mono">
+                    {(calculatedDraft.pendingCOD || 0).toLocaleString("ar")} <span className="text-[10px] font-medium text-slate-400">ج.م ({calculatedDraft.pendingCount || 0} شحنة)</span>
+                  </div>
+                </div>
+
+                <div className="bg-slate-900/60 p-3 rounded-xl border border-red-500/20">
+                  <div className="text-[10px] text-red-400 font-black">🏍️ إجمالي عمولات المناديب المستحقة</div>
+                  <div className="text-sm font-black text-red-300 mt-1.5 font-mono">
+                    {(calculatedDraft.courierCommissions || 0).toLocaleString("ar")} <span className="text-[10px] font-medium text-slate-400">ج.م</span>
+                  </div>
+                </div>
+
+                <div className="bg-slate-900/60 p-3 rounded-xl border border-emerald-500/20">
+                  <div className="text-[10px] text-emerald-400 font-black">💰 صافي ربح شحن اليوم الفعلي</div>
+                  <div className="text-sm font-black text-emerald-300 mt-1.5 font-mono">
+                    {((calculatedDraft.shippingCost || 0) - (calculatedDraft.courierCommissions || 0)).toLocaleString("ar")} <span className="text-[10px] font-medium text-slate-400">ج.م</span>
                   </div>
                 </div>
               </div>
