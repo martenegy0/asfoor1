@@ -806,21 +806,41 @@ function bulkUpdate(sheets, d) {
   const { trackings, status, courier, bulkStatus } = d;
   if (!trackings || !trackings.length) return { ok: false, error: "يرجى تحديد الأوردرات المراد تعديلها" };
 
-  let updatedCount = 0;
-  trackings.forEach(tracking => {
-    const orderIndex = findRowIndex(sheets.orders, "tracking", tracking);
-    if (orderIndex !== -1) {
-      let upd = { updatedAt: now() };
-      if (courier) upd.courier = courier;
-      if (status) upd.status = status;
-      if (bulkStatus) upd.status = bulkStatus;
+  const sheet = sheets.orders;
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return { ok: true, msg: "لا توجد أوردرات للتحديث", done: 0 };
 
-      updateRowByObject(sheets.orders, orderIndex, upd);
+  const lastCol = sheet.getLastColumn();
+  const range = sheet.getRange(1, 1, lastRow, lastCol);
+  const data = range.getValues();
+  
+  const headers = data[0].map(h => h.toString().trim());
+  const trackingIdx = headers.indexOf("tracking");
+  const updatedAtIdx = headers.indexOf("updatedAt");
+  const courierIdx = headers.indexOf("courier");
+  const statusIdx = headers.indexOf("status");
+
+  if (trackingIdx === -1) return { ok: false, error: "عمود الكود التتبعي غير موجود في شيت الأوردرات" };
+
+  let updatedCount = 0;
+  const targetStatus = status || bulkStatus;
+  const trackingsSet = trackings.map(t => t.toString().trim().toUpperCase());
+
+  for (let r = 1; r < data.length; r++) {
+    const rowTracking = data[r][trackingIdx].toString().trim().toUpperCase();
+    if (trackingsSet.indexOf(rowTracking) !== -1) {
+      if (updatedAtIdx !== -1) data[r][updatedAtIdx] = now();
+      if (courier && courierIdx !== -1) data[r][courierIdx] = courier;
+      if (targetStatus && statusIdx !== -1) data[r][statusIdx] = targetStatus;
       updatedCount++;
     }
-  });
+  }
 
-  return { ok: true, msg: `تم تحديث وإسناد ${updatedCount} أوردر بنجاح` };
+  if (updatedCount > 0) {
+    range.setValues(data);
+  }
+
+  return { ok: true, msg: `تم تحديث وإسناد ${updatedCount} أوردر بنجاح فائق السرعة دفعة واحدة`, done: updatedCount };
 }
 
 // ───────────────────────────────────────────────

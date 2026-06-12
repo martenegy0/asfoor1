@@ -7,11 +7,13 @@ interface OrdersProps {
   role: string;
   username: string;
   orders: any[];
+  setOrders?: React.Dispatch<React.SetStateAction<any[]>>;
   couriers: any[];
   onRefresh: () => void;
 }
 
-export default function Orders({ token, role, username, orders, couriers, onRefresh }: OrdersProps) {
+export default function Orders({ token, role, username, orders, setOrders, couriers, onRefresh }: OrdersProps) {
+  const [pendingTrackings, setPendingTrackings] = useState<Set<string>>(new Set());
   const isAdmin = (role || "").toString().trim() === "مدير" || (role || "").toString().trim().includes("مدير");
   const isSuper = (role || "").toString().trim() === "مشرف" || (role || "").toString().trim().includes("مشرف");
   const isOps = (role || "").toString().trim() === "موظف عمليات" || (role || "").toString().trim().includes("عمليات");
@@ -71,27 +73,50 @@ export default function Orders({ token, role, username, orders, couriers, onRefr
       alert("يرجى إدخال أو قراءة كود كشف التتبع أولاً");
       return;
     }
+    const targetTracking = reconcileBarcode.trim().toUpperCase();
     setReconLoading(true);
     setReconFeedback("");
-    try {
-      const targetTracking = reconcileBarcode.trim().toUpperCase();
-      const res = await apiCall("updateStatus", token, {
-        tracking: targetTracking,
-        status: reconcileStatus,
-        reason: `تصفية سريعة عبر بوابة الباركود بالواجهة`
+
+    // --- OPTIMISTIC FE BACKUP ---
+    const nowEgyptStr = new Date().toISOString().replace("T", " ").substring(0, 16);
+    const updatedFields: any = {
+      status: reconcileStatus,
+      updatedAt: nowEgyptStr
+    };
+    if (reconcileStatus === "تم التسليم") {
+      updatedFields.delivDate = nowEgyptStr;
+    }
+
+    if (setOrders) {
+      setOrders(prev => {
+        const next = prev.map(o => o.tracking === targetTracking ? { ...o, ...updatedFields } : o);
+        localStorage.setItem("fp_cached_orders", JSON.stringify(next));
+        return next;
       });
-      if (res.ok) {
-        setReconcileBarcode("");
+    }
+
+    setReconcileBarcode("");
+    setReconFeedback(`⚡ تم التحديث محلياً وجاري المزامنة في الخلفية...`);
+
+    // --- BG API CALL ---
+    apiCall("updateStatus", token, {
+      tracking: targetTracking,
+      status: reconcileStatus,
+      reason: `تصفية سريعة عبر بوابة الباركود بالواجهة`
+    }).then(res => {
+      if (res && res.ok) {
         setReconFeedback(`✅ نجح تحديث الأوردر ${targetTracking} إلى [${reconcileStatus}]`);
         onRefresh();
       } else {
-        setReconFeedback(`⚠️ خطأ: ${res.error || "الأوردر غير مسجل بالخادم"}`);
+        setReconFeedback(`⚠️ تنبيه: فشل مزامنة الخادم لـ ${targetTracking} (${res?.error})`);
+        onRefresh();
       }
-    } catch (err: any) {
-      setReconFeedback("فشل الاتصال بالخادم لتصفية الأوردر");
-    } finally {
+    }).catch(err => {
+      setReconFeedback(`⚠️ خطأ بالشبكة أثناء مزامنة ${targetTracking}`);
+      onRefresh();
+    }).finally(() => {
       setReconLoading(false);
-    }
+    });
   }
 
   function handleReconExcelUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -128,21 +153,45 @@ export default function Orders({ token, role, username, orders, couriers, onRefr
       if (confirm(`هل أنت متأكد من رغبتك في تحديث ${parsedTrackings.length} أوردر دفعة واحدة إلى [${reconcileStatus}]؟`)) {
         setReconLoading(true);
         setReconFeedback("");
+
+        // --- OPTIMISTIC BULK UPDATE ---
+        const nowEgyptStr = new Date().toISOString().replace("T", " ").substring(0, 16);
+        const updatedFields: any = {
+          status: reconcileStatus,
+          updatedAt: nowEgyptStr
+        };
+        if (reconcileStatus === "تم التسليم") {
+          updatedFields.delivDate = nowEgyptStr;
+        }
+
+        if (setOrders) {
+          setOrders(prev => {
+            const next = prev.map(o => parsedTrackings.includes(o.tracking) ? { ...o, ...updatedFields } : o);
+            localStorage.setItem("fp_cached_orders", JSON.stringify(next));
+            return next;
+          });
+        }
+
+        setReconFeedback(`⚡ تم التصفية المحلية لـ ${parsedTrackings.length} أوردر وجاري ترحيل التعديلات للخلفية...`);
+
+        // --- API CALL ---
         try {
           const res = await apiCall("bulkUpdate", token, {
             trackings: parsedTrackings,
             status: reconcileStatus
           });
-          if (res.ok) {
+          if (res && res.ok) {
             setReconFeedback(`⚡ نجح الارتجاع والتصفية لـ ${res.done} أوردر بنجاح تام!`);
             setReconExcelMsg("");
             if (fileInputRef.current) fileInputRef.current.value = "";
             onRefresh();
           } else {
-            setReconFeedback(`⚠️ خطأ في التحديث الجماعي: ${res.error}`);
+            setReconFeedback(`⚠️ فشلت المزامنة الكلية للخلفية: ${res?.error}`);
+            onRefresh();
           }
         } catch (err) {
-          setReconFeedback("حدث خطأ أثناء الاتصال بالخادم للتصفية الجماعية");
+          setReconFeedback("حدث خطأ أثناء الاتصال بالخادم للتصفية الجماعية ولكن تم التعديل محلياً");
+          onRefresh();
         } finally {
           setReconLoading(false);
         }
@@ -272,73 +321,157 @@ export default function Orders({ token, role, username, orders, couriers, onRefr
       return;
     }
 
-    try {
-      const res = await apiCall("updateStatus", token, {
-        tracking,
-        status,
-        returnShippingType
-      });
-      if (res.ok) {
-        setReturnedSelectOpen(false);
-        setConfirmingStatus(null);
-        setSelected(new Set());
-        onRefresh();
-      } else {
-        alert("⚠️ " + res.error);
-      }
-    } catch (err) {
-      alert("عطل في الاتصال بالشبكة لتقيد الحالة الجديدة");
+    // Add to pending status changes to disable repeating clicks visually
+    setPendingTrackings((prev) => {
+      const next = new Set(prev);
+      next.add(tracking);
+      return next;
+    });
+
+    // --- OPTIMISTIC UI UPDATE ---
+    const nowEgyptStr = new Date().toISOString().replace("T", " ").substring(0, 16);
+    const updatedFields: any = {
+      status,
+      updatedAt: nowEgyptStr,
+    };
+    if (status === "تم التسليم") {
+      updatedFields.delivDate = nowEgyptStr;
+    } else if (["مرتجع", "التسليم للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد"].includes(status)) {
+      updatedFields.retDate = nowEgyptStr;
     }
+    if (returnShippingType) {
+      updatedFields.returnShippingType = returnShippingType;
+    }
+
+    if (["مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"].includes(status)) {
+      updatedFields.returnQueueStatus = status;
+    }
+
+    if (setOrders) {
+      setOrders((prev) => {
+        const next = prev.map((o) => (o.tracking === tracking ? { ...o, ...updatedFields } : o));
+        localStorage.setItem("fp_cached_orders", JSON.stringify(next));
+        return next;
+      });
+    }
+
+    // Instantly close dialogs & reset multi selection to stay super slick
+    setReturnedSelectOpen(false);
+    setConfirmingStatus(null);
+    setSelected(new Set());
+
+    // --- BG API CALL ---
+    apiCall("updateStatus", token, {
+      tracking,
+      status,
+      returnShippingType,
+    })
+      .then((res) => {
+        if (res && res.ok) {
+          console.log(`Successfully synced status of ${tracking} to [${status}]`);
+          onRefresh();
+        } else {
+          alert(`⚠️ عطل مزامنة: فشل تحديث حالة الأوردر ${tracking} على السيرفر: ${res?.error || "خطأ غير معروف"}`);
+          onRefresh();
+        }
+      })
+      .catch((err) => {
+        console.error("BG sync error", err);
+        onRefresh();
+      })
+      .finally(() => {
+        setPendingTrackings((prev) => {
+          const next = new Set(prev);
+          next.delete(tracking);
+          return next;
+        });
+      });
   }
 
   // Admin edit order detail saver
   async function saveAdminEdits(e: React.FormEvent) {
     e.preventDefault();
     if (!editOrder) return;
-    try {
-      const res = await apiCall("updateOrder", token, {
-        tracking: editOrder.tracking,
-        order: {
-          customer: editOrder.customer,
-          phone: editOrder.phone,
-          phone2: editOrder.phone2,
-          gov: editOrder.gov,
-          region: editOrder.region,
-          address: editOrder.address,
-          prodPrice: Number(editOrder.prodPrice),
-          shipPrice: Number(editOrder.shipPrice),
-          courier: editOrder.courier,
-          notes: editOrder.notes
-        }
+    const tracking = editOrder.tracking;
+    const nowEgyptStr = new Date().toISOString().replace("T", " ").substring(0, 16);
+    const adminFields = {
+      customer: editOrder.customer,
+      phone: editOrder.phone,
+      phone2: editOrder.phone2,
+      gov: editOrder.gov,
+      region: editOrder.region,
+      address: editOrder.address,
+      prodPrice: Number(editOrder.prodPrice),
+      shipPrice: Number(editOrder.shipPrice),
+      courier: editOrder.courier,
+      notes: editOrder.notes,
+      updatedAt: nowEgyptStr,
+    };
+
+    // --- OPTIMISTIC UI ---
+    if (setOrders) {
+      setOrders((prev) => {
+        const next = prev.map((o) => (o.tracking === tracking ? { ...o, ...adminFields } : o));
+        localStorage.setItem("fp_cached_orders", JSON.stringify(next));
+        return next;
       });
-      if (res.ok) {
-        setEditOrder(null);
-        onRefresh();
-        alert("✅ تم تعديل وحفظ بيانات الأوردر والمزامنة مع الحسابات بنجاح");
-      } else {
-        alert("⚠️ " + res.error);
-      }
-    } catch (err) {
-      alert("فشل الحفظ المباشر للتعديلات");
     }
+
+    setEditOrder(null);
+    alert("⚡ تم الحفظ والتعديل محلياً فورا! جاري التحديث ومزامنة جوجل شيت في الخلفية...");
+
+    // --- BG API CALL ---
+    apiCall("updateOrder", token, {
+      tracking,
+      order: adminFields,
+    })
+      .then((res) => {
+        if (res && res.ok) {
+          console.log(`Successfully synced edit updates for ${tracking}`);
+          onRefresh();
+        } else {
+          alert("⚠️ فشل الترحيل بالخلفية لـ " + tracking + ": " + res?.error);
+          onRefresh();
+        }
+      })
+      .catch((err) => {
+        console.error("BG saveAdminEdits error", err);
+        onRefresh();
+      });
   }
 
   async function deleteOrderDirect(tracking: string) {
     if (!confirm(`⚠️ هل تريد حذف الأوردر ${tracking} نهائياً؟ \n\nلا يمكن التراجع عن هذه العملية وسيتم حذف سجلات حسابات المورد المرتبطة به.`)) {
       return;
     }
-    try {
-      const res = await apiCall("deleteOrder", token, { tracking });
-      if (res.ok) {
-        setEditOrder(null);
-        onRefresh();
-        alert("🗑 تم حذف الأوردر بنجاح");
-      } else {
-        alert("⚠️ " + res.error);
-      }
-    } catch (err) {
-      alert("فشل حذف الأوردر");
+
+    // --- OPTIMISTIC UI ---
+    if (setOrders) {
+      setOrders((prev) => {
+        const next = prev.filter((o) => o.tracking !== tracking);
+        localStorage.setItem("fp_cached_orders", JSON.stringify(next));
+        return next;
+      });
     }
+
+    setEditOrder(null);
+    alert("🗑 تم الحذف محلياً فورا! جاري الترحيل النهائي للخادم في الخلفية...");
+
+    // --- BG API CALL ---
+    apiCall("deleteOrder", token, { tracking })
+      .then((res) => {
+        if (res && res.ok) {
+          console.log(`Successfully synced delete of ${tracking}`);
+          onRefresh();
+        } else {
+          alert("⚠️ فشلت حركة حذف الأوردر بالخلفية: " + res?.error);
+          onRefresh();
+        }
+      })
+      .catch((err) => {
+        console.error("BG delete order error", err);
+        onRefresh();
+      });
   }
 
   // Bulk Manifest batch updates (Supervisor and Admin)
@@ -347,25 +480,65 @@ export default function Orders({ token, role, username, orders, couriers, onRefr
       alert("يرجى تحديد حالة أو مندوب للتوزيع الجماعي");
       return;
     }
-    try {
-      const res = await apiCall("bulkUpdate", token, {
-        trackings: Array.from(selected),
-        status: bulkStatus || undefined,
-        courier: bulkCourier || undefined
+
+    const trackingsToUpdate = Array.from(selected);
+    const nowEgyptStr = new Date().toISOString().replace("T", " ").substring(0, 16);
+
+    // Add all of these to pending trackings
+    setPendingTrackings((prev) => {
+      const next = new Set(prev);
+      trackingsToUpdate.forEach((t) => next.add(t));
+      return next;
+    });
+
+    // --- OPTIMISTIC UI ---
+    const updatedFields: any = {
+      updatedAt: nowEgyptStr,
+    };
+    if (bulkStatus) updatedFields.status = bulkStatus;
+    if (bulkCourier) updatedFields.courier = bulkCourier;
+
+    if (setOrders) {
+      setOrders((prev) => {
+        const next = prev.map((o) => (trackingsToUpdate.includes(o.tracking) ? { ...o, ...updatedFields } : o));
+        localStorage.setItem("fp_cached_orders", JSON.stringify(next));
+        return next;
       });
-      if (res.ok) {
-        setBulkModalOpen(false);
-        setBulkStatus("");
-        setBulkCourier("");
-        setSelected(new Set());
-        onRefresh();
-        alert(`✅ تم تحديث ${res.done} أوردر بنجاح بالمشافهة والتوزيع للمندوب`);
-      } else {
-        alert("⚠️ " + res.error);
-      }
-    } catch (err) {
-      alert("فشل التوزيع والتقيد الجماعي");
     }
+
+    setBulkModalOpen(false);
+    setBulkStatus("");
+    setBulkCourier("");
+    setSelected(new Set());
+
+    alert(`⚡ تم إسناد وتعديل ${trackingsToUpdate.length} أوردر محلياً فورا، جاري التوزيع في الخلفية...`);
+
+    // --- BG API CALL ---
+    apiCall("bulkUpdate", token, {
+      trackings: trackingsToUpdate,
+      status: bulkStatus || undefined,
+      courier: bulkCourier || undefined,
+    })
+      .then((res) => {
+        if (res && res.ok) {
+          console.log(`Bulk sync completed successfully for ${res.done} orders`);
+          onRefresh();
+        } else {
+          alert(`⚠️ عطل مزامنة جماعية: ${res?.error}`);
+          onRefresh();
+        }
+      })
+      .catch((err) => {
+        console.error("BG bulk sync error", err);
+        onRefresh();
+      })
+      .finally(() => {
+        setPendingTrackings((prev) => {
+          const next = new Set(prev);
+          trackingsToUpdate.forEach((t) => next.delete(t));
+          return next;
+        });
+      });
   }
 
   const getBadgeStyle = (status: string) => {
@@ -728,7 +901,6 @@ export default function Orders({ token, role, username, orders, couriers, onRefr
                       href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${o.gov} ${o.region} ${o.address}`)}`}
                       target="_blank"
                       rel="noopener noreferrer"
-                      id={`maps-nav-btn-${o.tracking}`}
                       className="shrink-0 bg-indigo-500/20 hover:bg-indigo-500/35 border border-indigo-500/30 text-indigo-300 font-bold text-[10px] px-2.5 py-1.5 rounded-lg flex items-center gap-1 transition active:scale-95 cursor-pointer"
                     >
                       <MapPin size={11} className="text-indigo-400" />
@@ -739,7 +911,7 @@ export default function Orders({ token, role, username, orders, couriers, onRefr
                   {/* Financial settle details */}
                   <div className="flex items-center justify-between gap-4">
                     <div className="text-slate-350 flex items-center gap-2">
-                       <span className="text-sm">💵</span>
+                      <span className="text-sm">💵</span>
                       <span>إجمالي التحصيل المستحق: <span className="text-sm font-black text-emerald-400 font-mono">{(o.totalCOD || o.prodPrice || 0).toLocaleString("ar")} ج.م</span></span>
                     </div>
                     <span className="text-[9px] text-slate-500 font-bold font-mono">
@@ -782,27 +954,43 @@ export default function Orders({ token, role, username, orders, couriers, onRefr
                       <>
                         <button
                           onClick={() => triggerStatusUpdate(o.tracking, "تم التسليم")}
-                          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-slate-950 font-black text-[10px] rounded-lg cursor-pointer"
+                          disabled={pendingTrackings.has(o.tracking)}
+                          className={`px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-slate-950 font-black text-[10px] rounded-lg cursor-pointer flex items-center gap-1 ${
+                            pendingTrackings.has(o.tracking) ? "opacity-50 pointer-events-none" : ""
+                          }`}
                         >
-                          ✅ تم التسليم والتحصيل
+                          {pendingTrackings.has(o.tracking) && <Loader2 size={11} className="animate-spin" />}
+                          <span>✅ تم التسليم والتحصيل</span>
                         </button>
                         <button
                           onClick={() => triggerStatusUpdate(o.tracking, "مرتجع")}
-                          className="px-3 py-1.5 bg-red-650 hover:bg-red-700 text-slate-200 font-black text-[10px] rounded-lg cursor-pointer"
+                          disabled={pendingTrackings.has(o.tracking)}
+                          className={`px-3 py-1.5 bg-red-650 hover:bg-red-700 text-slate-200 font-black text-[10px] rounded-lg cursor-pointer flex items-center gap-1 ${
+                            pendingTrackings.has(o.tracking) ? "opacity-50 pointer-events-none" : ""
+                          }`}
                         >
-                          ↩ اختيار مرتجع
+                          {pendingTrackings.has(o.tracking) && <Loader2 size={11} className="animate-spin" />}
+                          <span>↩ اختيار مرتجع</span>
                         </button>
                         <button
                           onClick={() => triggerStatusUpdate(o.tracking, "مؤجل")}
-                          className="px-3 py-1.5 bg-slate-800 text-slate-300 font-bold text-[10px] rounded-lg cursor-pointer"
+                          disabled={pendingTrackings.has(o.tracking)}
+                          className={`px-3 py-1.5 bg-slate-800 text-slate-300 font-bold text-[10px] rounded-lg cursor-pointer flex items-center gap-1 ${
+                            pendingTrackings.has(o.tracking) ? "opacity-50 pointer-events-none" : ""
+                          }`}
                         >
-                          ⏰ تم التأجيل
+                          {pendingTrackings.has(o.tracking) && <Loader2 size={11} className="animate-spin" />}
+                          <span>⏰ تم التأجيل</span>
                         </button>
                         <button
                           onClick={() => triggerStatusUpdate(o.tracking, "لا يوجد رد")}
-                          className="px-3 py-1.5 bg-slate-950 text-slate-400 font-bold text-[10px] rounded-lg cursor-pointer border border-white/4"
+                          disabled={pendingTrackings.has(o.tracking)}
+                          className={`px-3 py-1.5 bg-slate-950 text-slate-400 font-bold text-[10px] rounded-lg cursor-pointer border border-white/4 flex items-center gap-1 ${
+                            pendingTrackings.has(o.tracking) ? "opacity-50 pointer-events-none" : ""
+                          }`}
                         >
-                          📵 لا يرد
+                          {pendingTrackings.has(o.tracking) && <Loader2 size={11} className="animate-spin" />}
+                          <span>📵 لا يرد</span>
                         </button>
                       </>
                     )}
@@ -812,21 +1000,33 @@ export default function Orders({ token, role, username, orders, couriers, onRefr
                       <>
                         <button
                           onClick={() => triggerStatusUpdate(o.tracking, "خارج مع المندوب")}
-                          className="px-2.5 py-1 bg-slate-950 text-amber-500 border border-amber-500/20 text-[9px] font-black rounded hover:bg-slate-900 cursor-pointer"
+                          disabled={pendingTrackings.has(o.tracking)}
+                          className={`px-2.5 py-1 bg-slate-950 text-amber-500 border border-amber-500/20 text-[9px] font-black rounded hover:bg-slate-900 cursor-pointer flex items-center gap-1 ${
+                            pendingTrackings.has(o.tracking) ? "opacity-50 pointer-events-none" : ""
+                          }`}
                         >
-                          🚚 خارج للتسليم
+                          {pendingTrackings.has(o.tracking) && <Loader2 size={10} className="animate-spin" />}
+                          <span>🚚 خارج للتسليم</span>
                         </button>
                         <button
                           onClick={() => triggerStatusUpdate(o.tracking, "تم التسليم")}
-                          className="px-2.5 py-1 bg-emerald-600 text-slate-950 text-[9px] font-black rounded hover:bg-emerald-700 cursor-pointer"
+                          disabled={pendingTrackings.has(o.tracking)}
+                          className={`px-2.5 py-1 bg-emerald-600 text-slate-950 text-[9px] font-black rounded hover:bg-emerald-700 cursor-pointer flex items-center gap-1 ${
+                            pendingTrackings.has(o.tracking) ? "opacity-50 pointer-events-none" : ""
+                          }`}
                         >
-                          تسليم سريع
+                          {pendingTrackings.has(o.tracking) && <Loader2 size={10} className="animate-spin" />}
+                          <span>تسليم سريع</span>
                         </button>
                         <button
                           onClick={() => triggerStatusUpdate(o.tracking, "مرتجع")}
-                          className="px-2.5 py-1 bg-slate-950 text-red-400 border border-red-900/20 text-[9px] font-black rounded hover:bg-slate-900 cursor-pointer"
+                          disabled={pendingTrackings.has(o.tracking)}
+                          className={`px-2.5 py-1 bg-slate-950 text-red-400 border border-red-900/20 text-[9px] font-black rounded hover:bg-slate-900 cursor-pointer flex items-center gap-1 ${
+                            pendingTrackings.has(o.tracking) ? "opacity-50 pointer-events-none" : ""
+                          }`}
                         >
-                          مرتجع سريع
+                          {pendingTrackings.has(o.tracking) && <Loader2 size={10} className="animate-spin" />}
+                          <span>مرتجع سريع</span>
                         </button>
                       </>
                     )}
@@ -838,12 +1038,14 @@ export default function Orders({ token, role, username, orders, couriers, onRefr
                         {["مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"].map((rs) => (
                           <button
                             key={rs}
+                            disabled={pendingTrackings.has(o.tracking)}
                             onClick={() => triggerStatusUpdate(o.tracking, rs)}
-                            className={`px-2 py-1 text-[9px] font-bold rounded cursor-pointer ${
+                            className={`px-2 py-1 text-[9px] font-bold rounded cursor-pointer flex items-center gap-0.5 ${
                               o.returnQueueStatus === rs ? "bg-purple-650 text-slate-100" : "text-slate-500 hover:text-slate-350"
-                            }`}
+                            } ${pendingTrackings.has(o.tracking) ? "opacity-50 pointer-events-none" : ""}`}
                           >
-                            {rs.split(" ").slice(-1)[0]}
+                            {pendingTrackings.has(o.tracking) && o.returnQueueStatus !== rs && <Loader2 size={8} className="animate-spin" />}
+                            <span>{rs.split(" ").slice(-1)[0]}</span>
                           </button>
                         ))}
                       </div>
