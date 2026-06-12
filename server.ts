@@ -379,11 +379,35 @@ async function executeProxyRequest(gscriptUrl: string, payload: any): Promise<an
   }
 
   const cacheKey = getCacheKey(payload);
-
   const cached = READ_CACHE.get(cacheKey);
   const nowMs = Date.now();
-  if (cached && (nowMs - cached.timestamp < CACHE_TTL_MS)) {
-    return cached.data;
+
+  const STALE_TTL = 15000; // 15 seconds stale limit
+  const MAX_TTL = 300000; // 5 minutes max cache age
+
+  if (cached) {
+    // If the cache is stale, trigger an async background refresh without blocking
+    if (nowMs - cached.timestamp > STALE_TTL && !ACTIVE_FETCHES.has(cacheKey)) {
+      const bgPromise = (async () => {
+        try {
+          const response = await fetch(gscriptUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+          const freshData = await response.json();
+          READ_CACHE.set(cacheKey, { data: freshData, timestamp: Date.now() });
+        } catch (bgErr) {
+          console.error("Background cache refresh failed for:", payload.action, bgErr);
+        }
+      })();
+      // Do not await the background promise: let it complete in the background!
+    }
+
+    // Return the cached data instantly if it is younger than MAX_TTL
+    if (nowMs - cached.timestamp < MAX_TTL) {
+      return cached.data;
+    }
   }
 
   const active = ACTIVE_FETCHES.get(cacheKey);
@@ -480,12 +504,15 @@ app.post("/api", async (req: Request, res: Response) => {
       };
 
       // Enforce strict client-side role parameters security for Google Sheets proxy
-      if (currentRole === "مورد") {
+      const isSheetMourid = (currentRole || "").toString().trim() === "مورد" || (currentRole || "").toString().trim().includes("مورد");
+      const isSheetMandoob = (currentRole || "").toString().trim() === "مندوب" || (currentRole || "").toString().trim().includes("مندوب");
+
+      if (isSheetMourid) {
         payloadToSheet.supplier = currentUser;
         if (payloadToSheet.order) {
           payloadToSheet.order.supplier = currentUser;
         }
-      } else if (currentRole === "مندوب") {
+      } else if (isSheetMandoob) {
         payloadToSheet.courier = currentUser;
         if (payloadToSheet.order) {
           payloadToSheet.order.courier = currentUser;
@@ -497,18 +524,94 @@ app.post("/api", async (req: Request, res: Response) => {
           const rTrim = (r || "").trim();
           if (rTrim === "مدير") return "كاملة";
           if (rTrim === "مشرف") return "توزيع ومتابعة";
-          if (rTrim === "مندوب") return "معاينة الشحنات والتقفيل";
+          if (rTrim === "محاسب") return "خزنة وتقارير مالية";
+          if (rTrim === "مندوب") return "معاينة وتقفيل";
+          if (rTrim === "مورد") return "معاينة الطلبات والقيود";
           return "متابعة محدودة";
         };
 
+        const standardPerms = getPermissionsForRole(d.role);
         payloadToSheet.user = {
           name: d.name,
           role: d.role,
           pass: d.pass,
           active: d.active || "نعم",
           email: d.email || "",
-          perms: getPermissionsForRole(d.role)
+          perms: standardPerms
         };
+
+        // Solve Locked/Stale Screens: Immediately write to the local memory database for optimistic synchronization
+        try {
+          const db = readDB();
+          if (!db.users) db.users = [];
+          const exists = db.users.find((u: any) => u.name.trim() === d.name.trim());
+          if (!exists) {
+            db.users.push({
+              name: d.name.trim(),
+              role: d.role,
+              pass: d.pass.trim(),
+              active: d.active || "نعم",
+              email: d.email || "",
+              perms: standardPerms
+            });
+
+            // Auto-provision corresponding financial profile
+            if (d.role === "مندوب") {
+              if (!db.couriers) db.couriers = [];
+              const courierExists = db.couriers.find((c: any) => c.name.trim() === d.name.trim());
+              if (!courierExists) {
+                db.couriers.push({
+                  name: d.name.trim(),
+                  phone: "—",
+                  commission: 25,
+                  salary: 3000,
+                  region: "—",
+                  base_fixed_salary: 3000,
+                  commission_success: 25,
+                  commission_return: 10
+                });
+              }
+            } else if (d.role === "مورد") {
+              if (!db.suppliers) db.suppliers = [];
+              const supplierExists = db.suppliers.find((s: any) => s.name.trim() === d.name.trim());
+              if (!supplierExists) {
+                db.suppliers.push({
+                  name: d.name.trim(),
+                  phone: "—",
+                  price: 65,
+                  notes: "مورد جديد"
+                });
+              }
+            }
+            writeDB(db);
+          }
+        } catch (localWriteErr) {
+          console.error("Local user sync backup failed:", localWriteErr);
+        }
+      }
+
+      // Fast Local Pre-screening duplicate check to prevent duplicates in Sheets mode completely
+      if (d.action === "addOrder" && !d.force) {
+        const oInput = d.order || {};
+        const phoneClean = fixPhone(oInput.phone || "");
+        if (phoneClean) {
+          try {
+            const db = readDB();
+            const dupOrders = db.orders.filter((x: any) => fixPhone(x.phone || "") === phoneClean || fixPhone(x.phone2 || "") === phoneClean);
+            if (dupOrders.length > 0) {
+              const deliveredCount = dupOrders.filter((x: any) => x.status === "تم التسليم").length;
+              const rate = Math.round((deliveredCount / dupOrders.length) * 100);
+              return ok(res, {
+                dup: true,
+                count: dupOrders.length,
+                rate,
+                msg: `هذا العميل لديه ${dupOrders.length} طلب سابق بالنظام المركزي (نسبة النجاح لطلباته ${rate}%)`
+              });
+            }
+          } catch (dupErr) {
+            console.error("Local duplicate screening failed:", dupErr);
+          }
+        }
       }
 
       if (d.action === "updateUser" && !payloadToSheet.user) {
@@ -591,6 +694,75 @@ app.post("/api", async (req: Request, res: Response) => {
 
         // 4. Return extremely fast response so UI doesn't freeze or wait
         return ok(res, { msg: "تم إدراج بند الخزينة وتصفيته" });
+      }
+
+      if (d.action === "addCourierAdjustment") {
+        if (!["مدير", "محاسب"].includes(currentRole)) {
+          return err(res, "فقط المدير والمحاسب يمتلك صلاحية تعديل مكافآت وجزاءات المندوب");
+        }
+
+        const { courier, type, amount, desc } = d;
+        if (!courier || !amount || !type) return err(res, "بيانات مفقودة للتسوية");
+
+        const val = Number(amount);
+
+        // 1. Invalidate caches
+        READ_CACHE.clear();
+        ACTIVE_FETCHES.clear();
+
+        // 2. Perform optimistic local database write
+        const db = readDB();
+        if (!db.courierLedger) db.courierLedger = [];
+        db.courierLedger.push({
+          courier,
+          date: now(),
+          type,
+          tracking: "ADJUST",
+          amount: val,
+          desc: desc || `${type} للمندوب بقيمة ${amount} ج`
+        });
+
+        // Auto post to central cashbox
+        if (type === "مكافأة") {
+          db.cashbox.push({
+            date: now(),
+            desc: `مكافأة منصرفة للمندوب: ${courier} - ${desc || ''}`,
+            type: "صادر",
+            amount: val,
+            ref: "BONUS",
+            addedBy: currentUser
+          });
+        } else if (type === "جزاء" || type === "خصم" || type === "خصم عجز") {
+          db.cashbox.push({
+            date: now(),
+            desc: `تسوية خصم/جزاء مستقطع للمندوب: ${courier} - ${desc || ''}`,
+            type: "وارد",
+            amount: val,
+            ref: "PENALTY",
+            addedBy: currentUser
+          });
+        }
+
+        // Audit Log
+        if (!db.auditLog) db.auditLog = [];
+        db.auditLog.push({
+          user: currentUser,
+          type: `تسوية مندوب (${type})`,
+          dateTime: now(),
+          oldVal: "—",
+          newVal: `${type}: ${val} ج.م للمندوب: ${courier}`,
+          reason: desc || `تسجيل تسوية للمندوب: ${courier}`
+        });
+
+        writeDB(db);
+
+        // 3. Queue asynchronous Google Sheets write
+        executeProxyRequest(gscriptUrl, payloadToSheet).catch((syncErr) => {
+          console.error("Async Google Sheets synchronization for addCourierAdjustment failed:", syncErr);
+        });
+
+        // 4. Fast response
+        return ok(res, { msg: "تم تسجيل التسوية المالية للمندوب بنجاح" });
       }
 
       if (d.action === "dashboard") {
@@ -720,9 +892,9 @@ app.post("/api", async (req: Request, res: Response) => {
         // Enforce secure client boundaries for proxied Google Sheets response data
         if (resData && resData.ok) {
           if (d.action === "getOrders" && Array.isArray(resData.orders)) {
-            const isAgent = currentRole === "مندوب";
-            const isSupplier = currentRole === "مورد";
-            const isReturnsOfficer = currentRole === "مسؤول مرتجعات";
+            const isAgent = (currentRole || "").toString().trim() === "مندوب" || (currentRole || "").toString().trim().includes("مندوب");
+            const isSupplier = (currentRole || "").toString().trim() === "مورد" || (currentRole || "").toString().trim().includes("مورد");
+            const isReturnsOfficer = (currentRole || "").toString().trim() === "مسؤول مرتجعات" || (currentRole || "").toString().trim().includes("مرتجعات");
             let ordersList = [...resData.orders];
 
             if (isAgent) {
@@ -744,7 +916,8 @@ app.post("/api", async (req: Request, res: Response) => {
           }
 
           if (d.action === "getSupplierLedger" && Array.isArray(resData.ledger)) {
-            const targetSupplier = currentRole === "مورد" ? currentUser : (d.supplier || "");
+            const isSupplier = (currentRole || "").toString().trim() === "مورد" || (currentRole || "").toString().trim().includes("مورد");
+            const targetSupplier = isSupplier ? currentUser : (d.supplier || "");
             resData.ledger = resData.ledger.filter((l: any) => l.supplier && l.supplier.toString().trim().toLowerCase() === targetSupplier.trim().toLowerCase());
           }
         }
@@ -1955,13 +2128,20 @@ app.post("/api", async (req: Request, res: Response) => {
         });
 
         // Treasury integration if needed
-        if (type === "جزاء") {
-          // penalty acts as deduction, doesn't debit treasury directly but increases company reserves
+        if (type === "جزاء" || type === "خصم" || type === "خصم عجز") {
+          db.cashbox.push({
+            date: now(),
+            desc: `تسوية خصم/جزاء مستقطع للمندوب: ${courier} - ${desc || ''}`,
+            type: "وارد",
+            amount: val,
+            ref: "PENALTY",
+            addedBy: currentUser
+          });
         } else if (type === "مكافأة") {
           // cashbox payout for bonus
           db.cashbox.push({
             date: now(),
-            desc: `مكافأة منصرفة للمندوب: ${courier} - ${desc}`,
+            desc: `مكافأة منصرفة للمندوب: ${courier} - ${desc || ''}`,
             type: "صادر",
             amount: val,
             ref: "BONUS",

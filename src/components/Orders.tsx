@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Search, MapPin, Phone, MessageSquare, Check, Truck, User, Calendar, Trash2, Edit3, ShieldAlert, ArrowLeftRight } from "lucide-react";
+import { Search, MapPin, Phone, MessageSquare, Check, Truck, User, Calendar, Trash2, Edit3, ShieldAlert, ArrowLeftRight, Download } from "lucide-react";
 import { apiCall, toWA } from "../utils";
 
 interface OrdersProps {
@@ -12,12 +12,12 @@ interface OrdersProps {
 }
 
 export default function Orders({ token, role, username, orders, couriers, onRefresh }: OrdersProps) {
-  const isAdmin = role === "مدير";
-  const isSuper = role === "مشرف";
-  const isOps = role === "موظف عمليات";
-  const isAgent = role === "مندوب";
-  const isSupplier = role === "مورد";
-  const isReturnsOfficer = role === "مسؤول مرتجعات";
+  const isAdmin = (role || "").toString().trim() === "مدير" || (role || "").toString().trim().includes("مدير");
+  const isSuper = (role || "").toString().trim() === "مشرف" || (role || "").toString().trim().includes("مشرف");
+  const isOps = (role || "").toString().trim() === "موظف عمليات" || (role || "").toString().trim().includes("عمليات");
+  const isAgent = (role || "").toString().trim() === "مندوب" || (role || "").toString().trim().includes("مندوب");
+  const isSupplier = (role || "").toString().trim() === "مورد" || (role || "").toString().trim().includes("مورد");
+  const isReturnsOfficer = (role || "").toString().trim() === "مسؤول مرتجعات" || (role || "").toString().trim().includes("مرتجعات");
   
   const canManage = isAdmin || isSuper;
 
@@ -99,6 +99,72 @@ export default function Orders({ token, role, username, orders, couriers, onRefr
       setSelected(new Set(visibleOrders.map((o) => o.tracking)));
     }
   }
+
+  const exportToCSV = () => {
+    const dateStr = new Date().toISOString().substring(0, 10);
+    const filename = `الطلبات-${dateStr}`;
+
+    const headers = [
+      "رقم الشحنة",
+      "العميل",
+      "الهاتف",
+      "الهاتف 2",
+      "المحافظة",
+      "المنطقة",
+      "العنوان",
+      "سعر المنتج",
+      "سعر الشحن",
+      "إجمالي التحصيل",
+      "المورد",
+      "المندوب",
+      "الحالة",
+      "ملاحظات",
+      "تاريخ الإنشاء"
+    ];
+
+    const BOM = "\uFEFF";
+    const csvContent = [
+      headers.join(","),
+      ...visibleOrders.map(o => {
+        const totalCOD = o.totalCOD !== undefined ? o.totalCOD : (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
+        
+        const row = [
+          o.tracking || "",
+          o.customer || "",
+          o.phone || "",
+          o.phone2 || "",
+          o.gov || "",
+          o.region || "",
+          o.address || "",
+          o.prodPrice || 0,
+          o.shipPrice || 0,
+          totalCOD,
+          o.supplier || "",
+          o.courier || "",
+          o.status || "",
+          o.notes || "",
+          o.createdAt || ""
+        ];
+
+        return row.map(val => {
+          const stringVal = typeof val === "string" ? val.replace(/"/g, '""') : String(val);
+          return stringVal.includes(",") || stringVal.includes("\n") || stringVal.includes('"') 
+            ? `"${stringVal}"` 
+            : stringVal;
+        }).join(",");
+      })
+    ].join("\n");
+
+    const blob = new Blob([BOM + csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `${filename}.csv`);
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   // --- Actions ---
   async function triggerStatusUpdate(tracking: string, status: string, returnShippingType = "") {
@@ -224,8 +290,8 @@ export default function Orders({ token, role, username, orders, couriers, onRefr
   return (
     <div className="font-sans text-right select-none space-y-4">
       {/* Search and select buttons */}
-      <div className="flex bg-[#070d1a] px-4 py-3 border-b border-white/6 items-center gap-3">
-        <div className="relative flex-1">
+      <div className="flex bg-[#070d1a] px-4 py-3 border-b border-white/6 items-center flex-wrap gap-3">
+        <div className="relative flex-1 min-w-[200px]">
           <input
             type="text"
             value={search}
@@ -234,14 +300,26 @@ export default function Orders({ token, role, username, orders, couriers, onRefr
             className="w-full bg-slate-900 border border-white/6 rounded-xl py-2.5 pr-10 pl-4 text-xs font-bold text-slate-200 placeholder-slate-500 text-right outline-none focus:border-amber-500/20"
           />
         </div>
-        {canManage && (
-          <button
-            onClick={toggleSelectAll}
-            className="px-4 py-2 bg-slate-900 border border-white/8 rounded-xl text-[10px] text-slate-300 font-extrabold cursor-pointer transition-colors whitespace-nowrap"
-          >
-            {selected.size === visibleOrders.length ? "إلغاء التحديد" : "تحديد الكل"}
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {canManage && (
+            <button
+              onClick={toggleSelectAll}
+              className="px-4 py-2 bg-slate-900 border border-white/8 rounded-xl text-[10px] text-slate-300 font-extrabold cursor-pointer transition-colors whitespace-nowrap"
+            >
+              {selected.size === visibleOrders.length ? "إلغاء التحديد" : "تحديد الكل"}
+            </button>
+          )}
+          {(isAdmin || isSuper || isOps || (role || "").toString().toLowerCase().includes("محاسب")) && (
+            <button
+              onClick={exportToCSV}
+              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-slate-950 font-black text-[10px] rounded-xl flex items-center gap-1.5 cursor-pointer transition-all whitespace-nowrap"
+              title="تصدير النتائج الحليّة بصيغة CSV"
+            >
+              <Download size={13} />
+              تصدير كـ CSV
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Category filters */}

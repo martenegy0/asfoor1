@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { LogOut, RefreshCw, PlusCircle, LayoutDashboard, Truck, Wallet, FileText, Settings, Users, BookOpen, Layers, History, Calendar } from "lucide-react";
+import { LogOut, RefreshCw, PlusCircle, LayoutDashboard, Truck, Wallet, FileText, Settings, Users, BookOpen, Layers, History, Calendar, Download } from "lucide-react";
 import { apiCall } from "./utils";
 import Login from "./components/Login";
 import Dashboard from "./components/Dashboard";
@@ -78,8 +78,57 @@ export default function App() {
       setUsername(savedUser);
       setRole(savedRole);
       setPerms(savedPerms || "");
+      refreshAllData(savedToken, savedRole, savedUser);
     }
   }, []);
+
+  const exportCashboxToCSV = () => {
+    const dateStr = new Date().toISOString().substring(0, 10);
+    const filename = `سجل_الخزينة-${dateStr}`;
+
+    const headers = [
+      "البيان / الحركة",
+      "النوع",
+      "القيمة (ج.م)",
+      "تاريخ الحركة",
+      "الرصيد بعد الحركة (ج.م)",
+      "رقم المرجع",
+      "المسجل بواسطة"
+    ];
+
+    const BOM = "\uFEFF";
+    const csvContent = [
+      headers.join(","),
+      ...cashboxEntries.map(e => {
+        const row = [
+          e.desc || e.type || "",
+          e.type || "",
+          e.amount || 0,
+          e.date || "",
+          e.balance || 0,
+          e.ref || "",
+          e.addedBy || ""
+        ];
+
+        return row.map(val => {
+          const stringVal = typeof val === "string" ? val.replace(/"/g, '""') : String(val);
+          return stringVal.includes(",") || stringVal.includes("\n") || stringVal.includes('"') 
+            ? `"${stringVal}"` 
+            : stringVal;
+        }).join(",");
+      })
+    ].join("\n");
+
+    const blob = new Blob([BOM + csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `${filename}.csv`);
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   // Sync session on change
   function handleLoginSuccess(name: string, roleVal: string, tkVal: string, permsVal: string) {
@@ -102,7 +151,7 @@ export default function App() {
       setActiveTab("orders");
     }
 
-    refreshAllData(tkVal, roleVal);
+    refreshAllData(tkVal, roleVal, name);
   }
 
   // --- Clean Logout (Fixes Blank Page Logout Bug!) ---
@@ -124,21 +173,23 @@ export default function App() {
   }
 
   // Dual data pull
-  async function refreshAllData(tk = token, activeRole = role) {
+  async function refreshAllData(tk = token, activeRole = role, activeUser = username) {
     if (!tk) return;
     setLoadingOrders(true);
     try {
+      const cleanRole = (activeRole || "").toString().trim();
+      const isAgent = cleanRole === "مندوب" || cleanRole.includes("مندوب");
+      const isSupplier = cleanRole === "مورد" || cleanRole.includes("مورد");
+      const isReturnsOfficer = cleanRole === "مسؤول مرتجعات" || cleanRole.includes("مرتجعات");
+
       // 1. Fetch Orders List
       // If user is Courier (Agent), todayOnly true is enforced to prevent lagging
-      const resOrd = await apiCall("getOrders", tk, { todayOnly: activeRole === "مندوب" });
+      const resOrd = await apiCall("getOrders", tk, { todayOnly: isAgent });
       if (resOrd.ok) {
         let orderList = resOrd.orders || [];
 
         // Strict client-side role filtering safety boundary
-        const isAgent = activeRole === "مندوب";
-        const isSupplier = activeRole === "مورد";
-        const isReturnsOfficer = activeRole === "مسؤول مرتجعات";
-        const cleanUser = username?.trim().toLowerCase() || "";
+        const cleanUser = (activeUser || "").toString().trim().toLowerCase();
 
         if (isAgent) {
           orderList = orderList.filter((o: any) => o.courier && o.courier.toString().trim().toLowerCase() === cleanUser);
@@ -376,11 +427,11 @@ export default function App() {
   // Periodical reloading helper
   useEffect(() => {
     if (token) {
-      refreshAllData();
-      const tid = setInterval(() => refreshAllData(), 30000); // refresh every 30s
+      refreshAllData(token, role, username);
+      const tid = setInterval(() => refreshAllData(token, role, username), 30000); // refresh every 30s
       return () => clearInterval(tid);
     }
-  }, [token]);
+  }, [token, role, username]);
 
   // If token is missing, direct show the Login Portal
   if (!token) {
@@ -388,11 +439,14 @@ export default function App() {
   }
 
   // Role permissions definitions
+  const cleanRoleState = (role || "").toString().trim();
+  const isAgentState = cleanRoleState === "مندوب" || cleanRoleState.includes("مندوب");
+  const isSupplierState = cleanRoleState === "مورد" || cleanRoleState.includes("مورد");
   const showDashTab = role === "مدير" || role === "مشرف";
   const showFinanceTabs = role === "مدير" || role === "محاسب";
   const showUsersTab = role === "مدير";
-  const showAddInputTab = role === "مدير" || role === "مورد";
-  const showLedgerAccountingTab = role === "مورد" || role === "مندوب" || role === "مدير" || role === "محاسب";
+  const showAddInputTab = role === "مدير" || isSupplierState;
+  const showLedgerAccountingTab = isSupplierState || isAgentState || role === "مدير" || role === "محاسب";
   const showCouriersProfileTab = role === "مدير" || role === "محاسب" || role === "مشرف";
   const showSuppliersPageTab = role === "مدير" || role === "محاسب" || role === "مشرف";
 
@@ -655,9 +709,21 @@ export default function App() {
 
             {/* Timelines of Treasury Logs */}
             <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 space-y-4">
-              <h3 className="text-xs font-black text-slate-400 border-b border-white/6 pb-2">
-                 سجل حركات الخزينة بالتفصيل
-              </h3>
+              <div className="flex items-center justify-between border-b border-white/6 pb-2">
+                <h3 className="text-xs font-black text-slate-400">
+                   سجل حركات الخزينة بالتفصيل
+                </h3>
+                {cashboxEntries.length > 0 && (
+                  <button
+                    onClick={exportCashboxToCSV}
+                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-slate-950 font-black text-[10px] rounded-xl flex items-center gap-1.5 cursor-pointer transition-all whitespace-nowrap"
+                    title="تصدير سجل الخزينة بصيغة CSV"
+                  >
+                    <Download size={12} />
+                    تصدير كـ CSV
+                  </button>
+                )}
+              </div>
               {cashboxEntries.length === 0 ? (
                 <div className="py-8 text-center text-xs text-slate-500">لا توجد قيود بالخزنة للوقت الحالي</div>
               ) : (

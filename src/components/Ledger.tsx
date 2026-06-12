@@ -9,9 +9,9 @@ interface LedgerProps {
 }
 
 export default function Ledger({ token, role, user }: LedgerProps) {
-  const isSupplier = role === "مورد";
-  const isCourier = role === "مندوب";
-  const isFinancial = role === "مدير" || role === "محاسب";
+  const isSupplier = (role || "").toString().trim() === "مورد" || (role || "").toString().trim().includes("مورد");
+  const isCourier = (role || "").toString().trim() === "مندوب" || (role || "").toString().trim().includes("مندوب");
+  const isFinancial = (role || "").toString().trim() === "مدير" || (role || "").toString().trim() === "محاسب" || (role || "").toString().trim().includes("مدير") || (role || "").toString().trim().includes("محاسب");
 
   const [activeLedger, setActiveLedger] = useState<"supplier" | "courier">(
     isSupplier ? "supplier" : "courier"
