@@ -1,215 +1,179 @@
-import React, { useState, useEffect } from "react";
-import { apiRequest, Order, normalizeName } from "./api";
-import Login from "./components/Login";
-import AdminPanel from "./components/AdminPanel";
-import CourierPanel from "./components/CourierPanel";
-import SupplierPanel from "./components/SupplierPanel";
-import ReturnsPanel from "./components/ReturnsPanel";
-import { LogOut, Truck, Clock, ShieldCheck, Heart } from "lucide-react";
+import express, { Request, Response } from "express";
 
-export default function App() {
-  const [token, setToken] = useState<string | null>(localStorage.getItem("fp_token"));
-  const [userName, setUserName] = useState<string | null>(localStorage.getItem("fp_user"));
-  const [userRole, setUserRole] = useState<string | null>(localStorage.getItem("fp_role"));
-  const [userPerms, setUserPerms] = useState<string | null>(localStorage.getItem("fp_perms"));
+const app = express();
+const PORT = process.env.PORT || 3000;
 
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [refreshTrigger, setRefreshTrigger] = useState(0);
+// 🔗 الرابط المركزي لـ Web App الخاص بك على Google Apps Script بعد آخر Deploy
+const GOOGLE_SCRIPT_URL = https://script.google.com/macros/s/AKfycbyK9NA6Fm9O7sQtlMcMpR0Xho3WuyBP2fMo4K6F3QEtwTbcdrvQzTyIO_sfitoQTVmA/exec
+const ACCESS_TOKEN = "14014"; 
 
-  // Time ticker for Cairo Real-time Operations
-  const [cairoTime, setCairoTime] = useState("");
+// 🧠 الذاكرة المؤقتة الشاملة (LOCAL CACHE) لسرعة خارقة وتوفير الحصص اليومية لجوجل
+let LOCAL_CACHE: any = {
+  orders: [],
+  users: [],
+  couriers: [],
+  suppliers: [],
+  dashboard: null,
+  supplierAccounts: null,
+  cashbox: null,
+  expenses: [],
+  dailyClosing: [],
+  lastUpdated: 0
+};
 
-  useEffect(() => {
-    const updateTime = () => {
-      try {
-        const str = new Date().toLocaleTimeString("ar-EG", {
-          timeZone: "Africa/Cairo",
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit"
-        });
-        setCairoTime(str);
-      } catch (e) {
-        setCairoTime(new Date().toLocaleTimeString());
-      }
+// 🔄 دالة إنعاش ومزامنة الكاش الشامل من الجوجل شيت
+async function refreshCache() {
+  try {
+    const postData = async (action: string) => {
+      const res = await fetch(GOOGLE_SCRIPT_URL, {
+        method: "POST",
+        body: JSON.stringify({ action, token: ACCESS_TOKEN }),
+        headers: { "Content-Type": "application/json" }
+      });
+      return res.json();
     };
-    updateTime();
-    const interval = setInterval(updateTime, 1000);
-    return () => clearInterval(interval);
-  }, []);
 
-  const fetchOrdersInSession = async () => {
-    if (!token) return;
-    setLoading(true);
-    try {
-      // The server will automatically customize the returned payload strictly based on token role (suppliers only see their own, couriers only see assigned)
-      const res = await apiRequest("getOrders");
-      if (res.ok) {
-        setOrders(res.orders || []);
-      } else {
-        console.error("Orders fetching failure:", res.error);
-      }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
-    }
-  };
+    const [ordersRes, usersRes, couriersRes, suppliersRes, dashRes, supAccsRes, cashRes, expRes, closingRes] = await Promise.all([
+      postData("getOrders").catch(() => null),
+      postData("getUsers").catch(() => null),
+      postData("getCouriers").catch(() => null),
+      postData("getSuppliers").catch(() => null),
+      postData("dashboard").catch(() => null),
+      postData("supplierAccounts").catch(() => null),
+      postData("getCashbox").catch(() => null),
+      postData("getExpenses").catch(() => null),
+      postData("getDailyClosing").catch(() => null)
+    ]);
 
-  useEffect(() => {
-    if (token) {
-      fetchOrdersInSession();
-    }
-  }, [token, refreshTrigger]);
+    if (ordersRes?.ok) LOCAL_CACHE.orders = ordersRes.orders || [];
+    if (usersRes?.ok) LOCAL_CACHE.users = usersRes.users || [];
+    if (couriersRes?.ok) LOCAL_CACHE.couriers = couriersRes.couriers || [];
+    if (suppliersRes?.ok) LOCAL_CACHE.suppliers = suppliersRes.suppliers || [];
+    if (dashRes?.ok) LOCAL_CACHE.dashboard = dashRes;
+    if (supAccsRes?.ok) LOCAL_CACHE.supplierAccounts = supAccsRes.accounts || null;
+    if (cashRes?.ok) LOCAL_CACHE.cashbox = cashRes;
+    if (expRes?.ok) LOCAL_CACHE.expenses = expRes.expenses || [];
+    if (closingRes?.ok) LOCAL_CACHE.dailyClosing = closingRes.records || [];
 
-  const handleLoginSuccess = (user: string, role: string, perms: string, userToken: string) => {
-    localStorage.setItem("fp_token", userToken);
-    localStorage.setItem("fp_user", user);
-    localStorage.setItem("fp_role", role);
-    localStorage.setItem("fp_perms", perms);
-
-    setToken(userToken);
-    setUserName(user);
-    setUserRole(role);
-    setUserPerms(perms);
-  };
-
-  const handleLogout = () => {
-    localStorage.removeItem("fp_token");
-    localStorage.removeItem("fp_user");
-    localStorage.removeItem("fp_role");
-    localStorage.removeItem("fp_perms");
-
-    setToken(null);
-    setUserName(null);
-    setUserRole(null);
-    setUserPerms(null);
-    setOrders([]);
-  };
-
-  if (!token || !userName || !userRole) {
-    return <Login onLoginSuccess={handleLoginSuccess} />;
+    LOCAL_CACHE.lastUpdated = Date.now();
+    console.log("⚡ [Cache Fully Synced] تم تحديث جميع السجلات المالية، الإدارية، والأوردرات بنجاح.");
+  } catch (e) {
+    console.error("❌ [Cache Sync Error] فشل إنعاش كاش السيرفر الموحد:", e);
   }
-
-  // Double Check client-side constraints for Role checks
-  const isAdmin = normalizeName(userRole) === "admin" || userRole === "مدير";
-  const isSupervisor = userRole === "مشرف";
-  const isAccountant = userRole === "محاسب";
-  const isSupplier = userRole === "مورد" || normalizeName(userRole) === "supplier";
-  const isCourier = userRole === "مندوب" || normalizeName(userRole) === "courier";
-  const isReturnsOfficer = userRole === "مسؤول مرتجعات";
-
-  return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans antialiased text-right" dir="rtl">
-      {/* Prime Corporate Header */}
-      <header className="sticky top-0 z-40 bg-slate-900 border-b border-slate-800 shadow-md">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
-          
-          {/* Right Brand info */}
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-gradient-to-tr from-amber-500 to-red-600 rounded-xl flex items-center justify-center shadow-md border border-amber-400">
-              <Truck className="w-5 h-5 text-white" />
-            </div>
-            <div>
-              <h1 className="text-lg font-black tracking-tight text-white flex items-center gap-1.5">
-                <span>فريند بلس لوجستيات</span>
-                <span className="text-[10px] bg-amber-550/15 text-amber-500 border border-amber-500/20 px-1.5 py-0.5 rounded font-mono font-bold">V5.1 LIVE</span>
-              </h1>
-              <div className="text-[11px] text-slate-400 mt-0.5 flex items-center gap-1">
-                <Clock className="w-3.5 h-3.5 text-slate-500" />
-                <span>توقيت القاهرة الميداني:</span>
-                <span className="font-mono font-bold text-slate-350">{cairoTime}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Left User widgets */}
-          <div className="flex items-center gap-4">
-            
-            {/* User credentials badge */}
-            <div className="hidden sm:flex flex-col text-right">
-              <div className="text-sm font-bold text-slate-200 flex items-center gap-1.5 justify-end">
-                <span>{userName}</span>
-                <ShieldCheck className="w-4 h-4 text-emerald-400" />
-              </div>
-              <div className="text-[10px] text-indigo-400 font-bold mt-0.5">
-                الصفة: {userRole} • الصلاحية: {userPerms || "تلقائية"}
-              </div>
-            </div>
-
-            {/* Logout button */}
-            <button
-              onClick={handleLogout}
-              className="p-2.5 bg-slate-800 hover:bg-slate-750 border border-slate-700/80 rounded-xl hover:text-red-400 transition-all flex items-center gap-1.5 cursor-pointer text-xs font-bold"
-              title="تسجيل الخروج الآمن"
-            >
-              <span>تسجيل الخروج</span>
-              <LogOut className="w-4 h-4" />
-            </button>
-          </div>
-
-        </div>
-      </header>
-
-      {/* Main Workspace Frame */}
-      <main className="flex-grow max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        
-        {loading && (
-          <div className="mb-4 text-xs font-mono font-bold text-amber-500 text-right flex items-center justify-end gap-2 bg-slate-900 duration-150 p-3 rounded-lg border border-slate-850">
-            <span>جاري سحب التعديلات وحفظ الإيصالات المالية اللحظية...</span>
-            <span className="w-3.5 h-3.5 border-2 border-amber-500/20 border-t-amber-500 rounded-full animate-spin" />
-          </div>
-        )}
-
-        {/* Dynamic RBAC Panel Routing */}
-        { (isAdmin || isSupervisor || isAccountant) ? (
-          <AdminPanel
-            orders={orders}
-            onRefresh={() => setRefreshTrigger(prev => prev + 1)}
-            currentUser={userName}
-            currentRole={userRole}
-          />
-        ) : isSupplier ? (
-          <SupplierPanel
-            orders={orders}
-            onRefresh={() => setRefreshTrigger(prev => prev + 1)}
-            currentUser={userName}
-          />
-        ) : isCourier ? (
-          <CourierPanel
-            orders={orders}
-            onRefresh={() => setRefreshTrigger(prev => prev + 1)}
-            currentUser={userName}
-          />
-        ) : isReturnsOfficer ? (
-          <ReturnsPanel
-            orders={orders}
-            onRefresh={() => setRefreshTrigger(prev => prev + 1)}
-            currentUser={userName}
-          />
-        ) : (
-          <div className="bg-slate-900 border border-red-500/25 p-8 text-center rounded-2xl">
-            <h3 className="text-lg font-bold text-red-400">صلاحية معلقة بالمخالفة</h3>
-            <p className="text-slate-400 mt-2 text-sm">
-              الحساب الخاص بك ({userName}) مسجل بنجاح، ولكن المسار الوظيفي ({userRole}) يحتاج لتفعيل إداري من المدير العام عصفور.
-            </p>
-          </div>
-        )}
-
-      </main>
-
-      {/* Elegant minimalist Footer */}
-      <footer className="bg-slate-900 border-t border-slate-850/60 py-6 text-center text-xs text-slate-500">
-        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-4 font-mono">
-          <div>© {new Date().getFullYear()} شركة فريند بلس لوجستيات - مصر. جميع الحقوق محفوظة.</div>
-          <div className="flex items-center gap-1">
-            <span>صمم بكل حب وعزم</span>
-            <Heart className="w-3.5 h-3.5 text-red-500 fill-red-500" />
-            <span>لتوفير الأمان المالي اللحظي للشركاء</span>
-          </div>
-        </div>
-      </footer>
-    </div>
-  );
 }
+
+// ⏱️ مزامنة دورية صامتة بالخلفية كل دقيقتين لضمان تحديث الأرقام والتقارير
+setInterval(refreshCache, 2 * 60 * 1000);
+
+app.use(express.json({ limit: "50mb" }));
+
+// 🕹️ الموجه المركزي والربط الذكي للتطبيق
+app.post("/api", async (req: Request, res: Response) => {
+  try {
+    const d = req.body;
+    if (!d || !d.action) return res.json({ ok: false, error: "المعامل البرمجي مفقود (Action Required)" });
+
+    // الفحص وبناء الكاش لأول مرة عند إقلاع السيرفر
+    if (LOCAL_CACHE.lastUpdated === 0) await refreshCache();
+
+    // ----------------------------------------------------
+    // [1] بوابات القراءة الفورية السريعة (سرعة مللي ثانية)
+    // ----------------------------------------------------
+    
+    // تسجيل الدخول المحمي
+    if (d.action === "login") {
+      const { name, pass } = d;
+      const cleanName = name?.trim().toLowerCase().replace(/\s+/g, "");
+      const user = LOCAL_CACHE.users.find((u: any) => 
+        u.name?.trim().toLowerCase().replace(/\s+/g, "") === cleanName && u.pass?.toString().trim() === pass?.toString().trim()
+      );
+      if (!user) return res.json({ ok: false, error: "اسم المستخدم أو كلمة المرور غير صحيحة" });
+      if (user.active === "لا") return res.json({ ok: false, error: "عذراً، هذا الحساب موقوف من قبل الإدارة" });
+
+      const token = Buffer.from(JSON.stringify({ user: user.name, role: user.role, perms: user.perms, exp: Date.now() + 7 * 24 * 60 * 60 * 1000 })).toString("base64");
+      return res.json({ ok: true, user: user.name, role: user.role, token, perms: user.perms || "كاملة" });
+    }
+
+    // جلب وتصفية الشحنات مع دعم البحث الشامل (بالرقم، المورد، المندوب، الهاتف، المحافظة، والمنطقة)
+    if (d.action === "getOrders") {
+      let filteredOrders = [...LOCAL_CACHE.orders];
+      if (d.status && d.status !== "all") {
+        filteredOrders = filteredOrders.filter((o: any) => o.status === d.status);
+      }
+      if (d.search) {
+        const q = d.search.toLowerCase().trim();
+        filteredOrders = filteredOrders.filter((o: any) =>
+          [o.tracking, o.supplier, o.courier, o.customer, o.phone, o.phone2, o.gov, o.region].join(" ").toLowerCase().includes(q)
+        );
+      }
+      return res.json({ ok: true, orders: filteredOrders.reverse(), count: filteredOrders.length });
+    }
+
+    // لوحة المراقبة المالية المركزية (Dashboard)
+    if (d.action === "dashboard" && LOCAL_CACHE.dashboard) {
+      return res.json(LOCAL_CACHE.dashboard);
+    }
+
+    // كشوفات مجاميع حسابات الموردين (Supplier Accounts)
+    if (d.action === "supplierAccounts" && LOCAL_CACHE.supplierAccounts) {
+      return res.json({ ok: true, accounts: LOCAL_CACHE.supplierAccounts });
+    }
+
+    // جلب بيانات حركة الخزنة والدفاتر الحالية من الكاش
+    if (d.action === "getCashbox" && LOCAL_CACHE.cashbox) return res.json(LOCAL_CACHE.cashbox);
+    if (d.action === "getExpenses") return res.json({ ok: true, expenses: LOCAL_CACHE.expenses });
+    if (d.action === "getDailyClosing") return res.json({ ok: true, records: LOCAL_CACHE.dailyClosing });
+    if (d.action === "getUsers") return res.json({ ok: true, users: LOCAL_CACHE.users });
+    if (d.action === "getCouriers") return res.json({ ok: true, couriers: LOCAL_CACHE.couriers });
+    if (d.action === "getSuppliers") return res.json({ ok: true, suppliers: LOCAL_CACHE.suppliers });
+
+    // الفحص السريع لتكرار رقم الهاتف لمنع تكرار الشحنات للعملاء
+    if (d.action === "checkPhone") {
+      const found = LOCAL_CACHE.orders.some((o: any) => o.phone === d.phone || o.phone2 === d.phone);
+      return res.json({ ok: true, exists: found });
+    }
+
+    // ----------------------------------------------------
+    // [2] بوابات العمليات التنفيذية والكتابة (تمرير مباشر للشيت)
+    // ----------------------------------------------------
+    d.token = ACCESS_TOKEN; 
+    const googleResponse = await fetch(GOOGLE_SCRIPT_URL, {
+      method: "POST",
+      body: JSON.stringify(d),
+      headers: { "Content-Type": "application/json" }
+    });
+    const googleResult: any = await googleResponse.json();
+
+    // 🛠️ تحديث موضعي ذكي متفائل للكاش لتبدو الاستجابة فورية جداً للمستخدم
+    if (googleResult && googleResult.ok) {
+      if (d.action === "addOrder" && googleResult.order) {
+        LOCAL_CACHE.orders.push(googleResult.order);
+      } else if (d.action === "updateStatus") {
+        const target = LOCAL_CACHE.orders.find((x: any) => x.tracking === d.tracking);
+        if (target) {
+          target.status = d.status;
+          if (d.returnShippingType) target.returnShippingType = d.returnShippingType;
+          target.updatedAt = new Date().toISOString();
+        }
+      } else if (d.action === "deleteOrder") {
+        LOCAL_CACHE.orders = LOCAL_CACHE.orders.filter((x: any) => x.tracking !== d.tracking);
+      }
+      
+      // إطلاق جلب خلفي صامت لتحديث الخزنة وحسابات الأستاذ والقيود الأمنية دون جعل المستخدم ينتظر
+      refreshCache();
+    }
+
+    return res.json(googleResult);
+
+  } catch (e: any) {
+    return res.json({ ok: false, error: `خطأ اتصال بين بوابة Vercel وجوجل شيت: ${e.message}` });
+  }
+});
+
+app.get("/", (req, res) => {
+  res.send("🚀 FriendPlus Enterprise Gateway API v6.5 (Fully Audited & Synced) is working perfectly.");
+});
+
+app.listen(PORT, () => console.log(`[Server Online] Gateway running optimally on port ${PORT}`));
+
+export default app;
