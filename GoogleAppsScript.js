@@ -910,12 +910,27 @@ function getSupplierDashboard(sheets, d) {
   const supOrders = orders.filter(o => o.supplier === supplier);
   const total = supOrders.length;
   const delivered = supOrders.filter(o => o.status === "تم التسليم").length;
-  const returned = supOrders.filter(o => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)).length;
+  const returned = supOrders.filter(o => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].indexOf(o.status) !== -1).length;
 
-  // الحسابات والمدفوعات والذمم الدائنة
-  const totalCredited = ledger.filter(l => l.supplier === supplier && l.type === "أوردر مستلم").reduce((sum, l) => sum + Number(l.amount || 0), 0);
-  const totalPaid = ledger.filter(l => l.supplier === supplier && (l.type === "دفعة مورد" || l.type === "دفع نقدي" || l.type.includes("دفعة"))).reduce((sum, l) => sum + Math.abs(Number(l.amount || 0)), 0);
-  const remaining = ledger.filter(l => l.supplier === supplier).reduce((sum, l) => sum + Number(l.amount || 0), 0);
+  // 1. Total uploaded goods value (without shipping)
+  const totalGoodsUploaded = supOrders.reduce((sum, o) => {
+    var prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
+    return sum + prodPrice;
+  }, 0);
+
+  // 2. Returns delivered back to supplier ("تم تسليم المرتجع للمورد" or equivalent)
+  const returnedDGoods = supOrders.filter(o => ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "التسليم للمورد"].indexOf(o.status) !== -1);
+  const returnsDeliveredValue = returnedDGoods.reduce((sum, o) => {
+    var prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
+    return sum + prodPrice;
+  }, 0);
+
+  // 3. Cash payments paid to supplier
+  const sLedger = ledger.filter(l => l.supplier === supplier);
+  const totalPaid = sLedger.filter(l => ["دفعة مورد", "دفع نقدي", "صرف مورد"].indexOf(l.type) !== -1 || l.type.indexOf("دفعة") !== -1).reduce((sum, l) => sum + Math.abs(Number(l.amount || 0)), 0);
+
+  // 4. Current outstanding balance
+  const remaining = totalGoodsUploaded - totalPaid - returnsDeliveredValue;
 
   return {
     ok: true,
@@ -923,7 +938,7 @@ function getSupplierDashboard(sheets, d) {
       total,
       delivered,
       returned,
-      totalCredited,
+      totalCredited: totalGoodsUploaded,
       totalPaid,
       remaining
     }
@@ -939,26 +954,39 @@ function getSupplierAccounts(sheets) {
     const sLedger = ledger.filter(l => l.supplier === s.name);
     const sOrders = orders.filter(o => o.supplier === s.name);
 
-    // Sum of amounts in ledger is the live balance!
-    const balance = sLedger.reduce((sum, l) => sum + Number(l.amount || 0), 0);
-    const totalCOD = sLedger.filter(l => l.type === "أوردر مستلم").reduce((sum, l) => sum + Number(l.amount || 0), 0);
-    const returnsDelivered = sLedger.filter(l => l.type === "مرتجع" || l.type === "مرتجع تم تسليمه للمورد" || l.type.includes("مرتجع")).reduce((sum, l) => sum + Math.abs(Number(l.amount || 0)), 0);
-    const paid = sLedger.filter(l => l.supplier === s.name && (l.type === "دفعة مورد" || l.type === "دفع نقدي" || l.type.includes("دفعة"))).reduce((sum, l) => sum + Math.abs(Number(l.amount || 0)), 0);
+    // 1. Total uploaded goods value (without shipping)
+    const totalGoodsUploaded = sOrders.reduce((sum, o) => {
+      var prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
+      return sum + prodPrice;
+    }, 0);
+
+    // 2. Returns delivered back to supplier ("تم تسليم المرتجع للمورد" or equivalent)
+    const returnedOrders = sOrders.filter(o => ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "التسليم للمورد"].indexOf(o.status) !== -1);
+    const returnsCount = returnedOrders.length;
+    const returnsDeliveredValue = returnedOrders.reduce((sum, o) => {
+      var prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
+      return sum + prodPrice;
+    }, 0);
+
+    // 3. Cash payments paid to supplier
+    const paid = sLedger.filter(l => ["دفعة مورد", "دفع نقدي", "صرف مورد"].indexOf(l.type) !== -1 || l.type.indexOf("دفعة") !== -1).reduce((sum, l) => sum + Math.abs(Number(l.amount || 0)), 0);
+
+    // 4. Current outstanding balance
+    const balance = totalGoodsUploaded - paid - returnsDeliveredValue;
 
     const totalOrders = sOrders.length;
     const deliveredOrders = sOrders.filter(o => o.status === "تم التسليم").length;
-    const returnsCount = sOrders.filter(o => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)).length;
 
     return {
       name: s.name,
       phone: s.phone || "—",
-      totalRevenue: totalCOD, // Total of received order values
-      totalCOD: totalCOD,
-      returnsDelivered: returnsDelivered,
+      totalRevenue: totalGoodsUploaded,
+      totalCOD: totalGoodsUploaded,
+      returnsDelivered: returnsDeliveredValue,
       returnsCount: returnsCount,
-      paid: paid,             // Total payouts
+      paid: paid,
       payments: paid,
-      balance: balance,       // Outstanding balance
+      balance: balance,
       totalOrders: totalOrders,
       deliveredOrders: deliveredOrders
     };

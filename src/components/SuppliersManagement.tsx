@@ -202,14 +202,14 @@ export default function SuppliersManagement({ token, role }: SuppliersManagement
                       <span className="text-emerald-400 font-extrabold font-mono">
                         {acc.totalCOD.toLocaleString()} ج.م
                       </span>
-                      <span className="text-slate-500">: إجمالي المسلم الصافي</span>
+                      <span className="text-slate-500">: إجمالي مديونية المورد الثابتة</span>
                     </div>
 
                     <div className="flex justify-between text-[11px]">
                       <span className="text-red-400 font-bold font-mono">
-                        {acc.returnsCount || 0} طلب ({Math.abs(acc.returnsDelivered || 0).toLocaleString()} ج.م)
+                        {Math.abs(acc.returnsDelivered || 0).toLocaleString()} ج.م ({acc.returnsCount || 0} طلب مرتد)
                       </span>
-                      <span className="text-slate-500">: المرتجعات المخصومة</span>
+                      <span className="text-slate-500">: المرتجعات المخصومة (ج.م)</span>
                     </div>
 
                     <div className="flex justify-between text-[11px]">
@@ -275,14 +275,14 @@ export default function SuppliersManagement({ token, role }: SuppliersManagement
                   <span className="font-extrabold font-mono text-emerald-400">
                     {activeSupplier.totalCOD.toLocaleString()} ج.م
                   </span>
-                  <span>إجمالي المسلم الصافي</span>
+                  <span>إجمالي مديونية المورد الثابتة</span>
                 </div>
 
                 <div className="flex justify-between items-center text-slate-300">
                   <span className="font-extrabold font-mono text-red-400">
-                    {activeSupplier.returnsCount || 0} طلب ({Math.abs(activeSupplier.returnsDelivered || 0).toLocaleString()} ج.م)
+                    {Math.abs(activeSupplier.returnsDelivered || 0).toLocaleString()} ج.م ({activeSupplier.returnsCount || 0} طلب مرتد)
                   </span>
-                  <span>عدد وقيمة المرتجعات المستحقة</span>
+                  <span>المرتجعات المخصومة (ج.م)</span>
                 </div>
 
                 <div className="flex justify-between items-center text-slate-300">

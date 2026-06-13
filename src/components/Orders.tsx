@@ -18,9 +18,10 @@ interface SearchableCourierSelectProps {
   couriers: any[];
   placeholder?: string;
   id?: string;
+  showWarehouseReset?: boolean;
 }
 
-function SearchableCourierSelect({ value, onChange, couriers, placeholder = "اختر المندوب...", id }: SearchableCourierSelectProps) {
+function SearchableCourierSelect({ value, onChange, couriers, placeholder = "اختر المندوب...", id, showWarehouseReset }: SearchableCourierSelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState("");
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -81,7 +82,11 @@ function SearchableCourierSelect({ value, onChange, couriers, placeholder = "ا�
       >
         <span className="text-slate-400">▼</span>
         <span className="truncate">
-          {selectedCourier ? `👤 ${selectedCourier.name} (${selectedCourier.region || "شامل"})` : placeholder}
+          {value === "reset_warehouse" 
+            ? "🔄 إعادة للمستودع (سحب من المندوب وإرجاعه طلب حر)"
+            : selectedCourier 
+              ? `👤 ${selectedCourier.name} (${selectedCourier.region || "شامل"})` 
+              : placeholder}
         </span>
       </button>
 
@@ -107,6 +112,21 @@ function SearchableCourierSelect({ value, onChange, couriers, placeholder = "ا�
                 className={`w-full text-right px-3 py-2.5 rounded-xl text-xs flex items-center justify-between hover:bg-slate-950 border border-transparent hover:border-white/4 transition-all min-h-[44px] cursor-pointer ${!value ? "bg-amber-500/10 text-amber-500 border-amber-500/20" : "text-slate-400"}`}
               >
                 <span>{placeholder}</span>
+              </button>
+            )}
+            
+            {showWarehouseReset && (
+              <button
+                type="button"
+                onClick={() => {
+                  onChange("reset_warehouse");
+                  setIsOpen(false);
+                  setSearch("");
+                }}
+                className={`w-full text-right px-3 py-2.5 rounded-xl text-xs flex items-center justify-between hover:bg-red-500/10 border border-transparent hover:border-red-500/25 transition-all min-h-[44px] cursor-pointer ${value === "reset_warehouse" ? "bg-red-500/25 text-red-400 border-red-500/35 font-semibold" : "text-red-300"}`}
+              >
+                <span className="text-[9px] bg-red-950/45 text-red-405 px-1.5 py-0.5 rounded border border-red-900/30 shrink-0">إجراء جماعي</span>
+                <span className="truncate font-black text-right">🔄 إعادة للمستودع (إرجاعه كأوردر حر بقائمة الانتظار)</span>
               </button>
             )}
             {filtered.length === 0 ? (
@@ -217,6 +237,11 @@ export default function Orders({ token, role, username, orders, setOrders, couri
   const [confirmingStatus, setConfirmingStatus] = useState<{ tracking: string; status: string } | null>(null);
   const [returnedSelectOpen, setReturnedSelectOpen] = useState(false);
   const [selectedReturnOrder, setSelectedReturnOrder] = useState<any>(null);
+
+  // --- Ops Officer Call states ---
+  const [opsUpdatingCall, setOpsUpdatingCall] = useState<{ [tracking: string]: boolean }>({});
+  const [opsNotes, setOpsNotes] = useState<{ [tracking: string]: string }>({});
+  const [opsDate, setOpsDate] = useState<{ [tracking: string]: string }>({});
   
   // --- Bulk updates states ---
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
@@ -732,7 +757,15 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       updatedAt: nowEgyptStr,
     };
     if (bulkStatus) updatedFields.status = bulkStatus;
-    if (bulkCourier) updatedFields.courier = bulkCourier;
+    if (bulkCourier) {
+      if (bulkCourier === "reset_warehouse") {
+        updatedFields.courier = "";
+        updatedFields.commission = 0;
+        updatedFields.status = "جديد";
+      } else {
+        updatedFields.courier = bulkCourier;
+      }
+    }
 
     if (setOrders) {
       setOrders((prev) => {
@@ -980,6 +1013,63 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                   </div>
                 </div>
               </div>
+
+              {o.status === "لا يرد" && (
+                <div className="bg-slate-950/60 p-3 rounded-xl border border-amber-500/20 flex flex-col gap-2 mt-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-black text-amber-400">🚨 تم تصنيف الأوردر كـ "لا يرد"</span>
+                    <button
+                      type="button"
+                      onClick={() => setOpsUpdatingCall(prev => ({ ...prev, [o.tracking]: !prev[o.tracking] }))}
+                      className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-slate-100 font-extrabold text-[10px] rounded-lg cursor-pointer"
+                    >
+                      {opsUpdatingCall[o.tracking] ? "إلغاء التحديث" : "📞 تحديث نتيجة الاتصال (رد العميل)"}
+                    </button>
+                  </div>
+                  {opsUpdatingCall[o.tracking] && (
+                    <div className="space-y-3 border-t border-white/6 pt-2 select-text text-right" dir="rtl">
+                      <div className="flex flex-col gap-1">
+                        <span className="text-[10px] text-slate-350 font-bold">ملاحظات رد العميل (إجباري) *</span>
+                        <textarea
+                          placeholder="اكتب ملاحظات رد وتواصل العميل هنا..."
+                          className="bg-slate-900 border border-indigo-500/40 text-xs text-slate-100 rounded-lg p-2 font-medium h-14 resize-none w-full"
+                          value={opsNotes[o.tracking] || ""}
+                          onChange={(e) => setOpsNotes(prev => ({ ...prev, [o.tracking]: e.target.value }))}
+                        />
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <span className="text-[10px] text-slate-350 font-bold">تاريخ الاستلام المؤجل (إجباري) *</span>
+                        <input
+                          type="date"
+                          className="bg-slate-900 border border-indigo-500/40 text-xs text-slate-100 rounded-lg p-2 font-black w-full"
+                          value={opsDate[o.tracking] || ""}
+                          onChange={(e) => setOpsDate(prev => ({ ...prev, [o.tracking]: e.target.value }))}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        disabled={pendingTrackings.has(o.tracking)}
+                        onClick={() => {
+                          const userNotes = opsNotes[o.tracking] || "";
+                          const userDate = opsDate[o.tracking] || "";
+                          if (!userNotes.trim()) {
+                            alert("يرجى إدخال ملاحظات رد العميل أولاً (إجباري)");
+                            return;
+                          }
+                          if (!userDate.trim()) {
+                            alert("يرجى تحديد تاريخ الاستلام المؤجل أولاً (إجباري)");
+                            return;
+                          }
+                          triggerStatusUpdate(o.tracking, "تم رد العميل وجاري التنسيق", "", userNotes, userDate);
+                        }}
+                        className="w-full py-2 bg-gradient-to-r from-emerald-500 to-indigo-600 text-slate-100 font-extrabold text-[11px] rounded-lg cursor-pointer hover:opacity-90"
+                      >
+                        تحديث الحالة إلى "تم رد العميل وجاري التنسيق" وكتابة التقارير
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -1098,9 +1188,9 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                 </div>
 
                 <div className="flex flex-col gap-1">
-                  <span className="text-[10px] text-purple-400 font-bold">اختر لتحديث حالة الدورة المستندية (مزامنة فورية):</span>
+                  <span className="text-[10px] text-purple-400 font-bold">اختر صفة وحالة المرتجع الحالية:</span>
                   <select
-                    value={["تم استلام المرتجع في المخزن", "جاري التجنيس والفحص", "جاري الرجوع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.returnQueueStatus || "") ? o.returnQueueStatus : ""}
+                    value={o.status}
                     disabled={pendingTrackings.has(o.tracking)}
                     onChange={(e) => {
                       const val = e.target.value;
@@ -1113,14 +1203,13 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                         triggerStatusUpdate(o.tracking, val, "", currentNotes, currentDate);
                       }
                     }}
-                    className="bg-slate-900 border border-white/10 text-xs text-slate-100 rounded-lg p-2 focus:border-purple-500 font-bold focus:ring-0 cursor-pointer w-full"
+                    className="bg-slate-900 border border-white/10 text-xs text-slate-100 rounded-lg p-2.5 focus:border-purple-500 font-bold focus:ring-0 cursor-pointer w-full text-right"
                   >
-                    <option value="">-- اضغط للاختيار وتعديل الحالة فوراً --</option>
-                    <option value="تم استلام المرتجع في المخزن">🔄 تم استلام المرتجع في المخزن</option>
-                    <option value="جاري التجنيس والفحص">🔍 جاري التجنيس والفحص</option>
+                    <option value="">-- اضغط لتعديل الحالة --</option>
+                    <option value="جاري التجهيز للرجوع">🔄 جاري التجهيز للرجوع</option>
                     <option value="جاري الرجوع للمورد">🚛 جاري الرجوع للمورد</option>
-                    <option value="مرتجع تم تسليمه للمورد">📦 مرتجع تم تسليمه للمورد</option>
-                    <option value="جديد">↩ إرجاع الطلب للحالة "جديد"</option>
+                    <option value="تم تسليم المرتجع للمورد">📦 تم تسليم المرتجع للمورد (تسوية مالية للمورد)</option>
+                    <option value="جديد">↩ تم إلغاء المرتجع وإعادته للمخزن الفعلي</option>
                   </select>
                 </div>
               </div>
@@ -1781,6 +1870,63 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                           </div>
                         </div>
                       </div>
+
+                      {o.status === "لا يرد" && (
+                        <div className="bg-slate-950/60 p-3 rounded-xl border border-amber-500/20 flex flex-col gap-2 mt-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-black text-amber-400">🚨 تم تصنيف الأوردر كـ "لا يرد"</span>
+                            <button
+                              type="button"
+                              onClick={() => setOpsUpdatingCall(prev => ({ ...prev, [o.tracking]: !prev[o.tracking] }))}
+                              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-slate-100 font-extrabold text-[10px] rounded-lg cursor-pointer"
+                            >
+                              {opsUpdatingCall[o.tracking] ? "إلغاء التحديث" : "📞 تحديث نتيجة الاتصال (رد العميل)"}
+                            </button>
+                          </div>
+                          {opsUpdatingCall[o.tracking] && (
+                            <div className="space-y-3 border-t border-white/6 pt-2 select-text text-right" dir="rtl">
+                              <div className="flex flex-col gap-1">
+                                <span className="text-[10px] text-slate-355 font-bold">ملاحظات رد العميل (إجباري) *</span>
+                                <textarea
+                                  placeholder="اكتب ملاحظات رد وتواصل العميل هنا..."
+                                  className="bg-slate-900 border border-indigo-500/40 text-xs text-slate-100 rounded-lg p-2 font-medium h-14 resize-none w-full"
+                                  value={opsNotes[o.tracking] || ""}
+                                  onChange={(e) => setOpsNotes(prev => ({ ...prev, [o.tracking]: e.target.value }))}
+                                />
+                              </div>
+                              <div className="flex flex-col gap-1">
+                                <span className="text-[10px] text-slate-355 font-bold">تاريخ الاستلام المؤجل (إجباري) *</span>
+                                <input
+                                  type="date"
+                                  className="bg-slate-900 border border-indigo-500/40 text-xs text-slate-100 rounded-lg p-2 font-black w-full"
+                                  value={opsDate[o.tracking] || ""}
+                                  onChange={(e) => setOpsDate(prev => ({ ...prev, [o.tracking]: e.target.value }))}
+                                />
+                              </div>
+                              <button
+                                type="button"
+                                disabled={pendingTrackings.has(o.tracking)}
+                                onClick={() => {
+                                  const userNotes = opsNotes[o.tracking] || "";
+                                  const userDate = opsDate[o.tracking] || "";
+                                  if (!userNotes.trim()) {
+                                    alert("يرجى إدخال ملاحظات رد العميل أولاً (إجباري)");
+                                    return;
+                                  }
+                                  if (!userDate.trim()) {
+                                    alert("يرجى تحديد تاريخ الاستلام المؤجل أولاً (إجباري)");
+                                    return;
+                                  }
+                                  triggerStatusUpdate(o.tracking, "تم رد العميل وجاري التنسيق", "", userNotes, userDate);
+                                }}
+                                className="w-full py-2 bg-gradient-to-r from-emerald-500 to-indigo-600 text-slate-100 font-extrabold text-[11px] rounded-lg cursor-pointer hover:opacity-90"
+                              >
+                                تحديث الحالة إلى "تم رد العميل وجاري التنسيق" وكتابة التقارير
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1903,9 +2049,9 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                         </div>
 
                         <div className="flex flex-col gap-1">
-                          <span className="text-[10px] text-purple-400 font-bold">اختر لتحديث حالة الدورة المستندية (مزامنة فورية):</span>
+                          <span className="text-[10px] text-purple-400 font-bold">اختر صفة وحالة المرتجع الحالية:</span>
                           <select
-                            value={["تم استلام المرتجع في المخزن", "جاري التجنيس والفحص", "جاري الرجوع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.returnQueueStatus || "") ? o.returnQueueStatus : ""}
+                            value={o.status}
                             disabled={pendingTrackings.has(o.tracking)}
                             onChange={(e) => {
                               const val = e.target.value;
@@ -1918,14 +2064,13 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                                 triggerStatusUpdate(o.tracking, val, "", currentNotes, currentDate);
                               }
                             }}
-                            className="bg-slate-900 border border-white/10 text-xs text-slate-100 rounded-lg p-2 focus:border-purple-500 font-bold focus:ring-0 cursor-pointer w-full"
+                            className="bg-slate-900 border border-white/10 text-xs text-slate-100 rounded-lg p-2.5 focus:border-purple-500 font-bold focus:ring-0 cursor-pointer w-full text-right"
                           >
-                            <option value="">-- اضغط للاختيار وتعديل الحالة فوراً --</option>
-                            <option value="تم استلام المرتجع في المخزن">🔄 تم استلام المرتجع في المخزن</option>
-                            <option value="جاري التجنيس والفحص">🔍 جاري التجنيس والفحص</option>
+                            <option value="">-- اضغط لتعديل الحالة --</option>
+                            <option value="جاري التجهيز للرجوع">🔄 جاري التجهيز للرجوع</option>
                             <option value="جاري الرجوع للمورد">🚛 جاري الرجوع للمورد</option>
-                            <option value="مرتجع تم تسليمه للمورد">📦 مرتجع تم تسليمه للمورد</option>
-                            <option value="جديد">↩ إرجاع الطلب للحالة "جديد"</option>
+                            <option value="تم تسليم المرتجع للمورد">📦 تم تسليم المرتجع للمورد (تسوية مالية للمورد)</option>
+                            <option value="جديد">↩ تم إلغاء المرتجع وإعادته للمخزن الفعلي</option>
                           </select>
                         </div>
                       </div>
@@ -2034,6 +2179,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                   onChange={(val) => setBulkCourier(val)}
                   couriers={couriers}
                   placeholder="-- بقاء المندوب كما هو --"
+                  showWarehouseReset={true}
                 />
               </div>
             </div>

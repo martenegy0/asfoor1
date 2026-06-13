@@ -792,6 +792,7 @@ export default function App() {
             role={role}
             username={username}
             orders={orders}
+            setOrders={setOrders}
             couriers={couriers}
             onRefresh={() => refreshAllData()}
           />

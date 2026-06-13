@@ -786,6 +786,10 @@ app.post("/api", async (req: Request, res: Response) => {
         currentRole
       };
 
+      if (payloadToSheet.courier === "reset_warehouse") {
+        payloadToSheet.courier = "";
+      }
+
       // Enforce strict client-side role parameters security for Google Sheets proxy
       const isSheetMourid = (currentRole || "").toString().trim() === "مورد" || (currentRole || "").toString().trim().includes("مورد");
       const isSheetMandoob = (currentRole || "").toString().trim() === "مندوب" || (currentRole || "").toString().trim().includes("مندوب");
@@ -1984,18 +1988,44 @@ app.post("/api", async (req: Request, res: Response) => {
 
           const oldStatus = order.status;
 
-          if (courier !== undefined && courier !== order.courier) {
-            order.courier = courier;
-            const cProfile = db.couriers.find((c: any) => c.name === courier);
-            order.commission = cProfile ? Number(cProfile.commission || 25) : 25;
+          if (courier !== undefined) {
+            if (courier === "reset_warehouse" || courier === "") {
+              order.courier = "";
+              order.commission = 0;
+              if (order.status !== "جديد") {
+                const prevStatus = order.status;
+                order.status = "جديد";
+                if (!db.statusHistory) db.statusHistory = [];
+                db.statusHistory.push({
+                  tracking: t,
+                  oldStatus: prevStatus,
+                  newStatus: "جديد",
+                  updatedBy: currentUser,
+                  dateTime: now()
+                });
+              }
+            } else if (courier !== order.courier) {
+              order.courier = courier;
+              const cProfile = db.couriers.find((c: any) => c.name === courier);
+              order.commission = cProfile ? Number(cProfile.commission || 25) : 25;
 
-            // If courier is assigned, move 'جديد' to 'تم الإسناد'
-            if (courier && oldStatus === "جديد") {
-              order.status = "تم الإسناد";
+              // If courier is assigned, move 'جديد' to 'تم الإسناد'
+              if (courier && oldStatus === "جديد") {
+                order.status = "تم الإسناد";
+                if (!db.statusHistory) db.statusHistory = [];
+                db.statusHistory.push({
+                  tracking: t,
+                  oldStatus: "جديد",
+                  newStatus: "تم الإسناد",
+                  updatedBy: currentUser,
+                  dateTime: now()
+                });
+              }
             }
           }
 
-          if (status !== undefined && status !== order.status) {
+          // Apply bulkStatus override only if not resetting to warehouse
+          if (status !== undefined && status !== order.status && (courier !== "reset_warehouse" && courier !== "")) {
             order.status = status;
             if (status === "تم التسليم") {
               order.delivDate = now();
@@ -2183,14 +2213,15 @@ app.post("/api", async (req: Request, res: Response) => {
         if (!targetSupplier) return err(res, "المورد غير معروف");
 
         const orderList = db.orders.filter((o: any) => o.supplier === targetSupplier);
-        let total = 0, delivered = 0, returned = 0, pending = 0, cod = 0;
+        const ledgerTransactions = db.supplierLedger.filter((l: any) => l.supplier === targetSupplier);
+
+        let total = 0, delivered = 0, returned = 0, pending = 0;
 
         for (const o of orderList) {
           total++;
           const st = o.status;
           if (st === "تم التسليم") {
             delivered++;
-            cod += Number(o.totalCOD || 0) - Number(o.shipPrice || 0); // Correct net Supplier Share COD
           } else if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(st)) {
             returned++;
           } else {
@@ -2198,11 +2229,26 @@ app.post("/api", async (req: Request, res: Response) => {
           }
         }
 
-        // Compute Ledger summary
-        const sanitizedLedger = getSanitizedSupplierLedger(db);
-        const ledgerTransactions = sanitizedLedger.filter((l: any) => l.supplier === targetSupplier);
-        const ledgerBalance = ledgerTransactions.reduce((acc: number, item: any) => acc + Number(item.amount), 0);
+        // 1. Total uploaded goods value (without shipping)
+        const totalGoodsUploaded = orderList.reduce((sum: number, o: any) => {
+          const prodPrice = o.prodPrice !== undefined ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
+          return sum + prodPrice;
+        }, 0);
 
+        // 2. Returns delivered back to supplier ("تم تسليم المرتجع للمورد" or equivalent)
+        const returnedOrders = orderList.filter((o: any) => ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "التسليم للمورد"].includes(o.status));
+        const returnsDeliveredValue = returnedOrders.reduce((sum: number, o: any) => {
+          const prodPrice = o.prodPrice !== undefined ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
+          return sum + prodPrice;
+        }, 0);
+
+        // 3. Payments made to the supplier (representing all cash payouts from ledger)
+        const paymentsValue = ledgerTransactions
+          .filter((l: any) => ["دفع نقدي", "دفعة مورد", "صرف مورد"].includes(l.type) || l.tracking === "CASH-PAY" || l.type.includes("دفعة"))
+          .reduce((sum: number, l: any) => sum + Math.abs(Number(l.amount)), 0);
+
+        // 4. Current outstanding balance based on explicit formula
+        const balance = totalGoodsUploaded - paymentsValue - returnsDeliveredValue;
         const rate = total ? Math.round((delivered / total) * 100) : 0;
 
         return ok(res, {
@@ -2211,9 +2257,9 @@ app.post("/api", async (req: Request, res: Response) => {
             delivered,
             returned,
             pending,
-            cod,
+            cod: totalGoodsUploaded,
             rate,
-            due: ledgerBalance // Due matches precisely their current ledger balance
+            due: balance
           }
         });
       }
@@ -2236,16 +2282,22 @@ app.post("/api", async (req: Request, res: Response) => {
 
           // Calculates metrics based on master blueprint v7 specifications:
           // 1. Total uploaded goods value (without shipping)
-          const totalGoodsUploaded = supplierOrders.reduce((sum: number, o: any) => sum + Number(o.prodPrice || o.totalCOD || 0), 0);
+          const totalGoodsUploaded = supplierOrders.reduce((sum: number, o: any) => {
+            const prodPrice = o.prodPrice !== undefined ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
+            return sum + prodPrice;
+          }, 0);
 
           // 2. Returns delivered back to supplier (status is "تم تسليم المرتجع للمورد" or equivalent)
           const returnedOrders = supplierOrders.filter((o: any) => ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "التسليم للمورد"].includes(o.status));
           const returnsCount = returnedOrders.length;
-          const returnsDeliveredValue = returnedOrders.reduce((sum: number, o: any) => sum + Number(o.prodPrice || 0), 0);
+          const returnsDeliveredValue = returnedOrders.reduce((sum: number, o: any) => {
+            const prodPrice = o.prodPrice !== undefined ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
+            return sum + prodPrice;
+          }, 0);
 
           // 3. Payments made to the supplier (representing all cash withdrawals/payouts in ledger)
           const paymentsValue = supplierLedger
-            .filter((l: any) => ["دفع نقدي", "دفعة مورد"].includes(l.type) || l.tracking === "CASH-PAY")
+            .filter((l: any) => ["دفع نقدي", "دفعة مورد", "صرف مورد"].includes(l.type) || l.tracking === "CASH-PAY" || l.type.includes("دفعة"))
             .reduce((sum: number, l: any) => sum + Math.abs(Number(l.amount)), 0);
 
           // 4. Current outstanding balance based on Goods Purchase Model: Dues = TotalGoods - Payments - ReturnsDelivered
