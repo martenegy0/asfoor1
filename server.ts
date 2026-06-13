@@ -437,20 +437,20 @@ function getSanitizedSupplierLedger(db: any): any[] {
       if (!isPaymentOrAdjustment) {
         const order = db.orders.find((o: any) => o.tracking === item.tracking);
         if (order) {
-          if (order.status === "تم التسليم") {
-            // الشحنات المسلمة حصراً: طرح عمولات الشحن من إجمالي ثمن المنتجات الكلي المسلمة
-            const share = Number(order.totalCOD || 0) - Number(order.shipPrice || 0);
-            return { 
-              ...item, 
-              amount: share, 
-              desc: `حقوق أوردر تم تسليمه مصفى: ${order.tracking} (إجمالي ثمن المنتج ${order.totalCOD} - عمولة الشحن ${order.shipPrice})` 
+          const isReturnedToSupplier = ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "التسليم للمورد"].includes(order.status);
+          if (isReturnedToSupplier) {
+            return {
+              ...item,
+              amount: 0,
+              desc: `تسليم مرتجع مصفى بالكامل - قيمة صفرية للأوردر رقم #${order.tracking}`
             };
           } else {
-            // إلغاء أي جمع لقيم الشحنات المعلقة لإنهاء خطأ التراكم المالي
+            // بمجرد رفع الأوردرات يستحق المورد إجمالي ثمن البضاعة بالكامل بدون شحن
+            const price = Number(order.prodPrice || 0);
             return { 
               ...item, 
-              amount: 0, 
-              desc: `[شحنة معلقة مصفاة] ${item.desc} (الحالة الحالية: ${order.status})` 
+              amount: price, 
+              desc: `حقوق شراء بضاعة أوردر رقم #${order.tracking} (قيمة المنتج: ${price} ج.م - الحالة الحالية: ${order.status})` 
             };
           }
         }
@@ -636,7 +636,8 @@ async function executeProxyRequest(gscriptUrl: string, payload: any): Promise<an
   const isWrite = [
     "addOrder", "addBulk", "updateStatus", "updateOrder", "deleteOrder", "bulkUpdate",
     "addSupplierPayment", "addCourierAdjustment", "addCashbox", "addExpense",
-    "addUser", "registerUser", "updateUser", "addDailyClosing", "updateCourier"
+    "addUser", "registerUser", "updateUser", "addDailyClosing", "updateCourier",
+    "archiveOrder"
   ].includes(payload.action);
 
   if (isWrite) {
@@ -1062,7 +1063,12 @@ app.post("/api", async (req: Request, res: Response) => {
         // 2. Perform optimistic local database write
         const db = readDB();
         if (!db.dailyClosing) db.dailyClosing = [];
-        db.dailyClosing = db.dailyClosing.filter((r: any) => r.date !== date);
+        
+        const isAlreadyClosed = db.dailyClosing.some((r: any) => r.date === date);
+        if (isAlreadyClosed) {
+          return err(res, "عذراً، هذا اليوم المالي تم تقفيله واعتماده ولا يمكن تعديل أو تكرار تسوياته نهائياً من جديد برمجياً");
+        }
+
         db.dailyClosing.push({
           date,
           deliveredCount: Number(deliveredCount || 0),
@@ -1072,6 +1078,19 @@ app.post("/api", async (req: Request, res: Response) => {
           addedBy: currentUser,
           createdAt: now()
         });
+
+        // 2.5 Mark as archived/closed so that daily metrics are reset
+        if (db.orders) {
+          for (const o of db.orders) {
+            const orderDelivDate = o.delivDate ? o.delivDate.substring(0, 10) : "";
+            const orderRetDate = o.retDate ? o.retDate.substring(0, 10) : "";
+            const isDelivClosed = o.status === "تم التسليم" && orderDelivDate <= date;
+            const isRetClosed = ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status) && orderRetDate <= date;
+            if (isDelivClosed || isRetClosed) {
+              o.isClosed = true;
+            }
+          }
+        }
 
         // Add to audit logs optimistically
         if (!db.auditLog) db.auditLog = [];
@@ -1572,7 +1591,7 @@ app.post("/api", async (req: Request, res: Response) => {
       // UPDATE ORDER STATUS (Workflow Controls)
       // ─────────────────────────────────────────────────────────────
       case "updateStatus": {
-        const { tracking, status, returnShippingType } = d;
+        const { tracking, status, returnShippingType, notes, delivDate } = d;
         if (!tracking || !status) return err(res, "معاملات مفقودة");
 
         const sc = tracking.toString().trim().toUpperCase();
@@ -1618,13 +1637,18 @@ app.post("/api", async (req: Request, res: Response) => {
           }
         }
 
-        // Ops and Supplier: Forbidden from state changes
-        if (isOps) return err(res, "موظف العمليات لا يمتلك صلاحية تغيير الحالة");
+        // Ops and Supplier permissions
+        if (isOps) {
+          const opsAllowedStatuses = ["تم رد العميل وجاري التنسيق", "مؤجل", "لا يوجد رد", "جديد"];
+          if (!opsAllowedStatuses.includes(status)) {
+            return err(res, "موظف العمليات يمتلك فقط صلاحية تحديث نتيجة اتصال العميل وإرجاع الحالة");
+          }
+        }
         if (isSupplier) return err(res, "المورد لا يمتلك صلاحية تعديل الحالة");
 
         // Returns Officer Control
         if (isReturnsOfficer) {
-          const returnsOfficerAllowed = ["مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"];
+          const returnsOfficerAllowed = ["مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد", "جاري الرجوع للمورد", "جديد"];
           if (!returnsOfficerAllowed.includes(status)) {
             return err(res, "مسؤول المرتجعات يمكنه فقط تعيين حالات المرتجعات وتحديث مسارها");
           }
@@ -1676,11 +1700,13 @@ app.post("/api", async (req: Request, res: Response) => {
         }
 
         // Handle transitioning between Return Queue statuses directly
-        else if (["مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"].includes(status)) {
+        else if (["مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد", "جاري الرجوع للمورد"].includes(status)) {
           order.returnQueueStatus = status;
           if (status === "تم تسليم المرتجع للمورد") {
-            order.status = "التسليم للمورد";
+            order.status = "تم تسليم المرتجع للمورد";
             order.retDate = now();
+          } else {
+            order.status = status;
           }
         }
 
@@ -1688,6 +1714,11 @@ app.post("/api", async (req: Request, res: Response) => {
         else {
           order.status = status;
           order.updatedAt = now();
+          
+          if (status === "جديد") {
+            order.returnQueueStatus = undefined;
+            order.returnQueueAgent = undefined;
+          }
 
           if (status === "تم التسليم") {
             order.delivDate = now();
@@ -1737,6 +1768,13 @@ app.post("/api", async (req: Request, res: Response) => {
         }
 
         // --- DEDUCTION TO SUPPLIER LEDGER SYSTEM (DISABLED FOR STABILITY AND NO PRE-DELIVERY CREDITING) ---
+
+        if (notes !== undefined) {
+          order.notes = notes;
+        }
+        if (delivDate !== undefined) {
+          order.delivDate = delivDate;
+        }
 
         order.updatedAt = now();
 
@@ -1867,6 +1905,64 @@ app.post("/api", async (req: Request, res: Response) => {
 
         writeDB(db);
         return ok(res, { tracking, msg: "تم حذف الأوردر نهائياً" });
+      }
+
+      // ─────────────────────────────────────────────────────────────
+      // ARCHIVE ORDER (Admin/Accountant Only)
+      // ─────────────────────────────────────────────────────────────
+      case "archiveOrder": {
+        if (!["مدير", "محاسب"].includes(currentRole)) {
+          return err(res, "فقط المدير والمحاسب يمتلك صلاحية أرشفة الطلبات");
+        }
+
+        const { tracking } = d;
+        if (!tracking) return err(res, "معامل مفقود");
+
+        const order = db.orders.find((x: any) => x.tracking === tracking);
+        if (!order) return err(res, "الأوردر غير موجود");
+
+        const oldStatus = order.status;
+        order.status = "مؤرشف";
+        order.isArchived = true;
+        order.updatedAt = now();
+
+        if (!db.statusHistory) db.statusHistory = [];
+        db.statusHistory.push({
+          tracking,
+          oldStatus,
+          newStatus: "مؤرشف",
+          updatedBy: currentUser,
+          dateTime: now()
+        });
+
+        // Add to audit logs optimistically
+        if (!db.auditLog) db.auditLog = [];
+        db.auditLog.push({
+          user: currentUser,
+          type: "أرشفة أوردر",
+          dateTime: now(),
+          oldVal: oldStatus,
+          newVal: "مؤرشف",
+          reason: `أرشفة الشحنة وتثبيت تصفيتها التاريخية للشحنة: ${tracking}`
+        });
+
+        writeDB(db);
+
+        // Queue asynchronous Google Sheets write in background if available
+        const localGscriptUrl = process.env.GOOGLE_SCRIPT_URL;
+        if (localGscriptUrl) {
+          const payloadToSheet = {
+            ...d,
+            token: "14014",
+            currentUser,
+            currentRole
+          };
+          executeProxyRequest(localGscriptUrl.trim(), payloadToSheet).catch((syncErr) => {
+            console.error("Async Google Sheets synchronization for archiveOrder failed:", syncErr);
+          });
+        }
+
+        return ok(res, { tracking, msg: "تم أرشفة الأوردر وتصفيته بنجاح" });
       }
 
       // ─────────────────────────────────────────────────────────────
@@ -2128,47 +2224,47 @@ app.post("/api", async (req: Request, res: Response) => {
           return err(res, "ليس لديك صلاحية سحب كشوفات الموردين المالية");
         }
 
-        // Extract ledger details by Supplier
         const accountsMap: { [supplier: string]: { name: string; totalCOD: number; returnsDelivered: number; adjustments: number; payments: number; totalOrders: number; deliveredOrders: number; returnsCount: number; balance: number } } = {};
 
-        // 1. Check with sanitized ledger transactions
-        const sanitizedLedger = getSanitizedSupplierLedger(db);
-        for (const transaction of sanitizedLedger) {
-          const sup = transaction.supplier;
-          if (!sup) continue;
+        // Iterate through all unique suppliers
+        const allSuppliers = Array.from(new Set(db.orders.map((o: any) => o.supplier).filter(Boolean)));
+        
+        for (const supName of allSuppliers) {
+          const sup = String(supName);
+          const supplierOrders = db.orders.filter((o: any) => o.supplier === sup);
+          const supplierLedger = db.supplierLedger.filter((l: any) => l.supplier === sup);
 
-          if (!accountsMap[sup]) {
-            accountsMap[sup] = { name: sup, totalCOD: 0, returnsDelivered: 0, adjustments: 0, payments: 0, totalOrders: 0, deliveredOrders: 0, returnsCount: 0, balance: 0 };
-          }
+          // Calculates metrics based on master blueprint v7 specifications:
+          // 1. Total uploaded goods value (without shipping)
+          const totalGoodsUploaded = supplierOrders.reduce((sum: number, o: any) => sum + Number(o.prodPrice || o.totalCOD || 0), 0);
 
-          accountsMap[sup].balance += Number(transaction.amount);
+          // 2. Returns delivered back to supplier (status is "تم تسليم المرتجع للمورد" or equivalent)
+          const returnedOrders = supplierOrders.filter((o: any) => ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "التسليم للمورد"].includes(o.status));
+          const returnsCount = returnedOrders.length;
+          const returnsDeliveredValue = returnedOrders.reduce((sum: number, o: any) => sum + Number(o.prodPrice || 0), 0);
 
-          if (transaction.type === "أوردر مستلم" || transaction.type === "تسليم") {
-            accountsMap[sup].totalCOD += Number(transaction.amount);
-          }
-          if (transaction.type === "مرتجع" || transaction.type === "مرتجع تم تسليمه للمورد" || transaction.type.includes("مرتجع")) {
-            accountsMap[sup].returnsDelivered += Math.abs(Number(transaction.amount));
-          }
-          if (transaction.type === "تسوية") {
-            accountsMap[sup].adjustments += Number(transaction.amount);
-          }
-          if (transaction.type === "دفع نقدي" || transaction.type === "دفعة مورد" || transaction.type.includes("دفعة")) {
-            accountsMap[sup].payments += Math.abs(Number(transaction.amount));
-          }
-        }
+          // 3. Payments made to the supplier (representing all cash withdrawals/payouts in ledger)
+          const paymentsValue = supplierLedger
+            .filter((l: any) => ["دفع نقدي", "دفعة مورد"].includes(l.type) || l.tracking === "CASH-PAY")
+            .reduce((sum: number, l: any) => sum + Math.abs(Number(l.amount)), 0);
 
-        // 2. Fetch order volumes
-        for (const o of db.orders) {
-          const sup = o.supplier;
-          if (!sup) continue;
-          if (!accountsMap[sup]) {
-            accountsMap[sup] = { name: sup, totalCOD: 0, returnsDelivered: 0, adjustments: 0, payments: 0, totalOrders: 0, deliveredOrders: 0, returnsCount: 0, balance: 0 };
-          }
-          accountsMap[sup].totalOrders++;
-          if (o.status === "تم التسليم") accountsMap[sup].deliveredOrders++;
-          if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)) {
-            accountsMap[sup].returnsCount++;
-          }
+          // 4. Current outstanding balance based on Goods Purchase Model: Dues = TotalGoods - Payments - ReturnsDelivered
+          const balance = totalGoodsUploaded - paymentsValue - returnsDeliveredValue;
+
+          const totalOrders = supplierOrders.length;
+          const deliveredOrders = supplierOrders.filter((o: any) => o.status === "تم التسليم").length;
+
+          accountsMap[sup] = {
+            name: sup,
+            totalCOD: totalGoodsUploaded, // Bind totalGoodsUploaded to totalCOD to map seamlessly to "إجمالي المسلم الصافي" (total uploaded goods value) in UI
+            returnsDelivered: returnsDeliveredValue,
+            adjustments: 0,
+            payments: paymentsValue,
+            totalOrders,
+            deliveredOrders,
+            returnsCount,
+            balance
+          };
         }
 
         const accountsList = Object.values(accountsMap).map((a: any) => {
@@ -2265,7 +2361,7 @@ app.post("/api", async (req: Request, res: Response) => {
         // Fetch adjustments (Bonuses, Penalties) from courierLedger entries
         const targetLedger = db.courierLedger.filter((l: any) => l.courier === courierName);
         const bonusesSum = targetLedger.filter((l: any) => l.type === "مكافأة").reduce((sum: number, x: any) => sum + Number(x.amount), 0);
-        const penaltiesSum = targetLedger.filter((l: any) => l.type === "جزاء" || l.type === "خصم").reduce((sum: number, x: any) => sum + Number(x.amount), 0);
+        const penaltiesSum = targetLedger.filter((l: any) => l.type === "جزاء" || l.type === "خصم").reduce((sum: number, x: any) => sum + Math.abs(Number(x.amount)), 0);
 
         // Compute COD Collection tracking for anti-deficit control
         const totalCollected = courierOrders.filter((o: any) => o.status === "تم التسليم").reduce((sum: number, o: any) => sum + Number(o.totalCOD || 0), 0);
@@ -2319,7 +2415,7 @@ app.post("/api", async (req: Request, res: Response) => {
           const retEarning = isToday ? (returnedDay * commissionReturn) : 0;
 
           const dayLedger = db.courierLedger.filter((l: any) => l.courier === courierName && l.date && l.date.substring(0, 10) === dStr);
-          const dayPenalties = dayLedger.filter((l: any) => l.type === "جزاء" || l.type === "خصم").reduce((sum: number, x: any) => sum + Number(x.amount), 0);
+          const dayPenalties = dayLedger.filter((l: any) => l.type === "جزاء" || l.type === "خصم").reduce((sum: number, x: any) => sum + Math.abs(Number(x.amount)), 0);
           const dayExpenses = db.expenses?.filter((e: any) => e.by === courierName && e.date && e.date.substring(0, 10) === dStr).reduce((sum: number, e: any) => sum + Number(e.amount), 0) || 0;
           const dayBonuses = dayLedger.filter((l: any) => l.type === "مكافأة").reduce((sum: number, x: any) => sum + Number(x.amount), 0);
 
@@ -2453,7 +2549,7 @@ app.post("/api", async (req: Request, res: Response) => {
           const retEarning = isToday ? (returnedDay * commissionReturn) : 0;
 
           const dayLedger = db.courierLedger.filter((l: any) => l.courier === courierName && l.date && l.date.substring(0, 10) === dStr);
-          const dayPenalties = dayLedger.filter((l: any) => l.type === "جزاء" || l.type === "خصم").reduce((sum: number, x: any) => sum + Number(x.amount), 0);
+          const dayPenalties = dayLedger.filter((l: any) => l.type === "جزاء" || l.type === "خصم").reduce((sum: number, x: any) => sum + Math.abs(Number(x.amount)), 0);
           const dayExpenses = db.expenses?.filter((e: any) => e.by === courierName && e.date && e.date.substring(0, 10) === dStr).reduce((sum: number, e: any) => sum + Number(e.amount), 0) || 0;
           const dayBonuses = dayLedger.filter((l: any) => l.type === "مكافأة").reduce((sum: number, x: any) => sum + Number(x.amount), 0);
 
@@ -2616,13 +2712,12 @@ app.post("/api", async (req: Request, res: Response) => {
       // EXPENSES OPERATIONS
       // ─────────────────────────────────────────────────────────────
       case "expenses": {
+        let expensesList = db.expenses || [];
         if (!["مدير", "محاسب"].includes(currentRole)) {
-          return err(res, "لا توجد لديك صلاحية لمطالعة بند المصروفات");
+          expensesList = expensesList.filter((e: any) => e.addedBy === currentUser);
         }
 
-        const expensesList = db.expenses;
         const total = expensesList.reduce((sum: number, x: any) => sum + Number(x.amount), 0);
-
         return ok(res, { expenses: [...expensesList].reverse(), total });
       }
 

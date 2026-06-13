@@ -566,6 +566,7 @@ export default function App() {
   const cleanRoleState = (role || "").toString().trim();
   const isAgentState = cleanRoleState === "مندوب" || cleanRoleState.includes("مندوب");
   const isSupplierState = cleanRoleState === "مورد" || cleanRoleState.includes("مورد");
+  const isReturnsOfficer = cleanRoleState === "مسؤول مرتجعات" || cleanRoleState.includes("مرتجع");
   const showDashTab = role === "مدير" || role === "مشرف";
   const showFinanceTabs = role === "مدير" || role === "محاسب";
   const showUsersTab = role === "مدير";
@@ -597,7 +598,7 @@ export default function App() {
 
         {/* Global Action items */}
         <div className="flex gap-2">
-          {/* Real-time sync trigger (Fixes infinite loading / Lag) */}
+          {/* Real-time sync trigger */}
           <button
             onClick={() => refreshAllData()}
             disabled={loadingOrders}
@@ -618,32 +619,41 @@ export default function App() {
       </header>
 
       {/* Dynamic Summary Micro indicators counters */}
-      <div className="grid grid-cols-2 md:grid-cols-6 border-b border-white/6 bg-slate-950 text-center text-xs py-2 md:h-14 items-center gap-y-2 md:gap-y-0">
-        <div className="border-l border-white/4 space-y-0.5 pointer-events-none">
-          <div className="text-sm font-black text-amber-500 font-mono">{quickTotal}</div>
-          <div className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider">إجمالي الطلبات</div>
+      {!isReturnsOfficer ? (
+        <div className="grid grid-cols-2 md:grid-cols-6 border-b border-white/6 bg-slate-950 text-center text-xs py-2 md:h-14 items-center gap-y-2 md:gap-y-0">
+          <div className="border-l border-white/4 space-y-0.5 pointer-events-none">
+            <div className="text-sm font-black text-amber-500 font-mono">{quickTotal}</div>
+            <div className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider">إجمالي الطلبات</div>
+          </div>
+          <div className="border-0 md:border-l border-white/4 space-y-0.5 pointer-events-none">
+            <div className="text-sm font-black text-emerald-400 font-mono">{quickDelivered}</div>
+            <div className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider">تم التسليم</div>
+          </div>
+          <div className="border-l border-white/4 space-y-0.5 pointer-events-none">
+            <div className="text-sm font-black text-red-500 font-mono">{quickReturned}</div>
+            <div className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider">المرتجع</div>
+          </div>
+          <div className="border-0 md:border-l border-white/4 space-y-0.5 pointer-events-none">
+            <div className="text-sm font-black text-blue-400 font-mono">{quickActive}</div>
+            <div className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider">قيد التنفيذ</div>
+          </div>
+          <div className="border-l border-white/4 space-y-0.5 pointer-events-none">
+            <div className="text-sm font-black text-emerald-500 font-mono">{(quickTotalCOD || 0).toLocaleString("ar")} ج.م</div>
+            <div className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest font-black leading-none py-0.5">التحصيل المتراكم</div>
+          </div>
+          <div className="space-y-0.5 pointer-events-none">
+            <div className="text-sm font-black text-amber-400 font-mono">{(quickTodayCOD || 0).toLocaleString("ar")} ج.م</div>
+            <div className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest font-black leading-none py-0.5">تحصيل اليوم</div>
+          </div>
         </div>
-        <div className="border-0 md:border-l border-white/4 space-y-0.5 pointer-events-none">
-          <div className="text-sm font-black text-emerald-400 font-mono">{quickDelivered}</div>
-          <div className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider">تم التسليم</div>
+      ) : (
+        <div className="grid grid-cols-1 border-b border-white/6 bg-slate-950 text-center text-xs py-2 md:h-14 items-center animate-fade-in">
+          <div className="space-y-0.5 pointer-events-none">
+            <div className="text-sm font-black text-red-500 font-mono">{quickReturned}</div>
+            <div className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest font-black leading-none py-0.5">أوردرات قيد تصنيف المرتجعات الحالية</div>
+          </div>
         </div>
-        <div className="border-l border-white/4 space-y-0.5 pointer-events-none">
-          <div className="text-sm font-black text-red-500 font-mono">{quickReturned}</div>
-          <div className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider">المرتجع</div>
-        </div>
-        <div className="border-0 md:border-l border-white/4 space-y-0.5 pointer-events-none">
-          <div className="text-sm font-black text-blue-400 font-mono">{quickActive}</div>
-          <div className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider">قيد التنفيذ</div>
-        </div>
-        <div className="border-l border-white/4 space-y-0.5 pointer-events-none">
-          <div className="text-sm font-black text-emerald-500 font-mono">{(quickTotalCOD || 0).toLocaleString("ar")} ج.م</div>
-          <div className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest font-black leading-none py-0.5">التحصيل المتراكم</div>
-        </div>
-        <div className="space-y-0.5 pointer-events-none">
-          <div className="text-sm font-black text-amber-400 font-mono">{(quickTodayCOD || 0).toLocaleString("ar")} ج.م</div>
-          <div className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest font-black leading-none py-0.5">تحصيل اليوم</div>
-        </div>
-      </div>
+      )}
 
       {/* Tabs navigation row bar */}
       <nav className="flex bg-slate-900 border-b border-white/6 overflow-x-auto scrollbar-none scroll-smooth">
@@ -954,7 +964,7 @@ export default function App() {
 
         {/* --- DAILY CLOSING REPORT TAB (Only Accountant & Admin) --- */}
         {activeTab === "closing" && showFinanceTabs && (
-          <DailyClosing token={token} role={role} user={username} />
+          <DailyClosing token={token} role={role} user={username} orders={orders} />
         )}
 
         {/* --- USERS MANAGEMENT TAB (Admin only per rules) --- */}

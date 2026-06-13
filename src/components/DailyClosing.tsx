@@ -9,6 +9,7 @@ interface DailyClosingProps {
   token: string;
   role: string;
   user: string;
+  orders?: any[];
 }
 
 interface ClosingRecord {
@@ -23,7 +24,7 @@ interface ClosingRecord {
   courierCommissions?: number;
 }
 
-export default function DailyClosing({ token, role, user }: DailyClosingProps) {
+export default function DailyClosing({ token, role, user, orders }: DailyClosingProps) {
   // Historical closing states
   const [closingRecords, setClosingRecords] = useState<ClosingRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -56,24 +57,31 @@ export default function DailyClosing({ token, role, user }: DailyClosingProps) {
   const [detailSearch, setDetailSearch] = useState("");
   const [detailStatusFilter, setDetailStatusFilter] = useState("all");
 
+  const isSelectedClosed = closingRecords.some((r) => r.date === selectedClosingDate);
+  const isManualClosed = closingRecords.some((r) => r.date === manualDate);
+
   async function loadDetailOrders(targetDate: string) {
     setActiveDetailDate(targetDate);
     setLoadingDetail(true);
     setDetailSearch("");
     setDetailStatusFilter("all");
     try {
-      const res = await apiCall("getOrders", token);
-      if (res.ok && res.orders) {
-        const ordersList = res.orders || [];
-        // Filter orders related to targetDate
-        const filtered = ordersList.filter((o: any) => {
-          const dDate = o.delivDate ? o.delivDate.split(" ")[0] : "";
-          const rDate = o.retDate ? o.retDate.split(" ")[0] : "";
-          const cDate = o.createdAt ? o.createdAt.split(" ")[0] : (o.orderDate ? o.orderDate.split(" ")[0] : "");
-          return dDate === targetDate || rDate === targetDate || cDate === targetDate;
-        });
-        setDetailOrders(filtered);
+      let ordersList = orders || [];
+      if (ordersList.length === 0) {
+        const res = await apiCall("getOrders", token);
+        if (res.ok && res.orders) {
+          ordersList = res.orders || [];
+        }
       }
+      
+      // Filter orders related to targetDate
+      const filtered = ordersList.filter((o: any) => {
+        const dDate = o.delivDate ? o.delivDate.split(" ")[0] : "";
+        const rDate = o.retDate ? o.retDate.split(" ")[0] : "";
+        const cDate = o.createdAt ? o.createdAt.split(" ")[0] : (o.orderDate ? o.orderDate.split(" ")[0] : "");
+        return dDate === targetDate || rDate === targetDate || cDate === targetDate;
+      });
+      setDetailOrders(filtered);
     } catch (err) {
       console.error(err);
     } finally {
@@ -116,10 +124,16 @@ export default function DailyClosing({ token, role, user }: DailyClosingProps) {
     setErrorMsg("");
     setSuccessMsg("");
     try {
-      // Fetch current orders
-      const res = await apiCall("getOrders", token);
-      if (res.ok && res.orders) {
-        const ordersList = res.orders || [];
+      // Use locally loaded orders prop where available for high-speed client-side calculation, fallback to API
+      let ordersList = orders || [];
+      if (ordersList.length === 0) {
+        const res = await apiCall("getOrders", token);
+        if (res.ok && res.orders) {
+          ordersList = res.orders || [];
+        }
+      }
+
+      if (ordersList.length >= 0) {
         const targetDate = selectedClosingDate.trim();
 
         // Safe lowercase status filter matching
@@ -217,7 +231,7 @@ export default function DailyClosing({ token, role, user }: DailyClosingProps) {
           courierCommissions
         });
       } else {
-        setErrorMsg("تعذر تحميل قائمة الأوردرات لحساب التقفيل اللحظي: " + (res.error || ""));
+        setErrorMsg("تعذر تحميل قائمة الأوردرات لحساب التقفيل اللحظي");
       }
     } catch (err: any) {
       setErrorMsg("عطل أثناء الاتصال والحساب: " + (err.message || err));
@@ -230,6 +244,12 @@ export default function DailyClosing({ token, role, user }: DailyClosingProps) {
   async function handleSaveClosing(record: ClosingRecord) {
     setErrorMsg("");
     setSuccessMsg("");
+
+    // Programmatic safety block - Cannot edit locked/submitted days
+    if (closingRecords.some((r) => r.date === record.date)) {
+      setErrorMsg("⚠️ عذراً، هذا اليوم المالي معتمد ومغلق مسبقاً. البيانات مقفلة بالكامل ولا يمكن التعديل عليها.");
+      return;
+    }
 
     // 1. Fire and Forget: Immediately close the draft, show success banner and add to list optimistically
     setCalculatedDraft(null);
@@ -380,13 +400,21 @@ export default function DailyClosing({ token, role, user }: DailyClosingProps) {
             </span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+          {isSelectedClosed && (
+            <div className="p-4 bg-red-950/45 border-r-4 border-red-500 rounded-xl text-red-300 text-xs font-semibold leading-relaxed flex items-start gap-2.5 animate-fade-in">
+              <AlertCircle size={16} className="shrink-0 text-red-500 mt-0.5" />
+              <span><strong>⚠️ عذراً، تم اعتماد وإغلاق حسابات هذا اليوم من الإدارة والمالية؛ البيانات مؤمنة ومقفلة بالكامل ولا يمكن التعديل عليها نهائياً برمجياً.</strong></span>
+            </div>
+          )}
+
+          <div className={`grid grid-cols-1 md:grid-cols-3 gap-3 items-end ${isSelectedClosed ? "opacity-60 pointer-events-none" : ""}`}>
             <div>
               <label className="block text-[11px] font-black text-slate-400 mb-1.5">التاريخ المستهدف للتقفيل</label>
               <div className="relative">
                 <input
                   type="date"
                   value={selectedClosingDate}
+                  disabled={isSelectedClosed}
                   onChange={(e) => {
                     setSelectedClosingDate(e.target.value);
                     setCalculatedDraft(null); // Clear previous draft
@@ -400,6 +428,7 @@ export default function DailyClosing({ token, role, user }: DailyClosingProps) {
               <label className="block text-[11px] font-black text-slate-400 mb-1.5">طريقة مطابقة البيانات</label>
               <select
                 value={aggregationBasis}
+                disabled={isSelectedClosed}
                 onChange={(e: any) => {
                   setAggregationBasis(e.target.value);
                   setCalculatedDraft(null);
@@ -413,7 +442,7 @@ export default function DailyClosing({ token, role, user }: DailyClosingProps) {
 
             <button
               onClick={calculateLiveDraft}
-              disabled={calculating || !selectedClosingDate}
+              disabled={calculating || !selectedClosingDate || isSelectedClosed}
               className="w-full py-2.5 bg-orange-500 hover:bg-orange-600 active:scale-98 disabled:opacity-40 text-slate-950 hover:text-slate-950 font-black text-xs rounded-xl cursor-pointer flex items-center justify-center gap-1.5 transition-all"
             >
               <TrendingUp size={14} />
@@ -548,6 +577,12 @@ export default function DailyClosing({ token, role, user }: DailyClosingProps) {
             </button>
           </div>
 
+          {isManualClosed && isManualMode && (
+            <div className="p-3 bg-red-950/45 border-r-[3px] border-red-500 rounded-xl text-red-300 text-[11px] font-semibold leading-relaxed">
+              ⚠️ عذراً، تاريخ التقفيل المختار معتمد ومغلق مسبقاً.
+            </div>
+          )}
+
           {isManualMode ? (
             <form onSubmit={handleManualSubmit} className="space-y-3">
               <div>
@@ -561,62 +596,69 @@ export default function DailyClosing({ token, role, user }: DailyClosingProps) {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-[10px] font-black text-slate-400 mb-1">إجمالي التسليم (عدد)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    placeholder="0"
-                    value={manualDelivered}
-                    onChange={(e) => setManualDelivered(e.target.value)}
-                    className="w-full bg-slate-950 border border-white/8 rounded-xl py-1.5 px-3 text-xs text-slate-200 focus:outline-none focus:border-orange-500 font-mono text-center"
-                  />
+              <div className={`space-y-3 ${isManualClosed ? "opacity-50 pointer-events-none" : ""}`}>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-400 mb-1">إجمالي التسليم (عدد)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      placeholder="0"
+                      disabled={isManualClosed}
+                      value={manualDelivered}
+                      onChange={(e) => setManualDelivered(e.target.value)}
+                      className="w-full bg-slate-950 border border-white/8 rounded-xl py-1.5 px-3 text-xs text-slate-200 focus:outline-none focus:border-orange-500 font-mono text-center"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-400 mb-1">المرتجع (عدد)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      placeholder="0"
+                      disabled={isManualClosed}
+                      value={manualReturned}
+                      onChange={(e) => setManualReturned(e.target.value)}
+                      className="w-full bg-slate-950 border border-white/8 rounded-xl py-1.5 px-3 text-xs text-slate-200 focus:outline-none focus:border-orange-500 font-mono text-center"
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-[10px] font-black text-slate-400 mb-1">المرتجع (عدد)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    placeholder="0"
-                    value={manualReturned}
-                    onChange={(e) => setManualReturned(e.target.value)}
-                    className="w-full bg-slate-950 border border-white/8 rounded-xl py-1.5 px-3 text-xs text-slate-200 focus:outline-none focus:border-orange-500 font-mono text-center"
-                  />
-                </div>
-              </div>
 
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-[10px] font-black text-slate-400 mb-1">إجمالي المحصل COD</label>
-                  <input
-                    type="number"
-                    min="0"
-                    placeholder="0"
-                    value={manualCOD}
-                    onChange={(e) => setManualCOD(e.target.value)}
-                    className="w-full bg-slate-950 border border-white/8 rounded-xl py-1.5 px-3 text-xs text-slate-200 focus:outline-none focus:border-orange-500 font-mono text-center"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-black text-slate-400 mb-1">تكلفة الشحن (ج.م)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    placeholder="0"
-                    value={manualShip}
-                    onChange={(e) => setManualShip(e.target.value)}
-                    className="w-full bg-slate-950 border border-white/8 rounded-xl py-1.5 px-3 text-xs text-slate-200 focus:outline-none focus:border-orange-500 font-mono text-center"
-                  />
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-400 mb-1">إجمالي المحصل COD</label>
+                    <input
+                      type="number"
+                      min="0"
+                      placeholder="0"
+                      disabled={isManualClosed}
+                      value={manualCOD}
+                      onChange={(e) => setManualCOD(e.target.value)}
+                      className="w-full bg-slate-950 border border-white/8 rounded-xl py-1.5 px-3 text-xs text-slate-200 focus:outline-none focus:border-orange-500 font-mono text-center"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-400 mb-1">تكلفة الشحن (ج.م)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      placeholder="0"
+                      disabled={isManualClosed}
+                      value={manualShip}
+                      onChange={(e) => setManualShip(e.target.value)}
+                      className="w-full bg-slate-950 border border-white/8 rounded-xl py-1.5 px-3 text-xs text-slate-200 focus:outline-none focus:border-orange-500 font-mono text-center"
+                    />
+                  </div>
                 </div>
               </div>
 
               <button
                 type="submit"
-                className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-black text-xs rounded-xl cursor-pointer flex items-center justify-center gap-1 transitions-all"
+                disabled={isManualClosed}
+                className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-30 disabled:cursor-not-allowed text-slate-950 font-black text-xs rounded-xl cursor-pointer flex items-center justify-center gap-1 transitions-all"
               >
                 <Save size={13} />
-                ترصيد التقفيل اليدوي بالشيت
+                {isManualClosed ? "التاريخ مقفل برمجياً" : "ترصيد التقفيل اليدوي بالشيت"}
               </button>
             </form>
           ) : (

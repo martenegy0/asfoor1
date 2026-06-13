@@ -153,6 +153,22 @@ export default function Orders({ token, role, username, orders, setOrders, couri
   const basicSalary = currentCourierProfile ? Number(currentCourierProfile.salary || 3000) : 3000;
   const rawCommission = currentCourierProfile ? Number(currentCourierProfile.commission || 25) : 25;
 
+  const [courierExpenses, setCourierExpenses] = useState<number>(0);
+
+  React.useEffect(() => {
+    if (isAgent) {
+      apiCall("expenses", token).then((res) => {
+        if (res && res.ok && res.expenses) {
+          const todayYMD = getTodayDateStr();
+          const todaySum = res.expenses
+            .filter((e: any) => e.dateTime && e.dateTime.substring(0, 10) === todayYMD)
+            .reduce((sum: number, e: any) => sum + Number(e.amount || 0), 0);
+          setCourierExpenses(todaySum);
+        }
+      });
+    }
+  }, [token, isAgent, orders]);
+
   const todayDateStr = getTodayDateStr();
 
   const todayDeliveredOrders = orders.filter((o: any) => {
@@ -501,7 +517,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
   };
 
   // --- Actions ---
-  async function triggerStatusUpdate(tracking: string, status: string, returnShippingType = "") {
+  async function triggerStatusUpdate(tracking: string, status: string, returnShippingType = "", notes = "", delivDate = "") {
     // If order was marked as 'مرتجع' and no shipping type chosen, open dialog (Third Point Fix!)
     if (status === "مرتجع" && !returnShippingType) {
       const ordObj = orders.find((o) => o.tracking === tracking);
@@ -539,8 +555,11 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       status,
       updatedAt: nowEgyptStr,
     };
+    if (notes) updatedFields.notes = notes;
+    if (delivDate) updatedFields.delivDate = delivDate;
+
     if (status === "تم التسليم") {
-      updatedFields.delivDate = nowEgyptStr;
+      updatedFields.delivDate = delivDate || nowEgyptStr;
     } else if (["مرتجع", "التسليم للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد"].includes(status)) {
       updatedFields.retDate = nowEgyptStr;
     }
@@ -570,6 +589,8 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       tracking,
       status,
       returnShippingType,
+      notes,
+      delivDate,
     })
       .then((res) => {
         if (res && res.ok) {
@@ -902,6 +923,65 @@ export default function Orders({ token, role, username, orders, setOrders, couri
               <span>مسؤول المتابعة: <span className="font-bold underline">{o.returnQueueAgent || "لم يعين"}</span></span>
             </div>
           )}
+
+          {isOps && (
+            <div className="col-span-1 md:col-span-2 bg-[#0a1128] p-4 rounded-xl border border-indigo-500/30 text-right space-y-3" dir="rtl">
+              <div className="flex items-center gap-1.5 text-indigo-400">
+                <span className="text-sm">🎧</span>
+                <span className="text-xs font-black">لوحة متابعة موظف العمليات والاتصال:</span>
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1">
+                  <span className="text-[10px] text-slate-400 font-bold">تسجيل نتيجة المكالمة التفصيلية:</span>
+                  <textarea
+                    id={`notes-input-${o.tracking}`}
+                    defaultValue={o.notes || ""}
+                    placeholder="شرح تواصل العميل، رغبته، أو تفاصيل المتابعة الحالية..."
+                    className="bg-slate-900 border border-white/8 text-xs text-slate-100 rounded-lg p-2 focus:border-indigo-500 font-medium h-16 resize-none w-full"
+                  />
+                </div>
+
+                <div className="flex flex-col gap-2 justify-between">
+                  <div>
+                    <span className="text-[10px] text-slate-400 font-bold">تاريخ التوصيل الفعلي المتوقع:</span>
+                    <input
+                      id={`date-input-${o.tracking}`}
+                      type="date"
+                      defaultValue={o.delivDate ? o.delivDate.substring(0, 10) : ""}
+                      className="bg-slate-900 border border-white/8 text-xs text-slate-100 rounded-lg p-1.5 focus:border-indigo-500 font-semibold w-full mt-1"
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1 mt-1">
+                    <span className="text-[10px] text-indigo-400 font-bold">تعديل الحالة مع حفظ البيانات أعلاه:</span>
+                    <select
+                      disabled={pendingTrackings.has(o.tracking)}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val) {
+                          const notesEl = document.getElementById(`notes-input-${o.tracking}`) as HTMLTextAreaElement | null;
+                          const dateEl = document.getElementById(`date-input-${o.tracking}`) as HTMLInputElement | null;
+                          const currentNotes = notesEl ? notesEl.value : (o.notes || "");
+                          const currentDate = dateEl ? dateEl.value : (o.delivDate || "");
+                          
+                          triggerStatusUpdate(o.tracking, val, "", currentNotes, currentDate);
+                          e.target.value = ""; // Reset value after trigger
+                        }
+                      }}
+                      className="bg-slate-900 border border-white/10 text-xs text-slate-100 rounded-lg p-1.5 focus:border-indigo-500 font-bold focus:ring-0 cursor-pointer w-full"
+                    >
+                      <option value="">-- اختر الحالة الجديدة --</option>
+                      <option value="تم رد العميل وجاري التنسيق">تم رد العميل وجاري التنسيق</option>
+                      <option value="مؤجل">مؤجل (تأجيل الطلب)</option>
+                      <option value="لا يوجد رد">لا يوجد رد (محاولة تواصل)</option>
+                      <option value="جديد">إرجاع الأوردر لحالة "جديد"</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Action Controls */}
@@ -988,21 +1068,61 @@ export default function Orders({ token, role, username, orders, setOrders, couri
             )}
 
             {isReturnsOfficer && (
-              <div className="flex gap-1 bg-slate-950 p-1 rounded-lg border border-white/6 items-center">
-                <span className="text-[9px] text-slate-500 font-bold px-1.5 font-sans">خط المرتجع:</span>
-                {["مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"].map((rs) => (
-                  <button
-                    key={rs}
+              <div className="flex flex-col gap-3 bg-slate-950 p-3.5 rounded-xl border border-purple-500/30 w-full text-right" dir="rtl">
+                <div className="flex items-center gap-1.5 text-purple-400">
+                  <span className="text-sm">🔄</span>
+                  <span className="text-xs font-black">الدورة المستندية والخطوات اللوجستية للمرتجع:</span>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="flex flex-col gap-1">
+                    <span className="text-[10px] text-slate-400 font-bold">ملاحظات ووصاية المرتجع:</span>
+                    <input
+                      id={`ret-notes-${o.tracking}`}
+                      type="text"
+                      placeholder="اكتب ملاحظات فرز المرتجع أو رغبة التوريد..."
+                      defaultValue={o.notes || ""}
+                      className="bg-slate-900 border border-white/8 text-xs text-slate-100 rounded-lg p-2 focus:border-purple-500 font-medium w-full"
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <span className="text-[10px] text-slate-400 font-bold">تاريخ المتابعة المتوقع:</span>
+                    <input
+                      id={`ret-date-${o.tracking}`}
+                      type="date"
+                      defaultValue={o.delivDate ? o.delivDate.substring(0, 10) : ""}
+                      className="bg-slate-900 border border-white/8 text-xs text-slate-100 rounded-lg p-1.5 focus:border-purple-500 font-semibold w-full"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <span className="text-[10px] text-purple-400 font-bold">اختر لتحديث حالة الدورة المستندية (مزامنة فورية):</span>
+                  <select
+                    value={["تم استلام المرتجع في المخزن", "جاري التجنيس والفحص", "جاري الرجوع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.returnQueueStatus || "") ? o.returnQueueStatus : ""}
                     disabled={pendingTrackings.has(o.tracking)}
-                    onClick={() => triggerStatusUpdate(o.tracking, rs)}
-                    className={`px-2 py-1 text-[9px] font-bold rounded cursor-pointer flex items-center gap-0.5 ${
-                      o.returnQueueStatus === rs ? "bg-purple-650 text-slate-100" : "text-slate-500 hover:text-slate-305 hover:text-slate-300"
-                    } ${pendingTrackings.has(o.tracking) ? "opacity-50 pointer-events-none" : ""}`}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val) {
+                        const notesEl = document.getElementById(`ret-notes-${o.tracking}`) as HTMLInputElement | null;
+                        const dateEl = document.getElementById(`ret-date-${o.tracking}`) as HTMLInputElement | null;
+                        const currentNotes = notesEl ? notesEl.value : (o.notes || "");
+                        const currentDate = dateEl ? dateEl.value : (o.delivDate || "");
+
+                        triggerStatusUpdate(o.tracking, val, "", currentNotes, currentDate);
+                      }
+                    }}
+                    className="bg-slate-900 border border-white/10 text-xs text-slate-100 rounded-lg p-2 focus:border-purple-500 font-bold focus:ring-0 cursor-pointer w-full"
                   >
-                    {pendingTrackings.has(o.tracking) && o.returnQueueStatus !== rs && <Loader2 size={8} className="animate-spin" />}
-                    <span>{rs.split(" ").slice(-1)[0]}</span>
-                  </button>
-                ))}
+                    <option value="">-- اضغط للاختيار وتعديل الحالة فوراً --</option>
+                    <option value="تم استلام المرتجع في المخزن">🔄 تم استلام المرتجع في المخزن</option>
+                    <option value="جاري التجنيس والفحص">🔍 جاري التجنيس والفحص</option>
+                    <option value="جاري الرجوع للمورد">🚛 جاري الرجوع للمورد</option>
+                    <option value="مرتجع تم تسليمه للمورد">📦 مرتجع تم تسليمه للمورد</option>
+                    <option value="جديد">↩ إرجاع الطلب للحالة "جديد"</option>
+                  </select>
+                </div>
               </div>
             )}
           </div>
@@ -1106,43 +1226,78 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       </div>
 
       {/* 📅 Dynamic Date Filter Bar */}
-      <div className="mx-4 p-3 bg-gradient-to-r from-slate-900/90 to-slate-950 border border-white/6 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-3 text-right">
-        <div className="flex items-center gap-2">
-          <Calendar size={14} className="text-amber-500 shrink-0" />
-          <span className="text-xs font-black text-slate-200">فلاتر الأيام الذكية:</span>
+      <div className="mx-4 p-4 bg-slate-900 border border-white/6 rounded-2xl space-y-3.5 text-right animate-fadeIn">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2">
+            <span className="p-1 px-1.5 bg-amber-500/10 text-amber-500 rounded-md text-[10px] shrink-0">📅</span>
+            <span className="text-xs font-black text-slate-100 font-sans">فلاتر الأيام الذكية للفرز السريع والمسلمات</span>
+          </div>
+          <div className="text-xs font-black text-amber-505 bg-amber-950/20 px-3 py-1 border border-amber-900/40 rounded-lg">
+            إجمالي أوردرات اليوم المحدد: <span className="font-mono text-sm underline text-amber-400">{
+              selectedDate === "all"
+                ? orders.filter(o => !o.isArchived && o.status !== "مؤرشف").length
+                : orders.filter(o => normalizeDateToYMD(o.orderDate || o.createdAt) === selectedDate).length
+            }</span> أوردر
+          </div>
         </div>
-        
-        <div className="flex flex-wrap items-center gap-1.5">
+
+        <div className="overflow-x-auto flex items-center gap-3 pb-2 scrollbar-none" style={{ WebkitOverflowScrolling: 'touch' }}>
           {/* All button */}
           <button
             onClick={() => setSelectedDate("all")}
-            className={`px-3 py-1.5 rounded-full text-[10px] font-black cursor-pointer transition-all border whitespace-nowrap ${
+            className={`px-4 py-2 rounded-xl text-xs font-bold cursor-pointer transition-all border whitespace-nowrap flex flex-col items-center justify-center min-w-[70px] ${
               selectedDate === "all"
                 ? "bg-amber-500 text-slate-950 border-amber-500"
                 : "bg-slate-950 text-slate-400 border-white/6 hover:text-slate-200"
             }`}
           >
-            الكل
+            <span>الكل</span>
+            <span className="text-[10px] opacity-75 mt-0.5">({orders.filter(o => !o.isArchived && o.status !== "مؤرشف").length})</span>
           </button>
 
           {/* Map of last days */}
-          {lastDays.map((day) => (
-            <button
-              key={day.ymd}
-              onClick={() => setSelectedDate(day.ymd)}
-              className={`px-3 py-1.5 rounded-full text-[10px] font-black cursor-pointer transition-all border whitespace-nowrap ${
-                selectedDate === day.ymd
-                  ? "bg-amber-500 text-slate-950 border-amber-500"
-                  : "bg-slate-950 text-slate-400 border-white/6 hover:text-slate-200"
-              }`}
-            >
-              {day.label}
-            </button>
-          ))}
+          {lastDays.map((day) => {
+            const dayOrders = orders.filter((o: any) => normalizeDateToYMD(o.orderDate || o.createdAt) === day.ymd);
+            const totalCount = dayOrders.length;
+            const delivCount = dayOrders.filter((o: any) => o.status === "تم التسليم").length;
+            const delivRate = totalCount > 0 ? Math.round((delivCount / totalCount) * 100) : 0;
+            
+            const unresolvedCount = dayOrders.filter((o: any) => {
+              return !["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع والعميل دفع الشحن", "مؤرشف"].includes(o.status);
+            }).length;
+            const unresolvedRate = totalCount > 0 ? Math.round((unresolvedCount / totalCount) * 100) : 0;
+
+            return (
+              <button
+                key={day.ymd}
+                onClick={() => setSelectedDate(day.ymd)}
+                className={`px-4 py-2 rounded-xl text-xs cursor-pointer transition-all border flex flex-col items-center gap-1 min-w-[120px] shrink-0 text-right ${
+                  selectedDate === day.ymd
+                    ? "bg-amber-500 text-slate-950 border-amber-500 font-extrabold"
+                    : "bg-slate-950 text-slate-350 border-white/6 hover:text-white"
+                }`}
+              >
+                <div className="font-bold">{day.label}</div>
+                <div className="flex items-center gap-1.5 mt-0.5 text-[9px] font-mono">
+                  <span className="opacity-80">({totalCount}) أوردر</span>
+                  {totalCount > 0 && (
+                    <>
+                      <span className={`px-1 rounded-sm ${selectedDate === day.ymd ? "bg-slate-950 text-emerald-400" : "bg-emerald-950/40 text-emerald-400"}`} title="نسبة تسليم فوري">
+                        🟢{delivRate}%
+                      </span>
+                      <span className={`px-1 rounded-sm ${selectedDate === day.ymd ? "bg-slate-950 text-amber-500" : "bg-amber-950/40 text-amber-500"}`} title="نسبة معلق/بايت">
+                        🟡{unresolvedRate}%
+                      </span>
+                    </>
+                  )}
+                </div>
+              </button>
+            );
+          })}
 
           {/* Custom Date Picker */}
-          <div className="flex items-center gap-1.5 bg-slate-950 px-2.5 py-1 rounded-full border border-white/6">
-            <span className="text-[10px] text-slate-400 font-extrabold whitespace-nowrap">تقويم مخصص:</span>
+          <div className="flex flex-col justify-center bg-slate-950 px-4 py-2 rounded-xl border border-white/6 shrink-0 min-w-[140px]">
+            <span className="text-[9px] text-slate-400 font-bold block text-center mb-0.5">تقويم مخصص 📅</span>
             <input
               type="date"
               value={selectedDate !== "all" && !lastDays.some(d => d.ymd === selectedDate) ? selectedDate : ""}
@@ -1153,7 +1308,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                   setSelectedDate("all");
                 }
               }}
-              className="bg-transparent border-none text-[10px] font-mono text-amber-500 font-black outline-none cursor-pointer w-28 text-center"
+              className="bg-transparent border-none text-[11px] font-mono text-amber-500 font-black outline-none cursor-pointer text-center w-full"
             />
           </div>
         </div>
@@ -1265,115 +1420,134 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       )}
 
       {/* 📊 Courier Dashboard Operational Counters */}
-      {isAgent && (
-        <div className="mx-4 grid grid-cols-2 md:grid-cols-5 gap-3">
-          {/* Total Orders Today */}
-          <div className="bg-slate-900 border border-white/6 p-3.5 rounded-2xl flex flex-col justify-between space-y-1">
-            <span className="text-[10px] text-slate-400 font-bold">📦 إجمالي طلبات اليوم</span>
-            <span className="text-xl font-black text-slate-100 font-mono">
-              {orders.filter((o) => o.courier === username).length} <span className="text-[10px] font-medium text-slate-400">شحنة</span>
-            </span>
-          </div>
+      {isAgent && (() => {
+        const myActiveOrders = orders.filter((o) => o.courier === username && !o.isClosed);
+        const myTotal = myActiveOrders.length;
+        const myDelivered = myActiveOrders.filter((o) => o.status === "تم التسليم").length;
+        const myReturned = myActiveOrders.filter((o) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)).length;
+        const mySuspended = myActiveOrders.filter((o) => ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)).length;
+        const myRemaining = Math.max(0, myTotal - myDelivered - myReturned - mySuspended);
 
-          {/* Delivered 🟢 */}
-          <div className="bg-emerald-950/20 border border-emerald-950/30 p-3.5 rounded-2xl flex flex-col justify-between space-y-1">
-            <span className="text-[10px] text-emerald-400 font-bold">🟢 تم التسليم</span>
-            <span className="text-xl font-black text-emerald-400 font-mono">
-              {orders.filter((o) => o.courier === username && o.status === "تم التسليم").length} <span className="text-[10px] font-medium text-emerald-500">شحنة</span>
-            </span>
-          </div>
+        // Financial Math
+        const agentDeliveredOrders = orders.filter(o => o.courier === username && !o.isClosed && o.status === "تم التسليم");
+        const agentCustomerPaidReturns = orders.filter(o => o.courier === username && !o.isClosed && o.status === "مرتجع والعميل دفع الشحن");
+        
+        const totalCODDelivered = agentDeliveredOrders.reduce((sum, o) => sum + Number(o.totalCOD || o.prodPrice || 0), 0);
+        const totalShipReturnsPaidByCust = agentCustomerPaidReturns.reduce((sum, o) => sum + Number(o.shipPrice || o.shipCost || 0), 0);
+        
+        const totalReceivedCashInHand = totalCODDelivered + totalShipReturnsPaidByCust;
+        const totalCommissionsEarned = agentDeliveredOrders.reduce((sum, o) => sum + (Number(o.commission || rawCommission || 25)), 0);
+        const netRequiredHandover = totalReceivedCashInHand - totalCommissionsEarned - courierExpenses;
 
-          {/* Returned 🔴 */}
-          <div className="bg-red-950/20 border border-red-900/30 p-3.5 rounded-2xl flex flex-col justify-between space-y-1">
-            <span className="text-[10px] text-red-400 font-bold">🔴 مرتجع نهائي</span>
-            <span className="text-xl font-black text-red-400 font-mono">
-              {orders.filter((o) => o.courier === username && ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length} <span className="text-[10px] font-medium text-red-500">شحنة</span>
-            </span>
-          </div>
+        return (
+          <>
+            <div className="mx-4 grid grid-cols-2 md:grid-cols-5 gap-3 animate-fadeIn">
+              {/* Total Orders Today */}
+              <div className="bg-slate-900 border border-white/6 p-3.5 rounded-2xl flex flex-col justify-between space-y-1">
+                <span className="text-[10px] text-slate-400 font-bold font-sans">📦 إجمالي طلبات اليوم بالباقة</span>
+                <span className="text-xl font-black text-slate-100 font-mono">
+                  {myTotal} <span className="text-[10px] font-medium text-slate-400">شحنة</span>
+                </span>
+              </div>
 
-          {/* Delayed / No Response 🟡 */}
-          <div className="bg-amber-950/20 border border-amber-900/30 p-3.5 rounded-2xl flex flex-col justify-between space-y-1">
-            <span className="text-[10px] text-amber-400 font-bold">🟡 مؤجل / لا يرد</span>
-            <span className="text-xl font-black text-amber-400 font-mono">
-              {orders.filter((o) => o.courier === username && ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)).length} <span className="text-[10px] font-medium text-amber-500">شحنة</span>
-            </span>
-          </div>
+              {/* Delivered 🟢 */}
+              <div className="bg-emerald-950/20 border border-emerald-950/30 p-3.5 rounded-2xl flex flex-col justify-between space-y-1">
+                <span className="text-[10px] text-emerald-400 font-bold font-sans">🟢 تم التسليم اليوم</span>
+                <span className="text-xl font-black text-emerald-400 font-mono">
+                  {myDelivered} <span className="text-[10px] font-medium text-emerald-550 font-sans">شحنة</span>
+                </span>
+              </div>
 
-          {/* Remaining in Bag 🔵 */}
-          <div className="bg-blue-950/30 border border-blue-900/40 p-3.5 rounded-2xl flex flex-col justify-between col-span-2 md:col-span-1 space-y-1 relative overflow-hidden">
-            <div className="absolute top-0 right-0 w-8 h-8 bg-blue-500/10 rounded-full blur-xl animate-pulse"></div>
-            <span className="text-[10px] text-blue-400 font-extrabold flex items-center gap-1.5">
-              <span>🔵 المتبقي في الشنطة</span>
-            </span>
-            <span className="text-xl font-black text-blue-400 font-mono">
-              {(() => {
-                const total = orders.filter((o) => o.courier === username).length;
-                const deliv = orders.filter((o) => o.courier === username && o.status === "تم التسليم").length;
-                const ret = orders.filter((o) => o.courier === username && ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length;
-                const dly = orders.filter((o) => o.courier === username && ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)).length;
-                return Math.max(0, total - deliv - ret - dly);
-              })()} <span className="text-[10px] font-medium text-blue-400">شحنة</span>
-            </span>
-          </div>
-        </div>
-      )}
+              {/* Returned 🔴 */}
+              <div className="bg-red-950/20 border border-red-900/30 p-3.5 rounded-2xl flex flex-col justify-between space-y-1">
+                <span className="text-[10px] text-red-400 font-bold font-sans">🔴 مرتجع ميداني نهائي</span>
+                <span className="text-xl font-black text-red-400 font-mono">
+                  {myReturned} <span className="text-[10px] font-medium text-red-505 font-sans">شحنة</span>
+                </span>
+              </div>
 
-      {/* 💼 Beautiful Courier Financial & Performance Quick Summary Table */}
-      {isAgent && (
-        <div className="mx-4 p-5 bg-gradient-to-br from-slate-900 to-slate-950 border border-white/6 rounded-2xl space-y-4">
-          <div className="flex items-center justify-between border-b border-white/6 pb-2">
-            <h3 className="text-xs font-black text-amber-500 flex items-center gap-1.5">
-              <span>💼 كشف الحساب والراتب اليومي (متصل لحطيًا بـ Google Sheets)</span>
-            </h3>
-            <span className="text-[9px] font-bold bg-amber-950/20 text-amber-500 border border-amber-900/40 px-2 py-0.5 rounded">
-              محدث تلقائياً
-            </span>
-          </div>
+              {/* Delayed / No Response 🟡 */}
+              <div className="bg-amber-950/20 border border-amber-900/30 p-3.5 rounded-2xl flex flex-col justify-between space-y-1">
+                <span className="text-[10px] text-amber-400 font-bold font-sans">🟡 معلّق / لا يرد مؤقتاً</span>
+                <span className="text-xl font-black text-amber-400 font-mono">
+                  {mySuspended} <span className="text-[10px] font-medium text-amber-505 font-sans">شحنة</span>
+                </span>
+              </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-right text-xs border-collapse">
-              <thead>
-                <tr className="border-b border-white/10 text-slate-400 font-extrabold">
-                  <th className="py-2 px-3">بند الحساب الجاري للمندوب</th>
-                  <th className="py-2 px-3 text-center">البيان الميداني</th>
-                  <th className="py-2 px-3 text-left">مجموع القيمة</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr className="border-b border-white/4 hover:bg-slate-950/30">
-                  <td className="py-3 px-3 text-slate-200">الراتب الأساسي الثابت</td>
-                  <td className="py-3 px-3 text-slate-400 text-center">تعاقد شهري أساسي</td>
-                  <td className="py-3 px-3 text-left font-mono font-bold text-slate-350">
-                    {basicSalary.toLocaleString("ar")} ج.م
-                  </td>
-                </tr>
-                <tr className="border-b border-white/4 hover:bg-slate-950/30">
-                  <td className="py-3 px-3 text-slate-250 font-semibold">عدد الطلبات التي تم تسليمها اليوم</td>
-                  <td className="py-3 px-3 text-emerald-400 text-center font-bold">
-                    {todayDeliveredCount} شحنات مسلّمة اليوم
-                  </td>
-                  <td className="py-3 px-3 text-left font-mono font-black text-emerald-400">
-                    +{todayCommissions.toLocaleString("ar")} ج.م (عمولة اليوم)
-                  </td>
-                </tr>
-                <tr className="hover:bg-slate-950/30 bg-amber-950/10 font-bold text-amber-500">
-                  <td className="py-3 px-3">مستحقات اليوم التقريبية</td>
-                  <td className="py-3 px-3 text-[#64748b] text-center text-[10px]">
-                    عمولات اليوم المستحقة القائمة
-                  </td>
-                  <td className="py-3 px-3 text-left font-mono">
-                    {todayCommissions.toLocaleString("ar")} ج.م
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          
-          <p className="text-[9px] text-slate-500 leading-relaxed">
-            * يتم احتساب عمولتك بناءً على عمولتك المعتمدة للطلب الواحد ({rawCommission} ج.م) والمسجلة بملفك الوظيفي بالخادم المركزي والـ Google Sheets.
-          </p>
-        </div>
-      )}
+              {/* Remaining in Bag 🔵 */}
+              <div className="bg-blue-950/30 border border-blue-900/40 p-3.5 rounded-2xl flex flex-col justify-between col-span-2 md:col-span-1 space-y-1 relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-8 h-8 bg-blue-500/10 rounded-full blur-xl animate-pulse"></div>
+                <span className="text-[10px] text-blue-400 font-extrabold flex items-center gap-1.5 font-sans">
+                  <span>🔵 المتبقي بالحقيبة حالياً</span>
+                </span>
+                <span className="text-xl font-black text-blue-400 font-mono">
+                  {myRemaining} <span className="text-[10px] font-medium text-blue-400 font-sans">شحنة</span>
+                </span>
+              </div>
+            </div>
+
+            {/* Beautiful Courier Financial & Performance Quick Summary Card */}
+            <div className="mx-4 p-5 bg-gradient-to-br from-slate-900 to-slate-950 border border-white/6 rounded-2xl space-y-5 shadow-xl animate-fadeIn">
+              <div className="flex items-center justify-between border-b border-white/6 pb-2.5">
+                <div className="flex items-center gap-2">
+                  <span className="p-1 px-1.5 bg-indigo-500/10 text-indigo-400 rounded-md text-xs">💸</span>
+                  <h3 className="text-xs font-black text-slate-100 font-sans">معادلة التصفية المالية المقفلة للمندوب</h3>
+                </div>
+                <span className="text-[9px] font-bold bg-indigo-950/20 text-indigo-400 border border-indigo-900/40 px-2 py-0.5 rounded font-sans">
+                  محدث فظيًا ⚡
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {/* 1. Cash In Hand */}
+                <div className="bg-slate-950 border border-white/4 p-4 rounded-xl space-y-1 text-right">
+                  <span className="text-[10px] text-slate-400 font-bold block font-sans">💵 إجمالي الكاش المستلم ميدانياً</span>
+                  <div className="text-lg font-black text-emerald-400 font-mono">{totalReceivedCashInHand.toLocaleString("ar")} ج.م</div>
+                  <p className="text-[9px] text-slate-500 leading-relaxed font-sans">
+                    تحصيل طلبات مسلّمة ({totalCODDelivered.toLocaleString("ar")} ج.م) + شحن مرتجعات دفعه العميل ({totalShipReturnsPaidByCust.toLocaleString("ar")} ج.م)
+                  </p>
+                </div>
+
+                {/* 2. Commissions today */}
+                <div className="bg-slate-950 border border-white/4 p-4 rounded-xl space-y-1 text-right">
+                  <span className="text-[10px] text-slate-400 font-bold block font-sans">🎖️ عمولات التسليم المكتسبة اليوم</span>
+                  <div className="text-lg font-black text-indigo-400 font-mono">-{totalCommissionsEarned.toLocaleString("ar")} ج.م</div>
+                  <p className="text-[9px] text-slate-500 leading-relaxed font-sans">
+                    إجمالي عمولة {agentDeliveredOrders.length} أوردر ناجح (عمولة الطلب: {rawCommission} ج.م)
+                  </p>
+                </div>
+
+                {/* 3. Daily Expenses */}
+                <div className="bg-slate-950 border border-white/4 p-4 rounded-xl space-y-1 text-right">
+                  <span className="text-[10px] text-slate-400 font-bold block font-sans">⛽ المصروفات الميدانية اليومية</span>
+                  <div className="text-lg font-black text-amber-500 font-mono">-{courierExpenses.toLocaleString("ar")} ج.م</div>
+                  <p className="text-[9px] text-slate-500 leading-relaxed font-sans">
+                    مجموع البنود والعهد والوقود المسجلة باسمك لليوم الحالي
+                  </p>
+                </div>
+              </div>
+
+              {/* Final Settle Value */}
+              <div className="bg-indigo-950/20 border border-indigo-500/25 p-4 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-3 text-right">
+                <div>
+                  <div className="text-xs font-black text-indigo-400 flex items-center gap-1.5 font-sans">
+                    <span>🔒 الصافي المالي المطلوب توريده رسمياً للخزنة</span>
+                  </div>
+                  <p className="text-[9.5px] text-slate-400 mt-1 leading-relaxed max-w-xl font-medium font-sans">
+                    الصافي مقفل ومحتسب إلكترونياً لإنهاء الأخطاء اليدوية: [الكاش الكلي المستلم {totalReceivedCashInHand}] - [عمولاتك {totalCommissionsEarned}] - [مصروفاتك المعتمدة {courierExpenses}].
+                  </p>
+                </div>
+                <div className="bg-indigo-950 border border-indigo-500/40 p-3 px-6 rounded-xl text-center shrink-0">
+                  <span className="text-[9px] text-indigo-400 font-extrabold block mb-0.5 font-sans">العهد المطلوب تسليمها</span>
+                  <span className="text-xl font-black text-indigo-300 font-mono">
+                    {netRequiredHandover.toLocaleString("ar")} ج.م
+                  </span>
+                </div>
+              </div>
+            </div>
+          </>
+        );
+      })()}
 
       {/* Bulk Toolbar for Managers and Supervisors */}
       {selected.size > 0 && canManage && (
@@ -1550,6 +1724,65 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                       <span>مسؤول المتابعة: <span className="font-bold underline">{o.returnQueueAgent || "لم يعين"}</span></span>
                     </div>
                   )}
+
+                  {isOps && (
+                    <div className="col-span-1 md:col-span-2 bg-[#0a1128] p-4 rounded-xl border border-indigo-500/30 text-right space-y-3" dir="rtl">
+                      <div className="flex items-center gap-1.5 text-indigo-400">
+                        <span className="text-sm">🎧</span>
+                        <span className="text-xs font-black">لوحة متابعة موظف العمليات والاتصال:</span>
+                      </div>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div className="flex flex-col gap-1">
+                          <span className="text-[10px] text-slate-400 font-bold">تسجيل نتيجة المكالمة التفصيلية:</span>
+                          <textarea
+                            id={`notes-compact-${o.tracking}`}
+                            defaultValue={o.notes || ""}
+                            placeholder="شرح تواصل العميل، رغبته، أو تفاصيل المتابعة الحالية..."
+                            className="bg-slate-900 border border-white/8 text-xs text-slate-100 rounded-lg p-2 focus:border-indigo-500 font-medium h-16 resize-none w-full"
+                          />
+                        </div>
+
+                        <div className="flex flex-col gap-2 justify-between">
+                          <div>
+                            <span className="text-[10px] text-slate-400 font-bold">تاريخ التوصيل الفعلي المتوقع:</span>
+                            <input
+                              id={`date-compact-${o.tracking}`}
+                              type="date"
+                              defaultValue={o.delivDate ? o.delivDate.substring(0, 10) : ""}
+                              className="bg-slate-900 border border-white/8 text-xs text-slate-100 rounded-lg p-1.5 focus:border-indigo-500 font-semibold w-full mt-1"
+                            />
+                          </div>
+
+                          <div className="flex flex-col gap-1 mt-1">
+                            <span className="text-[10px] text-indigo-400 font-bold">تعديل الحالة مع حفظ البيانات أعلاه:</span>
+                            <select
+                              disabled={pendingTrackings.has(o.tracking)}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                if (val) {
+                                  const notesEl = document.getElementById(`notes-compact-${o.tracking}`) as HTMLTextAreaElement | null;
+                                  const dateEl = document.getElementById(`date-compact-${o.tracking}`) as HTMLInputElement | null;
+                                  const currentNotes = notesEl ? notesEl.value : (o.notes || "");
+                                  const currentDate = dateEl ? dateEl.value : (o.delivDate || "");
+                                  
+                                  triggerStatusUpdate(o.tracking, val, "", currentNotes, currentDate);
+                                  e.target.value = ""; // Reset value after trigger
+                                }
+                              }}
+                              className="bg-slate-900 border border-white/10 text-xs text-slate-100 rounded-lg p-1.5 focus:border-indigo-500 font-bold focus:ring-0 cursor-pointer w-full"
+                            >
+                              <option value="">-- اختر الحالة الجديدة --</option>
+                              <option value="تم رد العميل وجاري التنسيق">تم رد العميل وجاري التنسيق</option>
+                              <option value="مؤجل">مؤجل (تأجيل الطلب)</option>
+                              <option value="لا يوجد رد">لا يوجد رد (محاولة تواصل)</option>
+                              <option value="جديد">إرجاع الأوردر لحالة "جديد"</option>
+                            </select>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Individual Action Controls */}
@@ -1640,21 +1873,61 @@ export default function Orders({ token, role, username, orders, setOrders, couri
 
                     {/* Returns Officer specific status transitions */}
                     {isReturnsOfficer && (
-                      <div className="flex gap-1 bg-slate-950 p-1 rounded-lg border border-white/6 items-center">
-                        <span className="text-[9px] text-slate-500 font-bold px-1.5">خط المرتجع:</span>
-                        {["مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"].map((rs) => (
-                          <button
-                            key={rs}
+                      <div className="flex flex-col gap-3 bg-slate-950 p-3.5 rounded-xl border border-purple-500/30 w-full text-right" dir="rtl">
+                        <div className="flex items-center gap-1.5 text-purple-400">
+                          <span className="text-sm">🔄</span>
+                          <span className="text-xs font-black">الدورة المستندية والخطوات اللوجستية للمرتجع:</span>
+                        </div>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div className="flex flex-col gap-1">
+                            <span className="text-[10px] text-slate-400 font-bold">ملاحظات ووصاية المرتجع:</span>
+                            <input
+                              id={`ret-notes-compact-${o.tracking}`}
+                              type="text"
+                              placeholder="اكتب ملاحظات فرز المرتجع أو رغبة التوريد..."
+                              defaultValue={o.notes || ""}
+                              className="bg-slate-900 border border-white/8 text-xs text-slate-100 rounded-lg p-2 focus:border-purple-500 font-medium w-full"
+                            />
+                          </div>
+
+                          <div className="flex flex-col gap-1">
+                            <span className="text-[10px] text-slate-400 font-bold">تاريخ المتابعة المتوقع:</span>
+                            <input
+                              id={`ret-date-compact-${o.tracking}`}
+                              type="date"
+                              defaultValue={o.delivDate ? o.delivDate.substring(0, 10) : ""}
+                              className="bg-slate-900 border border-white/8 text-xs text-slate-100 rounded-lg p-1.5 focus:border-purple-500 font-semibold w-full"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="flex flex-col gap-1">
+                          <span className="text-[10px] text-purple-400 font-bold">اختر لتحديث حالة الدورة المستندية (مزامنة فورية):</span>
+                          <select
+                            value={["تم استلام المرتجع في المخزن", "جاري التجنيس والفحص", "جاري الرجوع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.returnQueueStatus || "") ? o.returnQueueStatus : ""}
                             disabled={pendingTrackings.has(o.tracking)}
-                            onClick={() => triggerStatusUpdate(o.tracking, rs)}
-                            className={`px-2 py-1 text-[9px] font-bold rounded cursor-pointer flex items-center gap-0.5 ${
-                              o.returnQueueStatus === rs ? "bg-purple-650 text-slate-100" : "text-slate-500 hover:text-slate-350"
-                            } ${pendingTrackings.has(o.tracking) ? "opacity-50 pointer-events-none" : ""}`}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              if (val) {
+                                const notesEl = document.getElementById(`ret-notes-compact-${o.tracking}`) as HTMLInputElement | null;
+                                const dateEl = document.getElementById(`ret-date-compact-${o.tracking}`) as HTMLInputElement | null;
+                                const currentNotes = notesEl ? notesEl.value : (o.notes || "");
+                                const currentDate = dateEl ? dateEl.value : (o.delivDate || "");
+
+                                triggerStatusUpdate(o.tracking, val, "", currentNotes, currentDate);
+                              }
+                            }}
+                            className="bg-slate-900 border border-white/10 text-xs text-slate-100 rounded-lg p-2 focus:border-purple-500 font-bold focus:ring-0 cursor-pointer w-full"
                           >
-                            {pendingTrackings.has(o.tracking) && o.returnQueueStatus !== rs && <Loader2 size={8} className="animate-spin" />}
-                            <span>{rs.split(" ").slice(-1)[0]}</span>
-                          </button>
-                        ))}
+                            <option value="">-- اضغط للاختيار وتعديل الحالة فوراً --</option>
+                            <option value="تم استلام المرتجع في المخزن">🔄 تم استلام المرتجع في المخزن</option>
+                            <option value="جاري التجنيس والفحص">🔍 جاري التجنيس والفحص</option>
+                            <option value="جاري الرجوع للمورد">🚛 جاري الرجوع للمورد</option>
+                            <option value="مرتجع تم تسليمه للمورد">📦 مرتجع تم تسليمه للمورد</option>
+                            <option value="جديد">↩ إرجاع الطلب للحالة "جديد"</option>
+                          </select>
+                        </div>
                       </div>
                     )}
                   </div>
