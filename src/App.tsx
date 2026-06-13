@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { LogOut, RefreshCw, PlusCircle, LayoutDashboard, Truck, Wallet, FileText, Settings, Users, BookOpen, Layers, History, Calendar, Download } from "lucide-react";
+import { LogOut, RefreshCw, PlusCircle, LayoutDashboard, Truck, Wallet, FileText, Settings, Users, BookOpen, Layers, History, Calendar, Download, Activity } from "lucide-react";
+import { motion, AnimatePresence } from "motion/react";
 import { apiCall, getMockOrders, getMockExpenses, getMockCashboxEntries, getTodayDateStr } from "./utils";
 import Login from "./components/Login";
 import Dashboard from "./components/Dashboard";
@@ -8,6 +9,7 @@ import Orders from "./components/Orders";
 import Inputs from "./components/Inputs";
 import DailyClosing from "./components/DailyClosing";
 import SuppliersManagement from "./components/SuppliersManagement";
+import OpsRoom from "./components/OpsRoom";
 
 export default function App() {
   const [token, setToken] = useState("");
@@ -68,6 +70,69 @@ export default function App() {
   const [quickActive, setQuickActive] = useState(0);
   const [quickTotalCOD, setQuickTotalCOD] = useState(0);
   const [quickTodayCOD, setQuickTodayCOD] = useState(0);
+
+  // --- Real-time Manager Toast Notifications state & helper ---
+  const [toasts, setToasts] = useState<any[]>([]);
+
+  // Synthesized notification audio chime using HTML5 Web Audio API
+  const playNotificationSound = () => {
+    try {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContextClass) return;
+      const ctx = new AudioContextClass();
+      const now = ctx.currentTime;
+
+      // Tone 1: E5
+      const osc1 = ctx.createOscillator();
+      const gain1 = ctx.createGain();
+      osc1.type = "sine";
+      osc1.frequency.setValueAtTime(659.25, now);
+      osc1.frequency.exponentialRampToValueAtTime(880, now + 0.1);
+
+      gain1.gain.setValueAtTime(0, now);
+      gain1.gain.linearRampToValueAtTime(0.12, now + 0.05);
+      gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+
+      osc1.connect(gain1);
+      gain1.connect(ctx.destination);
+      osc1.start(now);
+      osc1.stop(now + 0.3);
+
+      // Tone 2: A5
+      const osc2 = ctx.createOscillator();
+      const gain2 = ctx.createGain();
+      osc2.type = "sine";
+      osc2.frequency.setValueAtTime(880, now + 0.08);
+      osc2.frequency.exponentialRampToValueAtTime(1318.51, now + 0.22); // E6
+
+      gain2.gain.setValueAtTime(0, now + 0.08);
+      gain2.gain.linearRampToValueAtTime(0.08, now + 0.12);
+      gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+
+      osc2.connect(gain2);
+      gain2.connect(ctx.destination);
+      osc2.start(now + 0.08);
+      osc2.stop(now + 0.4);
+    } catch (e) {
+      console.warn("AudioContext notification sound failed", e);
+    }
+  };
+
+  const triggerToastNotification = (toast: any) => {
+    setToasts((prev) => {
+      // Duplicates guarding
+      if (prev.some((t) => t.tracking === toast.tracking && t.status === toast.status)) {
+        return prev;
+      }
+      return [toast, ...prev];
+    });
+    playNotificationSound();
+    
+    // Auto remove after 6 seconds
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== toast.id));
+    }, 6000);
+  };
 
   // --- Restore session upon mounting (Fixes Refresh Logout Bug!) ---
   useEffect(() => {
@@ -238,6 +303,33 @@ export default function App() {
         orderList = orderList.filter((o: any) => o.supplier && o.supplier.toString().trim().toLowerCase() === cleanUser);
       } else if (isReturnsOfficer) {
         orderList = orderList.filter((o: any) => ["مرتجع", "التسليم للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) || o.returnQueueStatus);
+      }
+
+      // --- Monitor courier updates to trigger manager Alerts ---
+      if (activeRole === "مدير" && orders && orders.length > 0) {
+        orderList.forEach((newOrder: any) => {
+          const oldOrder = orders.find((o) => o.tracking === newOrder.tracking);
+          if (oldOrder) {
+            if (oldOrder.status !== newOrder.status) {
+              if (newOrder.status === "تم التسليم" || newOrder.status === "مرتجع") {
+                const courierName = newOrder.courier || "غير محدد";
+                const orderCode = newOrder.tracking;
+                const statusName = newOrder.status === "تم التسليم" ? "تم التسليم" : "مرتجع";
+                const customerName = newOrder.customer || "عميل غير محدد";
+
+                triggerToastNotification({
+                  id: `${orderCode}-${newOrder.status}-${Date.now()}`,
+                  message: `تحديث من المندوب (${courierName}): الأوردر ${orderCode} للعميل (${customerName}) أصبح [${statusName}]`,
+                  type: newOrder.status === "تم التسليم" ? "success" : "error",
+                  tracking: orderCode,
+                  customer: customerName,
+                  courier: courierName,
+                  status: newOrder.status,
+                });
+              }
+            }
+          }
+        });
       }
 
       setOrders(orderList);
@@ -568,6 +660,7 @@ export default function App() {
   const isSupplierState = cleanRoleState === "مورد" || cleanRoleState.includes("مورد");
   const isReturnsOfficer = cleanRoleState === "مسؤول مرتجعات" || cleanRoleState.includes("مرتجع");
   const showDashTab = role === "مدير" || role === "مشرف";
+  const showOpsRoomTab = role === "مدير";
   const showFinanceTabs = role === "مدير" || role === "محاسب";
   const showUsersTab = role === "مدير";
   const showAddInputTab = role === "مدير" || isSupplierState;
@@ -676,6 +769,18 @@ export default function App() {
           >
             <LayoutDashboard size={14} />
             <span>لوحة التحكم</span>
+          </button>
+        )}
+
+        {showOpsRoomTab && (
+          <button
+            onClick={() => setActiveTab("ops_room")}
+            className={`px-5 py-4 text-xs font-black cursor-pointer transition-all border-b-2 flex items-center gap-1.5 whitespace-nowrap ${
+              activeTab === "ops_room" ? "text-amber-500 border-amber-500" : "text-slate-400 border-transparent hover:text-slate-200"
+          }`}
+          >
+            <Activity size={14} />
+            <span>غرفة العمليات وجدول المناديب اللحظي</span>
           </button>
         )}
 
@@ -799,6 +904,17 @@ export default function App() {
         )}
 
         {activeTab === "dash" && <Dashboard token={token} />}
+
+        {activeTab === "ops_room" && showOpsRoomTab && (
+          <OpsRoom
+            token={token}
+            role={role}
+            username={username}
+            orders={orders}
+            couriers={couriers}
+            onRefresh={() => refreshAllData()}
+          />
+        )}
 
         {activeTab === "inputs" && (
           <Inputs
@@ -1519,6 +1635,63 @@ export default function App() {
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* 🔔 Toast notifications portal layout and system */}
+      {role === "مدير" && (
+        <div className="fixed bottom-5 right-5 z-50 flex flex-col gap-3 max-w-md w-[380px] pointer-events-none">
+          <AnimatePresence>
+            {toasts.map((t) => {
+              const isDelivered = t.status === "تم التسليم";
+              return (
+                <motion.div
+                  key={t.id}
+                  initial={{ opacity: 0, x: 50, scale: 0.9 }}
+                  animate={{ opacity: 1, x: 0, scale: 1 }}
+                  exit={{ opacity: 0, x: 100, scale: 0.95 }}
+                  className="pointer-events-auto w-full bg-slate-900/95 backdrop-blur-md border border-white/10 rounded-2xl p-4 shadow-2xl flex items-start gap-3 text-right"
+                  style={{ direction: "rtl" }}
+                >
+                  <div className={`w-9 h-9 rounded-xl shrink-0 flex items-center justify-center font-bold text-xs ${
+                    isDelivered 
+                      ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" 
+                      : "bg-red-500/10 text-red-400 border border-red-500/20"
+                  }`}>
+                    {isDelivered ? "📦" : "↩"}
+                  </div>
+
+                  <div className="flex-1 min-w-0 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className={`text-[10px] font-black ${isDelivered ? "text-emerald-400" : "text-red-400"}`}>
+                        {isDelivered ? "تم التسليم بنجاح" : "أوردر مرتجع بالكامل"}
+                      </span>
+                      <span className="text-[8px] font-mono text-amber-500 font-bold">#{t.tracking}</span>
+                    </div>
+
+                    <p className="text-xs font-black text-slate-100 leading-relaxed">
+                      {isDelivered 
+                        ? `قام المندوب (${t.courier}) بتسليم طلب العميل (${t.customer}) بنجاح.` 
+                        : `قام المندوب (${t.courier}) بتحديد طلب العميل (${t.customer}) كمرتجع.`}
+                    </p>
+
+                    <p className="text-[10px] text-slate-450 leading-relaxed">
+                      تم التحديث والمزامنة اللحظية بالخزينة والدفتر المالي.
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => setToasts((prev) => prev.filter((item) => item.id !== t.id))}
+                    className="p-1 text-slate-400 hover:text-white hover:bg-white/5 rounded-lg transition-colors cursor-pointer"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </motion.div>
+              );
+            })}
+          </AnimatePresence>
         </div>
       )}
     </div>
