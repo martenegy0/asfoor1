@@ -1978,22 +1978,71 @@ app.post("/api", async (req: Request, res: Response) => {
       // BULK RE-ASSIGN / BATCH MANIFEST
       // ─────────────────────────────────────────────────────────────
       case "bulkUpdate": {
-        if (!["مدير", "مشرف"].includes(currentRole)) {
-          return err(res, "ليس لديك صلاحيات التعديل الجماعي والمشافهة");
+        const allowedRoles = ["مدير", "مشرف", "مسؤول مرتجعات", "موظف عمليات", "مندوب"];
+        if (!allowedRoles.includes(currentRole)) {
+          return err(res, "لا تمتلك الصلاحيات اللازمة للقيام بالتعديل الجماعي");
         }
 
         const trackings = d.trackings || [];
-        const status = d.status;
+        let status = d.status;
         const courier = d.courier;
+        const notes = d.notes || d.bulkNotes;
+        const postponeDate = d.date || d.delivDate || d.postponedDate;
+
+        // Map labels to standard schema statuses safely
+        if (status === "تم التسليم بنجاح") status = "تم التسليم";
+        if (status === "مؤجل بناءً على طلب العميل") status = "مؤجل";
+        if (status === "تم تسليم المرتجع للمورد وتصفية حسابه") status = "تم تسليم المرتجع للمورد";
+
+        // Enforce role-based allowed status boundaries
+        if (currentRole === "مسؤول مرتجعات") {
+          const returnsOfficerAllowed = ["مرتجع جديد", "مرتجع جاري تسليمه للمكتب", "جاري الرجوع للمورد", "تم تسليم المرتجع للمورد", "جديد"];
+          if (status && !returnsOfficerAllowed.includes(status)) {
+            return err(res, "Unauthorized Action: مسؤول المرتجعات يمتلك صلاحية تعديل حالات المرتجعات المكتبية فقط");
+          }
+          if (courier !== undefined) {
+            return err(res, "Unauthorized Action: لا تمتلك صلاحية تعديل أو تعيين المناديب");
+          }
+        } else if (currentRole === "موظف عمليات") {
+          const opsAllowed = ["تم رد العميل وجاري التنسيق", "لا يرد - محاولة أولى/ثانية", "تحديث نتيجة الاتصال", "مؤجل", "لا يوجد رد", "جديد"];
+          if (status && !opsAllowed.includes(status)) {
+            return err(res, "Unauthorized Action: موظف العمليات يمتلك فقط صلاحية تحديث نتيجة اتصال العميل وتأجيل الأوردرات");
+          }
+          if (courier !== undefined) {
+            return err(res, "Unauthorized Action: لا تمتلك صلاحية تعديل أو تعيين المناديب");
+          }
+        } else if (currentRole === "مندوب") {
+          const agentAllowed = ["تم التسليم", "مؤجل", "لا يوجد رد", "مرتجع"];
+          if (status && !agentAllowed.includes(status)) {
+            return err(res, "Unauthorized Action: المندوب يمتلك فقط صلاحية تحديث حالات التوصيل والتعليق المباشرة");
+          }
+          if (courier !== undefined) {
+            return err(res, "Unauthorized Action: لا تمتلك صلاحية تعديل أو تعيين المناديب");
+          }
+        }
+
         let modified = 0;
 
         for (const t of trackings) {
           const order = db.orders.find((o: any) => o.tracking === t);
           if (!order) continue;
 
+          // Double check that the rider can only touch their OWN assigned orders
+          if (currentRole === "مندوب" && order.courier !== currentUser) {
+            continue; // Skip silently or can throw, let's skip to process valid items
+          }
+
           const oldStatus = order.status;
 
-          if (courier !== undefined) {
+          // Set optional notes or postponed dates collectively
+          if (notes !== undefined && notes !== "") {
+            order.notes = notes;
+          }
+          if (postponeDate !== undefined && postponeDate !== "") {
+            order.delivDate = postponeDate;
+          }
+
+          if (courier !== undefined && ["مدير", "مشرف"].includes(currentRole)) {
             if (courier === "reset_warehouse" || courier === "") {
               order.courier = "";
               order.commission = 0;
@@ -2032,8 +2081,10 @@ app.post("/api", async (req: Request, res: Response) => {
           // Apply bulkStatus override only if not resetting to warehouse
           if (status !== undefined && status !== order.status && (courier !== "reset_warehouse" && courier !== "")) {
             order.status = status;
+            order.updatedAt = now();
+
             if (status === "تم التسليم") {
-              order.delivDate = now();
+              order.delivDate = postponeDate || now();
               // Add to Courier Ledger
               const cProfile = db.couriers.find((c: any) => c.name === order.courier);
               const comm = cProfile ? Number(cProfile.commission || 25) : 25;
@@ -2055,11 +2106,41 @@ app.post("/api", async (req: Request, res: Response) => {
                 ref: order.tracking,
                 addedBy: "النظام الجماعي"
               });
-            }
-            if (["مرتجع", "التسليم للمورد"].includes(status)) {
-              order.retDate = now();
+
+              // Credit Supplier Ledger if not already done
+              const dupLedger = db.supplierLedger.find((l: any) => l.tracking === order.tracking && (l.type === "أوردر مستلم" || l.type === "تسليم"));
+              if (!dupLedger) {
+                const supplierShare = Number(order.prodPrice || 0) - Number(order.shipPrice || 0);
+                db.supplierLedger.push({
+                  supplier: order.supplier,
+                  date: now(),
+                  type: "أوردر مستلم",
+                  tracking: order.tracking,
+                  amount: supplierShare,
+                  desc: `حقوق أوردر تم تسليمه جماعياً: ${order.tracking} (سعر المنتج ${order.prodPrice} - شحن الشركة ${order.shipPrice})`
+                });
+              }
             }
 
+            if (["مرتجع", "تم تسليم المرتجع للمورد", "التسليم للمورد"].includes(status)) {
+              order.retDate = now();
+              if (status === "تم تسليم المرتجع للمورد" || status === "التسليم للمورد") {
+                order.returnQueueStatus = "تم تسليم المرتجع للمورد";
+                const dupLedger = db.supplierLedger.find((l: any) => l.tracking === order.tracking && (l.type === "مرتجع" || l.type === "مرتجع تم تسليمه للمورد"));
+                if (!dupLedger) {
+                  db.supplierLedger.push({
+                    supplier: order.supplier,
+                    date: now(),
+                    type: "مرتجع تم تسليمه للمورد",
+                    tracking: order.tracking,
+                    amount: -Number(order.prodPrice || 0),
+                    desc: `خصم قيمة المنتج لمرتجع تسلمه المورد جماعياً: ${order.tracking}`
+                  });
+                }
+              }
+            }
+
+            if (!db.statusHistory) db.statusHistory = [];
             db.statusHistory.push({
               tracking: t,
               oldStatus,

@@ -167,6 +167,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
   const isReturnsOfficer = (role || "").toString().trim() === "مسؤول مرتجعات" || (role || "").toString().trim().includes("مرتجعات");
   
   const canManage = isAdmin || isSuper;
+  const canSelectBulk = isAdmin || isSuper || isOps || isAgent || isReturnsOfficer;
 
   // --- Courier specifications for dynamic calculations ---
   const currentCourierProfile = couriers.find((c: any) => c.name === username);
@@ -247,6 +248,13 @@ export default function Orders({ token, role, username, orders, setOrders, couri
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
   const [bulkStatus, setBulkStatus] = useState("");
   const [bulkCourier, setBulkCourier] = useState("");
+
+  // --- New Floating Action Bar States ---
+  const [floatingStatus, setFloatingStatus] = useState("");
+  const [floatingNotes, setFloatingNotes] = useState("");
+  const [floatingDate, setFloatingDate] = useState("");
+  const [floatingCourier, setFloatingCourier] = useState("");
+  const [floatingSubmitting, setFloatingSubmitting] = useState(false);
 
   // --- Quick Reconciliation Portal States ---
   const [showReconPortal, setShowReconPortal] = useState(false);
@@ -810,6 +818,95 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       });
   }
 
+  // Floating Action Bar Role-Based Bulk updates
+  async function saveFloatingBulkUpdate() {
+    if (!floatingStatus && !floatingCourier && !floatingNotes && !floatingDate) {
+      alert("يرجى اختيار حالة أو مندوب أو إدخال ملاحظات وتاريخ التحديث");
+      return;
+    }
+
+    const trackingsToUpdate = Array.from(selected);
+    const nowEgyptStr = new Date().toISOString().replace("T", " ").substring(0, 16);
+
+    setPendingTrackings((prev) => {
+      const next = new Set(prev);
+      trackingsToUpdate.forEach((t) => next.add(t));
+      return next;
+    });
+
+    // --- OPTIMISTIC UI ---
+    const updatedFields: any = {
+      updatedAt: nowEgyptStr,
+    };
+    if (floatingStatus) {
+      let mapped = floatingStatus;
+      if (mapped === "تم التسليم بنجاح") mapped = "تم التسليم";
+      if (mapped === "مؤجل بناءً على طلب العميل") mapped = "مؤجل";
+      if (mapped === "تم تسليم المرتجع للمورد وتصفية حسابه") mapped = "تم تسليم المرتجع للمورد";
+      updatedFields.status = mapped;
+    }
+    if (floatingNotes) {
+      updatedFields.notes = floatingNotes;
+    }
+    if (floatingDate) {
+      updatedFields.delivDate = floatingDate;
+    }
+    if (floatingCourier) {
+      if (floatingCourier === "reset_warehouse") {
+        updatedFields.courier = "";
+        updatedFields.commission = 0;
+        updatedFields.status = "جديد";
+      } else {
+        updatedFields.courier = floatingCourier;
+      }
+    }
+
+    if (setOrders) {
+      setOrders((prev) => {
+        const next = prev.map((o) => (trackingsToUpdate.includes(o.tracking) ? { ...o, ...updatedFields } : o));
+        localStorage.setItem("fp_cached_orders", JSON.stringify(next));
+        return next;
+      });
+    }
+
+    setFloatingStatus("");
+    setFloatingCourier("");
+    setFloatingNotes("");
+    setFloatingDate("");
+    setSelected(new Set());
+
+    alert(`⚡ جاري إرسال ومزامنة التعديل الجماعي لـ ${trackingsToUpdate.length} شحنات...`);
+
+    // --- BG API CALL ---
+    apiCall("bulkUpdate", token, {
+      trackings: trackingsToUpdate,
+      status: floatingStatus || undefined,
+      courier: floatingCourier || undefined,
+      notes: floatingNotes || undefined,
+      date: floatingDate || undefined,
+    })
+      .then((res) => {
+        if (res && res.ok) {
+          console.log(`Floating bulk update success for ${res.done} orders`);
+          onRefresh();
+        } else {
+          alert(`⚠️ خطأ في حفظ التحديث الجماعي: ${res?.error || "صلاحيات غير كافية"}`);
+          onRefresh();
+        }
+      })
+      .catch((err) => {
+        console.error("Floating bulk sync error", err);
+        onRefresh();
+      })
+      .finally(() => {
+        setPendingTrackings((prev) => {
+          const next = new Set(prev);
+          trackingsToUpdate.forEach((t) => next.delete(t));
+          return next;
+        });
+      });
+  }
+
   const getBadgeStyle = (status: string) => {
     switch (status) {
       case "جديد": return "bg-blue-950/40 text-blue-400 border border-blue-900/30";
@@ -837,7 +934,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
         {/* Header components */}
         <div className="flex items-start justify-between border-b border-white/4 pb-3">
           <div className="flex items-center gap-3">
-            {canManage && (
+            {canSelectBulk && (
               <input
                 type="checkbox"
                 checked={isSel}
@@ -1264,10 +1361,10 @@ export default function Orders({ token, role, username, orders, setOrders, couri
               <span>⚡ تصفية بالباركود والإكسيل</span>
             </button>
           )}
-          {canManage && (
+          {canSelectBulk && (
             <button
-              onClick={toggleSelectAll}
-              className="px-4 py-2 bg-slate-900 border border-white/8 rounded-xl text-[10px] text-slate-300 font-extrabold cursor-pointer transition-colors whitespace-nowrap"
+               onClick={toggleSelectAll}
+               className="px-4 py-2 bg-slate-900 border border-white/8 rounded-xl text-[10px] text-slate-300 font-extrabold cursor-pointer transition-colors whitespace-nowrap"
             >
               {selected.size === visibleOrders.length ? "إلغاء التحديد" : "تحديد الكل"}
             </button>
@@ -1660,24 +1757,119 @@ export default function Orders({ token, role, username, orders, setOrders, couri
         );
       })()}
 
-      {/* Bulk Toolbar for Managers and Supervisors */}
-      {selected.size > 0 && canManage && (
-        <div className="mx-4 p-3 bg-slate-950 border border-amber-500/30 rounded-xl flex items-center justify-between gap-4">
-          <span className="text-xs font-black text-amber-500 animate-pulse">
-            📎 {selected.size} طلبات محددة
-          </span>
-          <div className="flex gap-2">
-            <button
-              onClick={() => setBulkModalOpen(true)}
-              className="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-lg text-[10px] font-extrabold cursor-pointer transition-colors"
-            >
-              تعديل جماعي وتوزيع للمندوب
-            </button>
+      {/* Floating Smart Action Bar (Bulk Action with Role-Based Permissions) */}
+      {selected.size > 0 && canSelectBulk && (
+        <div className="fixed bottom-6 right-4 left-4 md:right-8 md:left-auto md:w-[480px] bg-slate-950/95 backdrop-blur-lg border border-amber-500/40 rounded-2xl p-4 shadow-2xl z-50 text-right space-y-3 animate-in fade-in slide-in-from-bottom-4 duration-300">
+          <div className="flex items-center justify-between border-b border-white/6 pb-2">
             <button
               onClick={() => setSelected(new Set())}
-              className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-400 rounded-lg text-[10px] font-bold cursor-pointer"
+              className="text-[10px] text-slate-400 hover:text-white bg-slate-900 px-2.5 py-1 rounded-lg border border-white/6 font-bold cursor-pointer"
             >
               إلغاء التحديد
+            </button>
+            <span className="text-xs font-black text-amber-550 flex items-center gap-1">
+              <span>⚡ تم تحديد {selected.size} من الأوردرات</span>
+              <span>📎</span>
+            </span>
+          </div>
+
+          <div className="space-y-3">
+            {/* Dynamic Dropdown per role */}
+            <div className="space-y-1">
+              <label className="block text-[10px] text-slate-400 font-bold">تحديد الإجراء الجماعي المتاح لدورك</label>
+              <select
+                value={floatingStatus}
+                onChange={(e) => setFloatingStatus(e.target.value)}
+                className="w-full bg-slate-900 text-slate-100 border border-white/8 rounded-xl px-3 py-2 text-xs text-right cursor-pointer"
+              >
+                {isReturnsOfficer && (
+                  <>
+                    <option value="">-- اختر إجراء المرتجعات الجماعي --</option>
+                    <option value="مرتجع جديد">مرتجع جديد (مسار الاسترجاع)</option>
+                    <option value="مرتجع جاري تسليمه للمكتب">مرتجع جاري تسليمه للمكتب</option>
+                    <option value="جاري الرجوع للمورد">جاري الرجوع للمورد</option>
+                    <option value="تم تسليم المرتجع للمورد وتصفية حسابه">تم تسليم المرتجع للمورد وتصفية حسابه</option>
+                  </>
+                )}
+
+                {isOps && (
+                  <>
+                    <option value="">-- اختر إجراء العمليات الجماعي --</option>
+                    <option value="تم رد العميل وجاري التنسيق">تم رد العميل وجاري التنسيق</option>
+                    <option value="لا يرد - محاولة أولى/ثانية">لا يرد - محاولة أولى/ثانية</option>
+                    <option value="تحديث نتيجة الاتصال">تحديث نتيجة الاتصال</option>
+                  </>
+                )}
+
+                {isAgent && (
+                  <>
+                    <option value="">-- اختر إجراء التوصيل الجماعي المندوب --</option>
+                    <option value="تم التسليم بنجاح">تم التسليم بنجاح</option>
+                    <option value="مؤجل بناءً على طلب العميل">مؤجل بناءً على طلب العميل</option>
+                  </>
+                )}
+
+                {(isAdmin || isSuper) && (
+                  <>
+                    <option value="">-- اختر حالة الأوردرات المحددة --</option>
+                    <option value="جديد">جديد (إعادة للانتظار)</option>
+                    <option value="تم الإسناد">تم الإسناد</option>
+                    <option value="خارج مع المندوب">خارج مع المندوب</option>
+                    <option value="تم التسليم">تم التسليم (ناجح كاش)</option>
+                    <option value="مرتجع">مرتجع (من طرف العميل)</option>
+                    <option value="مؤجل">مؤجل (متابعة لاحقة)</option>
+                    <option value="لا يوجد رد">لا يوجد رد</option>
+                    <option value="التسليم للمورد">التسليم للمورد</option>
+                    <option value="تم تسليم المرتجع للمورد">تم تسليم المرتجع للمورد</option>
+                  </>
+                )}
+              </select>
+            </div>
+
+            {/* Courier Assignment for Admins & Supervisors only */}
+            {(isAdmin || isSuper) && (
+              <div className="space-y-1">
+                <label className="block text-[10px] text-slate-400 font-bold">تعيين أو تغيير المندوب المسؤول</label>
+                <SearchableCourierSelect
+                  value={floatingCourier}
+                  onChange={(val) => setFloatingCourier(val)}
+                  couriers={couriers}
+                  placeholder="-- بقاء المندوب كما هو --"
+                  showWarehouseReset={true}
+                />
+              </div>
+            )}
+
+            {/* Sub-fields for Operations logs or delay captures */}
+            {(isOps || isAdmin || isSuper || floatingStatus === "مؤجل بناءً على طلب العميل" || floatingStatus === "تحديث نتيجة الاتصال") && (
+              <div className="grid grid-cols-2 gap-2 animate-in fade-in zoom-in-95 duration-200">
+                <div className="space-y-1">
+                  <label className="block text-[10px] text-indigo-400 font-bold">الملاحظات الجماعية</label>
+                  <input
+                    type="text"
+                    value={floatingNotes}
+                    onChange={(e) => setFloatingNotes(e.target.value)}
+                    placeholder="ملاحظات الاتصال الهاتفي..."
+                    className="w-full bg-slate-900 border border-white/10 rounded-xl px-2.5 py-2 text-[10px] text-right text-slate-200 placeholder-slate-500"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-[10px] text-indigo-400 font-bold">التاريخ المؤجل</label>
+                  <input
+                    type="date"
+                    value={floatingDate}
+                    onChange={(e) => setFloatingDate(e.target.value)}
+                    className="w-full bg-slate-900 border border-white/10 rounded-xl px-2.5 py-1.5 text-[10px] text-slate-200 [color-scheme:dark] text-center"
+                  />
+                </div>
+              </div>
+            )}
+
+            <button
+              onClick={saveFloatingBulkUpdate}
+              className="w-full py-2.5 bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-600 text-slate-950 font-black text-xs rounded-xl cursor-pointer shadow-lg active:scale-98 transition-transform text-center"
+            >
+              حفظ التعديل الجماعي لحساب {selected.size} طلبات
             </button>
           </div>
         </div>
@@ -1725,7 +1917,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                 {/* Header components */}
                 <div className="flex items-start justify-between border-b border-white/4 pb-3">
                   <div className="flex items-center gap-3">
-                    {canManage && (
+                    {canSelectBulk && (
                       <input
                         type="checkbox"
                         checked={isSel}

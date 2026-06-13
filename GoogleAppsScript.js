@@ -601,14 +601,58 @@ function addBulk(sheets, d) {
 }
 
 function updateStatus(sheets, d) {
-  const { tracking, status, returnShippingType, currentUser } = d;
+  const { tracking, status, returnShippingType, currentUser, currentRole, notes, delivDate, date } = d;
   if (!tracking || !status) return { ok: false, error: "معاملات مسندة مفقودة" };
+
+  // 🚨 Security Guard & Role Enforcement for Apps Script
+  const cleanRole = (currentRole || "").toString().trim();
+  const isAdmin = cleanRole === "مدير" || cleanRole === "مشرف";
+  const isAgent = cleanRole === "مندوب" || cleanRole.includes("مندوب");
+  const isOps = cleanRole === "موظف عمليات" || cleanRole.includes("عمليات");
+  const isReturnsOfficer = cleanRole === "مسؤول مرتجعات" || cleanRole.includes("مرتجع");
+  const isSupplier = cleanRole === "مورد" || cleanRole.includes("مورد");
+
+  let finalStatus = status;
+  if (status === "تم تسليم المرتجع للمورد وتصفية حسابه") finalStatus = "تم تسليم المرتجع للمورد";
+  if (status === "تم التسليم بنجاح") finalStatus = "تم التسليم";
+  if (status === "مؤجل بناءً على طلب العميل") finalStatus = "مؤجل";
+
+  if (isSupplier) {
+    return { ok: false, error: "Unauthorized Action: المورد لا يمتلك صلاحية تعديل الحالة" };
+  }
+
+  if (isAgent) {
+    const allowed = ["تم التسليم", "تم التسليم بنجاح", "مؤجل", "مؤجل بناءً على طلب العميل", "لا يوجد رد", "مرتجع"];
+    if (!allowed.includes(status)) {
+      return { ok: false, error: "Unauthorized Action: غير مسموح للمندوب باختيار هذه الحالة" };
+    }
+  }
+
+  if (isOps) {
+    const allowed = ["تم رد العميل وجاري التنسيق", "لا يرد - محاولة أولى/ثانية", "تحديث نتيجة الاتصال", "مؤجل", "لا يوجد رد", "جديد"];
+    if (!allowed.includes(status)) {
+      return { ok: false, error: "Unauthorized Action: غير مسموح لموظف العمليات باختيار هذه الحالة" };
+    }
+  }
+
+  if (isReturnsOfficer) {
+    const allowed = ["مرتجع جديد", "مرتجع جاري تسليمه للمكتب", "جاري الرجوع للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "تم تسليم المرتجع للمورد", "جديد"];
+    if (!allowed.includes(status)) {
+      return { ok: false, error: "Unauthorized Action: غير مسموح لمسؤول المرتجعات باختيار هذه الحالة" };
+    }
+  }
 
   const orderIndex = findRowIndex(sheets.orders, "tracking", tracking);
   if (orderIndex === -1) return { ok: false, error: "الأوردر المطلوب غير موجود" };
 
   const orders = getTableData(sheets.orders);
   const order = orders.find(x => x.tracking === tracking);
+
+  // Rider can only touch their own orders
+  if (isAgent && order.courier !== currentUser) {
+    return { ok: false, error: "Unauthorized Action: هذا الأوردر ليس مسنداً إليك" };
+  }
+
   const oldStatus = order.status;
 
   if (oldStatus === "تم التسليم") {
@@ -617,12 +661,20 @@ function updateStatus(sheets, d) {
 
   // الحالات الافتراضية للتحديث
   let updateObj = {
-    status: status,
+    status: finalStatus,
     updatedAt: now()
   };
 
+  if (notes !== undefined && notes !== "") {
+    updateObj.notes = notes;
+  }
+  const anyDate = date || delivDate;
+  if (anyDate !== undefined && anyDate !== "") {
+    updateObj.delivDate = anyDate;
+  }
+
   // معالجة حالة المرتجع (مرتجع)
-  if (status === "مرتجع") {
+  if (finalStatus === "مرتجع") {
     if (!returnShippingType) {
       return { ok: false, error: "يرجى تحديد ما إذا كان العميل قد دفع الشحن أم رفض" };
     }
@@ -803,8 +855,56 @@ function deleteOrder(sheets, d) {
 }
 
 function bulkUpdate(sheets, d) {
-  const { trackings, status, courier, bulkStatus } = d;
+  const { trackings, status, courier, bulkStatus, currentRole, currentUser, notes, delivDate, date } = d;
   if (!trackings || !trackings.length) return { ok: false, error: "يرجى تحديد الأوردرات المراد تعديلها" };
+
+  // 🚨 Security Guard & Role Enforcement for Apps Script Bulk
+  const cleanRole = (currentRole || "").toString().trim();
+  const isAdmin = cleanRole === "مدير" || cleanRole === "مشرف";
+  const isAgent = cleanRole === "مندوب" || cleanRole.includes("مندوب");
+  const isOps = cleanRole === "موظف عمليات" || cleanRole.includes("عمليات");
+  const isReturnsOfficer = cleanRole === "مسؤول مرتجعات" || cleanRole.includes("مرتجع");
+  const isSupplier = cleanRole === "مورد" || cleanRole.includes("مورد");
+
+  let targetStatus = status || bulkStatus;
+  
+  if (targetStatus === "تم تسليم المرتجع للمورد وتصفية حسابه") targetStatus = "تم تسليم المرتجع للمورد";
+  if (targetStatus === "تم التسليم بنجاح") targetStatus = "تم التسليم";
+  if (targetStatus === "مؤجل بناءً على طلب العميل") targetStatus = "مؤجل";
+
+  if (isSupplier) {
+    return { ok: false, error: "Unauthorized Action: المورد لا يمتلك صلاحية تعديل الحالات جماعياً" };
+  }
+
+  if (isAgent) {
+    const allowed = ["تم التسليم", "مؤجل", "لا يوجد رد", "مرتجع"];
+    if (targetStatus && !allowed.includes(targetStatus)) {
+      return { ok: false, error: "Unauthorized Action: خطأ في صلاحيات المندوب لتحديث هذه الحالة جماعياً" };
+    }
+    if (courier !== undefined) {
+      return { ok: false, error: "Unauthorized Action: المندوب لا يملك صلاحيات تعديل أو تعيين المناديب المسؤولين" };
+    }
+  }
+
+  if (isOps) {
+    const allowed = ["تم رد العميل وجاري التنسيق", "لا يرد - محاولة أولى/ثانية", "تحديث نتيجة الاتصال", "مؤجل", "لا يوجد رد", "جديد"];
+    if (targetStatus && !allowed.includes(targetStatus)) {
+      return { ok: false, error: "Unauthorized Action: خطأ في صلاحيات موظف العمليات لتحديث هذه الحالة جماعياً" };
+    }
+    if (courier !== undefined) {
+      return { ok: false, error: "Unauthorized Action: موظف العمليات لا يملك صلاحية تعديل أو تعيين المناديب المسؤولين" };
+    }
+  }
+
+  if (isReturnsOfficer) {
+    const allowed = ["مرتجع جديد", "مرتجع جاري تسليمه للمكتب", "جاري الرجوع للمورد", "تم تسليم المرتجع للمورد", "جديد"];
+    if (targetStatus && !allowed.includes(targetStatus)) {
+      return { ok: false, error: "Unauthorized Action: خطأ في صلاحيات مسؤول المرتجعات المكتبية لتحديث هذه الحالة جماعياً" };
+    }
+    if (courier !== undefined) {
+      return { ok: false, error: "Unauthorized Action: مسؤول المرتجعات لا يملك صلاحية تعديل أو تعيين المناديب المسؤولين" };
+    }
+  }
 
   const sheet = sheets.orders;
   const lastRow = sheet.getLastRow();
@@ -819,19 +919,40 @@ function bulkUpdate(sheets, d) {
   const updatedAtIdx = headers.indexOf("updatedAt");
   const courierIdx = headers.indexOf("courier");
   const statusIdx = headers.indexOf("status");
+  const notesIdx = headers.indexOf("notes");
+  const delivDateIdx = headers.indexOf("delivDate");
 
   if (trackingIdx === -1) return { ok: false, error: "عمود الكود التتبعي غير موجود في شيت الأوردرات" };
 
   let updatedCount = 0;
-  const targetStatus = status || bulkStatus;
   const trackingsSet = trackings.map(t => t.toString().trim().toUpperCase());
+  const anyNotes = notes;
+  const anyDate = date || delivDate;
 
   for (let r = 1; r < data.length; r++) {
     const rowTracking = data[r][trackingIdx].toString().trim().toUpperCase();
     if (trackingsSet.indexOf(rowTracking) !== -1) {
+      // Security: Rider can only adjust their own assigned orders
+      if (isAgent && courierIdx !== -1) {
+        const rowCourierName = data[r][courierIdx].toString().trim();
+        if (rowCourierName !== currentUser) {
+          continue; // Skip security violation row
+        }
+      }
+
       if (updatedAtIdx !== -1) data[r][updatedAtIdx] = now();
-      if (courier && courierIdx !== -1) data[r][courierIdx] = courier;
-      if (targetStatus && statusIdx !== -1) data[r][statusIdx] = targetStatus;
+      if (courier && courierIdx !== -1 && (isAdmin || cleanRole === "محاسب")) {
+        data[r][courierIdx] = courier;
+      }
+      if (targetStatus && statusIdx !== -1) {
+        data[r][statusIdx] = targetStatus;
+      }
+      if (anyNotes !== undefined && anyNotes !== "" && notesIdx !== -1) {
+        data[r][notesIdx] = anyNotes;
+      }
+      if (anyDate !== undefined && anyDate !== "" && delivDateIdx !== -1) {
+        data[r][delivDateIdx] = anyDate;
+      }
       updatedCount++;
     }
   }
@@ -840,7 +961,7 @@ function bulkUpdate(sheets, d) {
     range.setValues(data);
   }
 
-  return { ok: true, msg: `تم تحديث وإسناد ${updatedCount} أوردر بنجاح فائق السرعة دفعة واحدة`, done: updatedCount };
+  return { ok: true, msg: `تم تحديث وإسناد ${updatedCount} أوردر بنجاح بمستوى أمني وقائي عالي`, done: updatedCount };
 }
 
 // ───────────────────────────────────────────────
