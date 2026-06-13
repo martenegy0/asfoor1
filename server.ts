@@ -2197,17 +2197,27 @@ app.post("/api", async (req: Request, res: Response) => {
         const commissionSuccess = courierProfile.commission_success !== undefined ? Number(courierProfile.commission_success) : Number(courierProfile.commission || 25);
         const commissionReturn = courierProfile.commission_return !== undefined ? Number(courierProfile.commission_return) : 10;
 
-        const deliveredCount = courierOrders.filter((o: any) => o.status === "تم التسليم").length;
-        const delivCommission = deliveredCount * commissionSuccess;
+        const todayDate = tod();
+        const todayDeliveredCount = courierOrders.filter((o: any) => o.status === "تم التسليم" && o.delivDate && isDateToday(o.delivDate)).length;
+        const todayDelivCommission = todayDeliveredCount * commissionSuccess;
 
+        const todayReturnedPaidCount = courierOrders.filter((o: any) => o.status === "مرتجع" && o.returnShippingType === "paid" && o.retDate && isDateToday(o.retDate)).length;
+        const todayReturnShippingCommission = todayReturnedPaidCount * commissionSuccess;
+
+        // Cumulative totals (for historical indicators)
+        const deliveredCount = courierOrders.filter((o: any) => o.status === "تم التسليم").length;
         const returnedCount = courierOrders.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length;
         const returnedPaidCount = courierOrders.filter((o: any) => o.status === "مرتجع" && o.returnShippingType === "paid").length;
-        const returnShippingCommission = returnedPaidCount * commissionSuccess;
+
+        // Strict Financial Separation:
+        // Outstanding / Due Delivery commission consists ONLY of today's deliveries since past days are already closed & settled/paid.
+        const delivCommission = todayDelivCommission;
+        const returnShippingCommission = todayReturnShippingCommission;
 
         // Fetch adjustments (Bonuses, Penalties) from courierLedger entries
         const targetLedger = db.courierLedger.filter((l: any) => l.courier === courierName);
         const bonusesSum = targetLedger.filter((l: any) => l.type === "مكافأة").reduce((sum: number, x: any) => sum + Number(x.amount), 0);
-        const penaltiesSum = targetLedger.filter((l: any) => l.type === "جزاء").reduce((sum: number, x: any) => sum + Number(x.amount), 0);
+        const penaltiesSum = targetLedger.filter((l: any) => l.type === "جزاء" || l.type === "خصم").reduce((sum: number, x: any) => sum + Number(x.amount), 0);
 
         // Compute COD Collection tracking for anti-deficit control
         const totalCollected = courierOrders.filter((o: any) => o.status === "تم التسليم").reduce((sum: number, o: any) => sum + Number(o.totalCOD || 0), 0);
@@ -2233,7 +2243,7 @@ app.post("/api", async (req: Request, res: Response) => {
             datesSet.add(o.retDate.substring(0, 10));
           }
         }
-        datesSet.add(tod());
+        datesSet.add(todayDate);
 
         const year = nowCairo.getFullYear();
         const month = nowCairo.getMonth();
@@ -2246,6 +2256,8 @@ app.post("/api", async (req: Request, res: Response) => {
         const sortedDates = Array.from(datesSet).sort();
         let runningCumulative = 0;
         const dailyEarnings = sortedDates.map(dStr => {
+          const isToday = dStr === todayDate;
+
           const deliveredList = courierOrders.filter((o: any) => o.status === "تم التسليم" && o.delivDate && o.delivDate.substring(0, 10) === dStr);
           const returnedList = courierOrders.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) && o.retDate && o.retDate.substring(0, 10) === dStr);
           
@@ -2253,9 +2265,20 @@ app.post("/api", async (req: Request, res: Response) => {
           const returnedDay = returnedList.length;
 
           const baseEarning = Number((basicSalary / daysCount).toFixed(2));
-          const delivEarning = deliveredDay * commissionSuccess;
-          const retEarning = returnedDay * commissionReturn;
-          const total = baseEarning + delivEarning + retEarning;
+          
+          // Strict Financial Logic: Zero out past days' commissions since they have already been closed and paid.
+          const delivEarning = isToday ? (deliveredDay * commissionSuccess) : 0;
+          const retEarning = isToday ? (returnedDay * commissionReturn) : 0;
+
+          const dayLedger = db.courierLedger.filter((l: any) => l.courier === courierName && l.date && l.date.substring(0, 10) === dStr);
+          const dayPenalties = dayLedger.filter((l: any) => l.type === "جزاء" || l.type === "خصم").reduce((sum: number, x: any) => sum + Number(x.amount), 0);
+          const dayExpenses = db.expenses?.filter((e: any) => e.by === courierName && e.date && e.date.substring(0, 10) === dStr).reduce((sum: number, e: any) => sum + Number(e.amount), 0) || 0;
+          const dayBonuses = dayLedger.filter((l: any) => l.type === "مكافأة").reduce((sum: number, x: any) => sum + Number(x.amount), 0);
+
+          const allowance = Number(courierProfile.allowance || courierProfile.shipping_allowance || 0);
+
+          // Correct daily net due formula: (commission) + allowance + base portion + bonuses - penalties - expenses
+          const total = delivEarning + retEarning + allowance + baseEarning + dayBonuses - (dayPenalties + dayExpenses);
           runningCumulative += total;
 
           return {
@@ -2270,12 +2293,17 @@ app.post("/api", async (req: Request, res: Response) => {
           };
         });
 
-        // Use the accumulated daily earnings as netSalary
-        const netSalary = basicSalary + delivCommission + returnShippingCommission + bonusesSum - penaltiesSum;
+        const allowanceTotal = Number(courierProfile.allowance || courierProfile.shipping_allowance || 0);
+        const todayExpensesCombined = db.expenses?.filter((e: any) => e.by === courierName && isDateToday(e.date)).reduce((sum: number, e: any) => sum + Number(e.amount), 0) || 0;
 
-        const todayDate = tod();
-        const todayDeliveredCount = courierOrders.filter((o: any) => o.status === "تم التسليم" && o.delivDate && isDateToday(o.delivDate)).length;
-        const todayDelivCommission = todayDeliveredCount * commissionSuccess;
+        // netSalary = (Today's Delivered & Today's RetPaid) * commission + Today's portion of base salary + today's allowance + today's bonuses - today's penalties - today's expenses
+        // This is safe, accurate, prevents compounding past unpaid.
+        const baseEarningToday = Number((basicSalary / daysCount).toFixed(2));
+        const netSalary = (todayDelivedCommissionsTotal() || (delivCommission + returnShippingCommission)) + baseEarningToday + allowanceTotal + bonusesSum - penaltiesSum - todayExpensesCombined;
+
+        function todayDelivedCommissionsTotal() {
+          return todayDelivCommission + todayReturnShippingCommission;
+        }
 
         return ok(res, {
           ledgerInfo: {
@@ -2322,15 +2350,18 @@ app.post("/api", async (req: Request, res: Response) => {
         // Fetch adjustment amounts
         const ledgerTr = db.courierLedger.filter((l: any) => l.courier === courierName);
         const bonuses = ledgerTr.filter((l: any) => l.type === "مكافأة").reduce((sum: number, x: any) => sum + Number(x.amount), 0);
-        const penalties = ledgerTr.filter((l: any) => l.type === "جزاء").reduce((sum: number, x: any) => sum + Number(x.amount), 0);
-
-        const totalCommission = (delivered * commissionSuccess) + (returnedPaid * commissionSuccess);
-        const totalEarnings = basicSalary + totalCommission + bonuses - penalties;
+        const penalties = ledgerTr.filter((l: any) => l.type === "جزاء" || l.type === "خصم").reduce((sum: number, x: any) => sum + Number(x.amount), 0);
 
         const todayDate = tod();
         const todayDelivered = ordersList.filter((o: any) => o.status === "تم التسليم" && o.delivDate && isDateToday(o.delivDate)).length;
         const todayDelivCommission = todayDelivered * commissionSuccess;
         const todayReturned = ordersList.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) && o.retDate && isDateToday(o.retDate)).length;
+        const todayReturnedPaidCount = ordersList.filter((o: any) => o.status === "مرتجع" && o.returnShippingType === "paid" && o.retDate && isDateToday(o.retDate)).length;
+        const todayReturnShippingCommission = todayReturnedPaidCount * commissionSuccess;
+
+        // Total commissions to pay consists of today's deliveries since past days are already closed & settled/paid.
+        const totalCommission = todayDelivCommission + todayReturnShippingCommission;
+        const totalEarnings = basicSalary + totalCommission + bonuses - penalties;
 
         // Cumulative Daily Ledger calculations
         const nowCairo = getCairoDateObj();
@@ -2359,6 +2390,8 @@ app.post("/api", async (req: Request, res: Response) => {
         const sortedDates = Array.from(datesSet).sort();
         let runningCumulative = 0;
         const dailyEarnings = sortedDates.map(dStr => {
+          const isToday = dStr === todayDate;
+
           const deliveredList = ordersList.filter((o: any) => o.status === "تم التسليم" && o.delivDate && o.delivDate.substring(0, 10) === dStr);
           const returnedList = ordersList.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) && o.retDate && o.retDate.substring(0, 10) === dStr);
           
@@ -2366,9 +2399,20 @@ app.post("/api", async (req: Request, res: Response) => {
           const returnedDay = returnedList.length;
 
           const baseEarning = Number((basicSalary / daysCount).toFixed(2));
-          const delivEarning = deliveredDay * commissionSuccess;
-          const retEarning = returnedDay * commissionReturn;
-          const total = baseEarning + delivEarning + retEarning;
+          
+          // Strict Financial Logic: Zero out past days' commissions since they have already been closed and paid.
+          const delivEarning = isToday ? (deliveredDay * commissionSuccess) : 0;
+          const retEarning = isToday ? (returnedDay * commissionReturn) : 0;
+
+          const dayLedger = db.courierLedger.filter((l: any) => l.courier === courierName && l.date && l.date.substring(0, 10) === dStr);
+          const dayPenalties = dayLedger.filter((l: any) => l.type === "جزاء" || l.type === "خصم").reduce((sum: number, x: any) => sum + Number(x.amount), 0);
+          const dayExpenses = db.expenses?.filter((e: any) => e.by === courierName && e.date && e.date.substring(0, 10) === dStr).reduce((sum: number, e: any) => sum + Number(e.amount), 0) || 0;
+          const dayBonuses = dayLedger.filter((l: any) => l.type === "مكافأة").reduce((sum: number, x: any) => sum + Number(x.amount), 0);
+
+          const allowance = Number(courierProfile.allowance || courierProfile.shipping_allowance || 0);
+
+          // Correct day net due formula: (commission) + allowance + base portion + bonuses - penalties - expenses
+          const total = delivEarning + retEarning + allowance + baseEarning + dayBonuses - (dayPenalties + dayExpenses);
           runningCumulative += total;
 
           return {

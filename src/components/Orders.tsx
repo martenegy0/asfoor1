@@ -12,6 +12,131 @@ interface OrdersProps {
   onRefresh: () => void;
 }
 
+interface SearchableCourierSelectProps {
+  value: string;
+  onChange: (val: string) => void;
+  couriers: any[];
+  placeholder?: string;
+  id?: string;
+}
+
+function SearchableCourierSelect({ value, onChange, couriers, placeholder = "اختر المندوب...", id }: SearchableCourierSelectProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Parse cached list if sheets fetch fails or to avoid sheets roundtripping
+  const cachedCouriers = React.useMemo(() => {
+    try {
+      const cached = localStorage.getItem("fp_cached_couriers");
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          // Merge to avoid missing newly registered items
+          const merged = [...couriers];
+          parsed.forEach((x: any) => {
+            if (x && x.name && !merged.some(y => y.name === x.name)) {
+              merged.push(x);
+            }
+          });
+          return merged;
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    // First open cache initialization
+    if (couriers && couriers.length > 0) {
+      localStorage.setItem("fp_cached_couriers", JSON.stringify(couriers));
+    }
+    return couriers;
+  }, [couriers]);
+
+  // Filter based on search query (by name or region)
+  const filtered = React.useMemo(() => {
+    return cachedCouriers.filter(c => 
+      (c?.name || "").toString().toLowerCase().includes(search.toLowerCase()) ||
+      (c?.region || "").toString().toLowerCase().includes(search.toLowerCase())
+    );
+  }, [cachedCouriers, search]);
+
+  React.useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const selectedCourier = cachedCouriers.find(c => c.name === value);
+
+  return (
+    <div ref={dropdownRef} className="relative w-full text-right" id={id}>
+      <button
+        type="button"
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-xl px-4 py-3 text-xs text-right flex items-center justify-between gap-2 min-h-[46px] cursor-pointer hover:border-amber-500/40 focus:ring-2 focus:ring-amber-500/20 transition-all font-black"
+      >
+        <span className="text-slate-400">▼</span>
+        <span className="truncate">
+          {selectedCourier ? `👤 ${selectedCourier.name} (${selectedCourier.region || "شامل"})` : placeholder}
+        </span>
+      </button>
+
+      {isOpen && (
+        <div className="absolute right-0 top-full mt-1.5 w-full bg-slate-900 border border-white/12 rounded-2xl p-2.5 shadow-2xl z-[900] space-y-2 animate-in fade-in slide-in-from-top-1 duration-100">
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="🔍 ابحث باسم المندوب أو المنطقة..."
+            className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-xl px-3 py-2.5 text-xs text-right outline-none focus:border-amber-500/50"
+            autoFocus
+          />
+          <div className="max-h-[180px] overflow-y-auto space-y-1 scrollbar-thin scrollbar-thumb-slate-700">
+            {placeholder && (
+              <button
+                type="button"
+                onClick={() => {
+                  onChange("");
+                  setIsOpen(false);
+                  setSearch("");
+                }}
+                className={`w-full text-right px-3 py-2.5 rounded-xl text-xs flex items-center justify-between hover:bg-slate-950 border border-transparent hover:border-white/4 transition-all min-h-[44px] cursor-pointer ${!value ? "bg-amber-500/10 text-amber-500 border-amber-500/20" : "text-slate-400"}`}
+              >
+                <span>{placeholder}</span>
+              </button>
+            )}
+            {filtered.length === 0 ? (
+              <div className="text-center py-4 text-[10px] text-slate-500 font-extrabold">لا يوجد مناديب مطابقين للبحث</div>
+            ) : (
+              filtered.map((c, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => {
+                    onChange(c.name);
+                    setIsOpen(false);
+                    setSearch("");
+                  }}
+                  className={`w-full text-right px-3 py-2.5 rounded-xl text-xs flex items-center justify-between hover:bg-slate-950 border border-transparent hover:border-white/4 transition-all min-h-[44px] cursor-pointer ${value === c.name ? "bg-amber-500/10 text-amber-500 border-amber-500/20 font-black" : "text-slate-300"}`}
+                >
+                  <span className="text-[10px] text-slate-550 font-normal bg-slate-950 px-2 py-0.5 rounded border border-white/4 shrink-0">
+                    {c.region || "شامل"}
+                  </span>
+                  <span className="truncate font-black">{c.name}</span>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Orders({ token, role, username, orders, setOrders, couriers, onRefresh }: OrdersProps) {
   const [pendingTrackings, setPendingTrackings] = useState<Set<string>>(new Set());
   const isAdmin = (role || "").toString().trim() === "مدير" || (role || "").toString().trim().includes("مدير");
@@ -42,6 +167,33 @@ export default function Orders({ token, role, username, orders, setOrders, couri
 
   const [search, setSearch] = useState("");
   const [activeFilter, setActiveFilter] = useState("all");
+  const [selectedDate, setSelectedDate] = useState<string>("all");
+
+  const lastDays = React.useMemo(() => {
+    const days = [];
+    const todayStr = getTodayDateStr(); // e.g. "2026-06-12"
+    const todayDate = new Date(todayStr);
+
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(todayDate);
+      d.setDate(todayDate.getDate() - i);
+      const pad = (n: number) => n.toString().padStart(2, "0");
+      const ymd = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+      
+      let label = "";
+      if (i === 0) {
+        label = "اليوم";
+      } else if (i === 1) {
+        label = "أمس";
+      } else {
+        const weekdays = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
+        label = `${weekdays[d.getDay()]} ${d.getDate()}`;
+      }
+      days.push({ ymd, label, dayNum: d.getDate() });
+    }
+    return days;
+  }, []);
+
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   // --- Modals States ---
@@ -205,32 +357,51 @@ export default function Orders({ token, role, username, orders, setOrders, couri
   ];
 
   // Filters mapping
-  const visibleOrders = orders.filter((o) => {
-    // Strict role-based filter safety enforcement
-    if (isAgent) {
-      if (!o.courier || o.courier.toString().trim().toLowerCase() !== username.trim().toLowerCase()) return false;
-      // Exclude delayed / unanswered hold-ups from the main "all" tab list
-      if (activeFilter === "all" && ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)) {
-        return false;
+  const visibleOrders = orders
+    .filter((o) => {
+      // Strict role-based filter safety enforcement
+      if (isAgent) {
+        if (!o.courier || o.courier.toString().trim().toLowerCase() !== username.trim().toLowerCase()) return false;
+        // Exclude delayed / unanswered hold-ups from the main "all" tab list
+        if (activeFilter === "all" && ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)) {
+          return false;
+        }
+      } else if (isSupplier) {
+        if (!o.supplier || o.supplier.toString().trim().toLowerCase() !== username.trim().toLowerCase()) return false;
+      } else if (isReturnsOfficer) {
+        const isRet = ["مرتجع", "التسليم للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) || o.returnQueueStatus;
+        if (!isRet) return false;
       }
-    } else if (isSupplier) {
-      if (!o.supplier || o.supplier.toString().trim().toLowerCase() !== username.trim().toLowerCase()) return false;
-    } else if (isReturnsOfficer) {
-      const isRet = ["مرتجع", "التسليم للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) || o.returnQueueStatus;
-      if (!isRet) return false;
-    }
 
-    if (activeFilter !== "all" && o.status !== activeFilter) return false;
+      if (activeFilter !== "all" && o.status !== activeFilter) return false;
 
-    if (search.trim()) {
-      const q = search.toLowerCase().trim();
-      return [o.tracking, o.supplier, o.courier, o.customer, o.phone, o.gov, o.region, o.address, o.notes, o.returnQueueStatus]
-        .join(" ")
-        .toLowerCase()
-        .includes(q);
-    }
-    return true;
-  });
+      // Dynamic Date Filter - Filter by orderDate (or fallback to createdAt) matching selectedDateYMD
+      if (selectedDate !== "all") {
+        const orderDayStr = normalizeDateToYMD(o.orderDate || o.createdAt);
+        if (orderDayStr !== selectedDate) return false;
+      }
+
+      if (search.trim()) {
+        const q = search.toLowerCase().trim();
+        return [o.tracking, o.supplier, o.courier, o.customer, o.phone, o.gov, o.region, o.address, o.notes, o.returnQueueStatus]
+          .join(" ")
+          .toLowerCase()
+          .includes(q);
+      }
+      return true;
+    })
+    .sort((a, b) => {
+      const valA = a.createdAt || "";
+      const valB = b.createdAt || "";
+      if (valA && valB) {
+        const cmp = valB.localeCompare(valA);
+        if (cmp !== 0) return cmp;
+      }
+      // Fallback
+      const timeA = valA ? new Date(valA.replace(" ", "T")).getTime() : 0;
+      const timeB = valB ? new Date(valB.replace(" ", "T")).getTime() : 0;
+      return timeB - timeA;
+    });
 
   // Today's hold-ups / suspended orders ("معلقات اليوم") for agent/courier view
   const suspendedOrders = isAgent ? orders.filter((o) => {
@@ -934,6 +1105,60 @@ export default function Orders({ token, role, username, orders, setOrders, couri
         ))}
       </div>
 
+      {/* 📅 Dynamic Date Filter Bar */}
+      <div className="mx-4 p-3 bg-gradient-to-r from-slate-900/90 to-slate-950 border border-white/6 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-3 text-right">
+        <div className="flex items-center gap-2">
+          <Calendar size={14} className="text-amber-500 shrink-0" />
+          <span className="text-xs font-black text-slate-200">فلاتر الأيام الذكية:</span>
+        </div>
+        
+        <div className="flex flex-wrap items-center gap-1.5">
+          {/* All button */}
+          <button
+            onClick={() => setSelectedDate("all")}
+            className={`px-3 py-1.5 rounded-full text-[10px] font-black cursor-pointer transition-all border whitespace-nowrap ${
+              selectedDate === "all"
+                ? "bg-amber-500 text-slate-950 border-amber-500"
+                : "bg-slate-950 text-slate-400 border-white/6 hover:text-slate-200"
+            }`}
+          >
+            الكل
+          </button>
+
+          {/* Map of last days */}
+          {lastDays.map((day) => (
+            <button
+              key={day.ymd}
+              onClick={() => setSelectedDate(day.ymd)}
+              className={`px-3 py-1.5 rounded-full text-[10px] font-black cursor-pointer transition-all border whitespace-nowrap ${
+                selectedDate === day.ymd
+                  ? "bg-amber-500 text-slate-950 border-amber-500"
+                  : "bg-slate-950 text-slate-400 border-white/6 hover:text-slate-200"
+              }`}
+            >
+              {day.label}
+            </button>
+          ))}
+
+          {/* Custom Date Picker */}
+          <div className="flex items-center gap-1.5 bg-slate-950 px-2.5 py-1 rounded-full border border-white/6">
+            <span className="text-[10px] text-slate-400 font-extrabold whitespace-nowrap">تقويم مخصص:</span>
+            <input
+              type="date"
+              value={selectedDate !== "all" && !lastDays.some(d => d.ymd === selectedDate) ? selectedDate : ""}
+              onChange={(e) => {
+                if (e.target.value) {
+                  setSelectedDate(e.target.value);
+                } else {
+                  setSelectedDate("all");
+                }
+              }}
+              className="bg-transparent border-none text-[10px] font-mono text-amber-500 font-black outline-none cursor-pointer w-28 text-center"
+            />
+          </div>
+        </div>
+      </div>
+
       {/* ⚡ Quick Reconciliation and Returns Portal */}
       {showReconPortal && canReconcile && (
         <div className="mx-4 p-5 bg-[#070d1a] border-2 border-amber-500/40 rounded-2xl space-y-4 shadow-xl">
@@ -1531,16 +1756,12 @@ export default function Orders({ token, role, username, orders, setOrders, couri
 
               <div className="space-y-1">
                 <label className="block text-[10px] text-slate-400 font-bold">تعيين أو تغيير المندوب المسؤول</label>
-                <select
+                <SearchableCourierSelect
                   value={bulkCourier}
-                  onChange={(e) => setBulkCourier(e.target.value)}
-                  className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-xl px-3 py-2.5 text-xs text-right"
-                >
-                  <option value="">-- بقاء المندوب كما هو --</option>
-                  {couriers.map((c, idx) => (
-                    <option key={idx} value={c.name}>{c.name}</option>
-                  ))}
-                </select>
+                  onChange={(val) => setBulkCourier(val)}
+                  couriers={couriers}
+                  placeholder="-- بقاء المندوب كما هو --"
+                />
               </div>
             </div>
 
@@ -1584,16 +1805,12 @@ export default function Orders({ token, role, username, orders, setOrders, couri
 
               <div className="space-y-1 text-right">
                 <label className="block text-[9px] text-slate-450 font-bold">المندوب المسؤول للتسليم</label>
-                <select
+                <SearchableCourierSelect
                   value={editOrder.courier || ""}
-                  onChange={(e) => setEditOrder({ ...editOrder, courier: e.target.value })}
-                  className="w-full bg-slate-950 text-slate-200 border border-white/8 px-3 py-2.5 rounded-lg text-xs"
-                >
-                  <option value="">بدون مندوب</option>
-                  {couriers.map((c, idx) => (
-                    <option key={idx} value={c.name}>{c.name}</option>
-                  ))}
-                </select>
+                  onChange={(val) => setEditOrder({ ...editOrder, courier: val })}
+                  couriers={couriers}
+                  placeholder="بدون مندوب"
+                />
               </div>
             </div>
 
