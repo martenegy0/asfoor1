@@ -856,7 +856,11 @@ function getDashboardStats(sheets) {
 
   const total = orders.length;
   const delivered = orders.filter(o => o.status === "تم التسليم").length;
-  const returned = orders.filter(o => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length;
+  const returned = orders.filter(o => {
+    const isSomeReturn = ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "مرتجع والعميل دفع الشحن"].includes(o.status) || (o.status || "").indexOf("مرتجع") !== -1;
+    const isDeliveredToSupplier = ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status);
+    return isSomeReturn && !isDeliveredToSupplier;
+  }).length;
   const shipping = orders.filter(o => o.status === "خارج مع المندوب" || o.status === "تم الإسناد").length;
 
   const rate = total > 0 ? ((delivered / (delivered + returned || 1)) * 100) : 0;

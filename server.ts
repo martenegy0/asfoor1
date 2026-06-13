@@ -1159,6 +1159,9 @@ app.post("/api", async (req: Request, res: Response) => {
               stats.assignedPending++;
             }
 
+            const isSomeReturn = ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "مرتجع والعميل دفع الشحن"].includes(o.status) || (o.status || "").includes("مرتجع");
+            const isDeliveredToSupplier = ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status);
+
             if (o.status === "تم التسليم") {
               stats.delivered++;
               stats.totalCOD += Number(o.totalCOD || 0);
@@ -1167,9 +1170,11 @@ app.post("/api", async (req: Request, res: Response) => {
               if (o.delivDate && isDateToday(o.delivDate)) {
                 stats.todayCOD += Number(o.totalCOD || 0);
               }
-            } else if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)) {
-              stats.returned++;
-            } else if (["جديد", "تم الإسناد", "مؤجل", "لا يوجد رد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد"].includes(o.status)) {
+            } else if (isSomeReturn) {
+              if (!isDeliveredToSupplier) {
+                stats.returned++;
+              }
+            } else if (["جديد", "تم الإسناد", "مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)) {
               stats.pending++;
             } else if (o.status === "خارج مع المندوب") {
               stats.active++;
@@ -2108,6 +2113,9 @@ app.post("/api", async (req: Request, res: Response) => {
             stats.assignedPending++;
           }
 
+          const isSomeReturn = ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "مرتجع والعميل دفع الشحن"].includes(o.status) || (o.status || "").includes("مرتجع");
+          const isDeliveredToSupplier = ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status);
+
           if (o.status === "تم التسليم") {
             stats.delivered++;
             stats.totalCOD += Number(o.totalCOD || 0);
@@ -2116,9 +2124,11 @@ app.post("/api", async (req: Request, res: Response) => {
             if (o.delivDate && isDateToday(o.delivDate)) {
               stats.todayCOD += Number(o.totalCOD || 0); // Money collected today
             }
-          } else if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)) {
-            stats.returned++;
-          } else if (["جديد", "تم الإسناد", "مؤجل", "لا يوجد رد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد"].includes(o.status)) {
+          } else if (isSomeReturn) {
+            if (!isDeliveredToSupplier) {
+              stats.returned++;
+            }
+          } else if (["جديد", "تم الإسناد", "مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)) {
             stats.pending++;
           } else if (o.status === "خارج مع المندوب") {
             stats.active++;
@@ -2413,7 +2423,7 @@ app.post("/api", async (req: Request, res: Response) => {
         // Fetch adjustments (Bonuses, Penalties) from courierLedger entries
         const targetLedger = db.courierLedger.filter((l: any) => l.courier === courierName);
         const bonusesSum = targetLedger.filter((l: any) => l.type === "مكافأة").reduce((sum: number, x: any) => sum + Number(x.amount), 0);
-        const penaltiesSum = targetLedger.filter((l: any) => l.type === "جزاء" || l.type === "خصم").reduce((sum: number, x: any) => sum + Math.abs(Number(x.amount)), 0);
+        const penaltiesSum = targetLedger.filter((l: any) => l.type === "جزاء" || l.type === "خصم" || l.type === "خصم عجز").reduce((sum: number, x: any) => sum + Math.abs(Number(x.amount)), 0) * -1;
 
         // Compute COD Collection tracking for anti-deficit control
         const totalCollected = courierOrders.filter((o: any) => o.status === "تم التسليم").reduce((sum: number, o: any) => sum + Number(o.totalCOD || 0), 0);
@@ -2495,7 +2505,7 @@ app.post("/api", async (req: Request, res: Response) => {
         // netSalary = (Today's Delivered & Today's RetPaid) * commission + Today's portion of base salary + today's allowance + today's bonuses - today's penalties - today's expenses
         // This is safe, accurate, prevents compounding past unpaid.
         const baseEarningToday = Number((basicSalary / daysCount).toFixed(2));
-        const netSalary = (todayDelivedCommissionsTotal() || (delivCommission + returnShippingCommission)) + baseEarningToday + allowanceTotal + bonusesSum - penaltiesSum - todayExpensesCombined;
+        const netSalary = (todayDelivedCommissionsTotal() || (delivCommission + returnShippingCommission)) + baseEarningToday + allowanceTotal + bonusesSum - Math.abs(penaltiesSum) - todayExpensesCombined;
 
         function todayDelivedCommissionsTotal() {
           return todayDelivCommission + todayReturnShippingCommission;
@@ -2546,7 +2556,7 @@ app.post("/api", async (req: Request, res: Response) => {
         // Fetch adjustment amounts
         const ledgerTr = db.courierLedger.filter((l: any) => l.courier === courierName);
         const bonuses = ledgerTr.filter((l: any) => l.type === "مكافأة").reduce((sum: number, x: any) => sum + Number(x.amount), 0);
-        const penalties = ledgerTr.filter((l: any) => l.type === "جزاء" || l.type === "خصم").reduce((sum: number, x: any) => sum + Number(x.amount), 0);
+        const penalties = ledgerTr.filter((l: any) => l.type === "جزاء" || l.type === "خصم" || l.type === "خصم عجز").reduce((sum: number, x: any) => sum + Math.abs(Number(x.amount)), 0) * -1;
 
         const todayDate = tod();
         const todayDelivered = ordersList.filter((o: any) => o.status === "تم التسليم" && o.delivDate && isDateToday(o.delivDate)).length;
@@ -2557,7 +2567,7 @@ app.post("/api", async (req: Request, res: Response) => {
 
         // Total commissions to pay consists of today's deliveries since past days are already closed & settled/paid.
         const totalCommission = todayDelivCommission + todayReturnShippingCommission;
-        const totalEarnings = basicSalary + totalCommission + bonuses - penalties;
+        const totalEarnings = basicSalary + totalCommission + bonuses - Math.abs(penalties);
 
         // Cumulative Daily Ledger calculations
         const nowCairo = getCairoDateObj();
@@ -2663,7 +2673,10 @@ app.post("/api", async (req: Request, res: Response) => {
         const { courier, type, amount, desc } = d; // type can be 'مكافأة' or 'جزاء'
         if (!courier || !amount || !type) return err(res, "بيانات مفقودة للتسوية");
 
-        const val = Number(amount);
+        let val = Number(amount);
+        if (type === "جزاء" || type === "خصم" || type === "خصم عجز") {
+          val = Math.abs(val) * -1;
+        }
         db.courierLedger.push({
           courier,
           date: now(),
@@ -2679,7 +2692,7 @@ app.post("/api", async (req: Request, res: Response) => {
             date: now(),
             desc: `تسوية خصم/جزاء مستقطع للمندوب: ${courier} - ${desc || ''}`,
             type: "إيداع",
-            amount: val,
+            amount: Math.abs(val),
             ref: "PENALTY",
             addedBy: currentUser
           });
@@ -2756,8 +2769,23 @@ app.post("/api", async (req: Request, res: Response) => {
           addedBy: currentUser
         });
 
+        // ويتم تصفير عدادات المندوب الحركية فوراً لاستقبل يوم جديد
+        if (type === "استلام عهدة مندوب" && ref) {
+          const courierName = ref;
+          if (db.orders) {
+            for (const o of db.orders) {
+              if (o.courier === courierName) {
+                const isCommitted = ["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع والعميل دفع الشحن"].includes(o.status);
+                if (isCommitted) {
+                  o.isClosed = true;
+                }
+              }
+            }
+          }
+        }
+
         writeDB(db);
-        return ok(res, { msg: "تم إدراج بند الخزينة وتصفيته" });
+        return ok(res, { msg: "تم إدراج بند الخزينة وتصفيته وتصفير العدادات" });
       }
 
       // ─────────────────────────────────────────────────────────────

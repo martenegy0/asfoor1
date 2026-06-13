@@ -1510,16 +1510,33 @@ export default function Orders({ token, role, username, orders, setOrders, couri
 
       {/* 📊 Courier Dashboard Operational Counters */}
       {isAgent && (() => {
-        const myActiveOrders = orders.filter((o) => o.courier === username && !o.isClosed);
-        const myTotal = myActiveOrders.length;
-        const myDelivered = myActiveOrders.filter((o) => o.status === "تم التسليم").length;
-        const myReturned = myActiveOrders.filter((o) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)).length;
-        const mySuspended = myActiveOrders.filter((o) => ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)).length;
-        const myRemaining = Math.max(0, myTotal - myDelivered - myReturned - mySuspended);
+        const targetDateStr = selectedDate === "all" ? getTodayDateStr() : selectedDate;
+        const myActiveOrders = orders.filter((o) => o.courier === username);
+        const myTotal = myActiveOrders.filter((o) => normalizeDateToYMD(o.orderDate || o.createdAt) === targetDateStr).length;
+
+        const myDelivered = myActiveOrders.filter((o) => 
+          o.status === "تم التسليم" && 
+          o.delivDate && 
+          normalizeDateToYMD(o.delivDate) === targetDateStr
+        ).length;
+
+        const myReturned = myActiveOrders.filter((o) => 
+          ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status) && 
+          o.retDate && 
+          normalizeDateToYMD(o.retDate) === targetDateStr
+        ).length;
+
+        const mySuspended = myActiveOrders.filter((o) => 
+          ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status) && 
+          o.updatedAt && 
+          normalizeDateToYMD(o.updatedAt) === targetDateStr
+        ).length;
+
+        const myRemaining = Math.max(0, myActiveOrders.filter((o) => !o.isClosed && !["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)).length);
 
         // Financial Math
-        const agentDeliveredOrders = orders.filter(o => o.courier === username && !o.isClosed && o.status === "تم التسليم");
-        const agentCustomerPaidReturns = orders.filter(o => o.courier === username && !o.isClosed && o.status === "مرتجع والعميل دفع الشحن");
+        const agentDeliveredOrders = orders.filter(o => o.courier === username && o.status === "تم التسليم" && o.delivDate && normalizeDateToYMD(o.delivDate) === targetDateStr);
+        const agentCustomerPaidReturns = orders.filter(o => o.courier === username && o.status === "مرتجع والعميل دفع الشحن" && o.retDate && normalizeDateToYMD(o.retDate) === targetDateStr);
         
         const totalCODDelivered = agentDeliveredOrders.reduce((sum, o) => sum + Number(o.totalCOD || o.prodPrice || 0), 0);
         const totalShipReturnsPaidByCust = agentCustomerPaidReturns.reduce((sum, o) => sum + Number(o.shipPrice || o.shipCost || 0), 0);

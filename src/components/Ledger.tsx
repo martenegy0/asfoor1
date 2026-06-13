@@ -181,7 +181,7 @@ export default function Ledger({ token, role, user }: LedgerProps) {
     if (courierSummary) {
       const isBonus = type === "مكافأة";
       const nextBonusesSum = courierSummary.bonusesSum + (isBonus ? val : 0);
-      const nextPenaltiesSum = courierSummary.penaltiesSum + (!isBonus ? val : 0);
+      const nextPenaltiesSum = courierSummary.penaltiesSum + (!isBonus ? -val : 0);
       const nextNetSalary = courierSummary.netSalary + (isBonus ? val : -val);
 
       setCourierSummary({
@@ -767,7 +767,7 @@ export default function Ledger({ token, role, user }: LedgerProps) {
                       disabled={submittingLedger}
                       className="w-full bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-black text-xs py-2.5 rounded-lg cursor-pointer transition-colors disabled:opacity-50"
                     >
-                      تسجيل التوريد وتصفية العجز
+                      تصفية وتوريد كاش المندوب
                     </button>
                   </form>
                 </div>

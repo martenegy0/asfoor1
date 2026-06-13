@@ -81,6 +81,9 @@ export default function Dashboard({ token }: DashboardProps) {
           dStats.assignedPending++;
         }
 
+        const isSomeReturn = ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "مرتجع والعميل دفع الشحن"].includes(o.status) || (o.status || "").includes("مرتجع");
+        const isDeliveredToSupplier = ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status);
+
         if (o.status === "تم التسليم") {
           dStats.delivered++;
           // High fidelity frontend loop to collect (prodPrice + shipPrice) exactly for delivered orders
@@ -93,9 +96,11 @@ export default function Dashboard({ token }: DashboardProps) {
           if (delDate.startsWith(todayStr)) {
             dStats.todayCOD += codAmount;
           }
-        } else if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)) {
-          dStats.returned++;
-        } else if (["جديد", "تم الإسناد", "مؤجل", "لا يوجد رد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد"].includes(o.status)) {
+        } else if (isSomeReturn) {
+          if (!isDeliveredToSupplier) {
+            dStats.returned++;
+          }
+        } else if (["جديد", "تم الإسناد", "مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)) {
           dStats.pending++;
         } else if (o.status === "خارج مع المندوب") {
           dStats.active++;
