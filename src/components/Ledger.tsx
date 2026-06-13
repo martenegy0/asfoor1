@@ -181,14 +181,20 @@ export default function Ledger({ token, role, user }: LedgerProps) {
     if (courierSummary) {
       const isBonus = type === "مكافأة";
       const nextBonusesSum = courierSummary.bonusesSum + (isBonus ? val : 0);
-      const nextPenaltiesSum = courierSummary.penaltiesSum + (!isBonus ? -val : 0);
+      const nextPenaltiesSum = courierSummary.penaltiesSum + (!isBonus ? val : 0);
       const nextNetSalary = courierSummary.netSalary + (isBonus ? val : -val);
+      const nextTodayBonuses = (courierSummary.todayBonuses || 0) + (isBonus ? val : 0);
+      const nextTodayPenalties = (courierSummary.todayPenalties || 0) + (!isBonus ? val : 0);
+      const nextRequiredHandoverToday = (courierSummary.requiredHandoverToday || 0) + (isBonus ? val : -val);
 
       setCourierSummary({
         ...courierSummary,
         bonusesSum: nextBonusesSum,
         penaltiesSum: nextPenaltiesSum,
-        netSalary: nextNetSalary
+        netSalary: nextNetSalary,
+        todayBonuses: nextTodayBonuses,
+        todayPenalties: nextTodayPenalties,
+        requiredHandoverToday: nextRequiredHandoverToday
       });
     }
 
@@ -722,10 +728,56 @@ export default function Ledger({ token, role, user }: LedgerProps) {
 
               {/* Handover payout form */}
               {isFinancial && (
-                <div className="bg-slate-950 p-4 rounded-xl border border-white/4 space-y-3">
-                  <h4 className="text-[11px] font-black text-emerald-400 flex items-center gap-1.5">
-                     📥 تسجيل استلام نقدية وإخلاء عهدة مباشرة لـ {selectedCourier}
+                <div className="bg-slate-950 p-4 rounded-xl border border-white/4 space-y-4">
+                  <h4 className="text-[11px] font-black text-emerald-400 flex items-center gap-1.5 border-b border-white/6 pb-2">
+                     📥 تصفية الحساب اليومية الصارمة وإخلاء العهدة لـ {selectedCourier}
                   </h4>
+
+                  {/* Strict Settlement Verification Box */}
+                  <div className="bg-indigo-950/25 border border-indigo-500/25 p-3.5 rounded-xl space-y-3">
+                    <h5 className="text-[10px] font-black text-indigo-400 flex items-center gap-1.5 justify-between">
+                      <span>🔒 تصفية الحساب الإلكترونية الموحدة (Rider Settlement)</span>
+                      <span className="bg-indigo-950 text-[9px] text-indigo-300 font-bold px-2 py-0.5 rounded border border-indigo-950/50">تاريخ اليوم الحالي المفلتر</span>
+                    </h5>
+                    <div className="grid grid-cols-2 lg:grid-cols-5 gap-2.5">
+                      <div className="bg-slate-950 p-2.5 rounded-lg border border-white/4 text-right">
+                        <span className="text-[9px] text-slate-400 block font-bold">1. كاش المسلَّم اليوم</span>
+                        <div className="text-sm font-extrabold text-emerald-400 mt-0.5 font-mono">{(courierSummary.todayDeliveredCash || 0).toLocaleString("ar")} ج.م</div>
+                      </div>
+                      <div className="bg-slate-950 p-2.5 rounded-lg border border-white/4 text-right">
+                        <span className="text-[9px] text-slate-400 block font-bold">2. كاش شحن المرتجع اليوم</span>
+                        <div className="text-sm font-extrabold text-teal-400 mt-0.5 font-mono">{(courierSummary.todayReturnedPaidCash || 0).toLocaleString("ar")} ج.م</div>
+                      </div>
+                      <div className="bg-slate-950 p-2.5 rounded-lg border border-white/4 text-right">
+                        <span className="text-[9px] text-slate-400 block font-bold">3. عمولة المندوب اليوم</span>
+                        <div className="text-sm font-extrabold text-rose-400 mt-0.5 font-mono">-{(courierSummary.todayTotalCommission || 0).toLocaleString("ar")} ج.م</div>
+                      </div>
+                      <div className="bg-slate-950 p-2.5 rounded-lg border border-white/4 text-right">
+                        <span className="text-[9px] text-slate-400 block font-bold">4. جزاءات اليوم</span>
+                        <div className="text-sm font-extrabold text-red-500 mt-0.5 font-mono">-{(courierSummary.todayPenalties || 0).toLocaleString("ar")} ج.م</div>
+                      </div>
+                      <div className="bg-slate-950 p-2.5 rounded-lg border border-white/4 text-right">
+                        <span className="text-[9px] text-slate-400 block font-bold">5. مكافآت اليوم</span>
+                        <div className="text-sm font-extrabold text-cyan-400 mt-0.5 font-mono">+{(courierSummary.todayBonuses || 0).toLocaleString("ar")} ج.م</div>
+                      </div>
+                    </div>
+                    
+                    <div className="bg-slate-950 border border-white/4 p-3 rounded-lg flex flex-col md:flex-row md:items-center justify-between gap-3 text-right">
+                      <div className="space-y-1">
+                        <div className="text-[9px] font-bold text-indigo-400">الصافي المالي المطلوب توريده رسمياً للخزنة الآن:</div>
+                        <div className="text-[8.5px] text-slate-400 font-sans leading-relaxed">
+                          (كاش المسلَّم [{(courierSummary.todayDeliveredCash || 0).toLocaleString("ar")}] + كاش شحن المرتجع [{(courierSummary.todayReturnedPaidCash || 0).toLocaleString("ar")}]) - عمولات اليوم [{(courierSummary.todayTotalCommission || 0).toLocaleString("ar")}] - جزاءات اليوم [{(courierSummary.todayPenalties || 0).toLocaleString("ar")}] + مكافآت اليوم [{(courierSummary.todayBonuses || 0).toLocaleString("ar")}].
+                        </div>
+                      </div>
+                      <div className="bg-indigo-950 border border-indigo-400/30 px-5 py-2 rounded-lg text-center shrink-0">
+                        <span className="text-[8.5px] text-slate-300 font-extrabold block mb-0.5">العهدة الصافية للتوريد</span>
+                        <span className="text-[17px] font-black text-indigo-300 font-mono">
+                          {(courierSummary.requiredHandoverToday !== undefined ? courierSummary.requiredHandoverToday : ((courierSummary.todayDeliveredCash || 0) + (courierSummary.todayReturnedPaidCash || 0) - (courierSummary.todayTotalCommission || 0) - (courierSummary.todayPenalties || 0) + (courierSummary.todayBonuses || 0))).toLocaleString("ar")} ج.م
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
                   <form onSubmit={handleCourierHandover} className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
                     <div className="space-y-1">
                       <label className="block text-[9px] text-slate-400 font-bold">المبلغ المستلم بالجنيه*</label>

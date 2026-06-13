@@ -2383,8 +2383,6 @@ app.post("/api", async (req: Request, res: Response) => {
         writeDB(db);
         return ok(res, { msg: "تم تسجيل الدفعة النقدية بنجاح وتسويتها بالخزنة" });
       }
-
-      // ─────────────────────────────────────────────────────────────
       // COURIER LEDGER SYSTEM & COMPENSTATION
       // ─────────────────────────────────────────────────────────────
       case "getCourierLedger": {
@@ -2404,11 +2402,23 @@ app.post("/api", async (req: Request, res: Response) => {
         const commissionReturn = courierProfile.commission_return !== undefined ? Number(courierProfile.commission_return) : 10;
 
         const todayDate = tod();
-        const todayDeliveredCount = courierOrders.filter((o: any) => o.status === "تم التسليم" && o.delivDate && isDateToday(o.delivDate)).length;
-        const todayDelivCommission = todayDeliveredCount * commissionSuccess;
 
-        const todayReturnedPaidCount = courierOrders.filter((o: any) => o.status === "مرتجع" && o.returnShippingType === "paid" && o.retDate && isDateToday(o.retDate)).length;
-        const todayReturnShippingCommission = todayReturnedPaidCount * commissionSuccess;
+        // Strict Courier Settlement Calculations (Today's performance):
+        // 1. Delivered Cash (كاش الأوردرات المسلمة اليوم): (ثمن المنتجات + مصاريف الشحن) لجميع الأوردرات "تم التسليم" اليوم
+        const todayDeliveredOrders = courierOrders.filter((o: any) => o.status === "تم التسليم" && o.delivDate && isDateToday(o.delivDate));
+        const todayDeliveredCount = todayDeliveredOrders.length;
+        const todayDeliveredCash = todayDeliveredOrders.reduce((sum: number, o: any) => sum + Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0))), 0);
+
+        // 2. Returned Shipping Cash (كاش شحن المرتجعات اليوم): (مصاريف الشحن فقط) لجميع الأوردرات "مرتجع مدفوع الشحن" اليوم
+        const todayReturnedPaidOrders = courierOrders.filter((o: any) => 
+          (o.status === "مرتجع والعميل دفع الشحن" || o.status === "مرتجع مدفوع الشحن" || (o.status === "مرتجع" && o.returnShippingType === "paid")) && 
+          o.retDate && isDateToday(o.retDate)
+        );
+        const todayReturnedPaidCount = todayReturnedPaidOrders.length;
+        const todayReturnedPaidCash = todayReturnedPaidOrders.reduce((sum: number, o: any) => sum + Number(o.shipPrice || o.shipCost || 0), 0);
+
+        // 3. Total Commission (عمولة المندوب الكلية اليوم): (deliveredCount * successRate) + (returnedPaidCount * successRate)
+        const todayTotalCommission = (todayDeliveredCount * commissionSuccess) + (todayReturnedPaidCount * commissionSuccess);
 
         // Cumulative totals (for historical indicators)
         const deliveredCount = courierOrders.filter((o: any) => o.status === "تم التسليم").length;
@@ -2417,15 +2427,25 @@ app.post("/api", async (req: Request, res: Response) => {
 
         // Strict Financial Separation:
         // Outstanding / Due Delivery commission consists ONLY of today's deliveries since past days are already closed & settled/paid.
-        const delivCommission = todayDelivCommission;
-        const returnShippingCommission = todayReturnShippingCommission;
+        const delivCommission = todayDeliveredCount * commissionSuccess;
+        const returnShippingCommission = todayReturnedPaidCount * commissionSuccess;
 
         // Fetch adjustments (Bonuses, Penalties) from courierLedger entries
         const targetLedger = db.courierLedger.filter((l: any) => l.courier === courierName);
-        const bonusesSum = targetLedger.filter((l: any) => l.type === "مكافأة").reduce((sum: number, x: any) => sum + Number(x.amount), 0);
-        const penaltiesSum = targetLedger.filter((l: any) => l.type === "جزاء" || l.type === "خصم" || l.type === "خصم عجز").reduce((sum: number, x: any) => sum + Math.abs(Number(x.amount)), 0) * -1;
+        const bonusesSum = targetLedger.filter((l: any) => l.type === "مكافأة").reduce((sum: number, x: any) => sum + Math.abs(Number(x.amount || 0)), 0);
+        // Force penaltiesSum to be a POSITIVE number in representation, avoiding double negative maths!
+        const penaltiesSum = targetLedger.filter((l: any) => l.type === "جزاء" || l.type === "خصم" || l.type === "خصم عجز").reduce((sum: number, x: any) => sum + Math.abs(Number(x.amount || 0)), 0);
+
+        // 4. Adjustments for today:
+        const todayBonuses = targetLedger.filter((l: any) => l.type === "مكافأة" && l.date && isDateToday(l.date)).reduce((sum: number, x: any) => sum + Math.abs(Number(x.amount || 0)), 0);
+        const todayPenalties = targetLedger.filter((l: any) => (l.type === "جزاء" || l.type === "خصم" || l.type === "خصم عجز") && l.date && isDateToday(l.date)).reduce((sum: number, x: any) => sum + Math.abs(Number(x.amount || 0)), 0);
+
+        // Final Settle Equation (الصافي المطلوب توريده للخزنة لليوم):
+        // الصافي المطلوب توريده للخزنة = (كاش الأوردرات المسلمة + كاش شحن المرتجعات) - (عمولة المندوب الكلية) - (قيمة الجزاء المخصوم) + (قيمة المكافأة المضافة).
+        const requiredHandoverToday = (todayDeliveredCash + todayReturnedPaidCash) - todayTotalCommission - todayPenalties + todayBonuses;
 
         // Compute COD Collection tracking for anti-deficit control
+        // Life-time or cumulative collected
         const totalCollected = courierOrders.filter((o: any) => o.status === "تم التسليم").reduce((sum: number, o: any) => sum + Number(o.totalCOD || 0), 0);
         
         // Handed Over to company = Sum of "استلام عهدة مندوب" records in cashbox for this courier
@@ -2505,11 +2525,7 @@ app.post("/api", async (req: Request, res: Response) => {
         // netSalary = (Today's Delivered & Today's RetPaid) * commission + Today's portion of base salary + today's allowance + today's bonuses - today's penalties - today's expenses
         // This is safe, accurate, prevents compounding past unpaid.
         const baseEarningToday = Number((basicSalary / daysCount).toFixed(2));
-        const netSalary = (todayDelivedCommissionsTotal() || (delivCommission + returnShippingCommission)) + baseEarningToday + allowanceTotal + bonusesSum - Math.abs(penaltiesSum) - todayExpensesCombined;
-
-        function todayDelivedCommissionsTotal() {
-          return todayDelivCommission + todayReturnShippingCommission;
-        }
+        const netSalary = todayTotalCommission + baseEarningToday + allowanceTotal + bonusesSum - penaltiesSum - todayExpensesCombined;
 
         return ok(res, {
           ledgerInfo: {
@@ -2530,7 +2546,13 @@ app.post("/api", async (req: Request, res: Response) => {
             totalPaidToCompany,
             deficit,
             todayDeliveredCount,
-            todayDelivCommission,
+            todayDelivCommission: todayTotalCommission, // backward compatibility
+            todayDeliveredCash,
+            todayReturnedPaidCash,
+            todayTotalCommission,
+            todayPenalties,
+            todayBonuses,
+            requiredHandoverToday,
             dailyEarnings: dailyEarnings.reverse() // Sort descending to have latest date first
           },
           transactions: targetLedger.reverse()
@@ -2555,19 +2577,37 @@ app.post("/api", async (req: Request, res: Response) => {
 
         // Fetch adjustment amounts
         const ledgerTr = db.courierLedger.filter((l: any) => l.courier === courierName);
-        const bonuses = ledgerTr.filter((l: any) => l.type === "مكافأة").reduce((sum: number, x: any) => sum + Number(x.amount), 0);
-        const penalties = ledgerTr.filter((l: any) => l.type === "جزاء" || l.type === "خصم" || l.type === "خصم عجز").reduce((sum: number, x: any) => sum + Math.abs(Number(x.amount)), 0) * -1;
+        const bonuses = ledgerTr.filter((l: any) => l.type === "مكافأة").reduce((sum: number, x: any) => sum + Math.abs(Number(x.amount || 0)), 0);
+        const penalties = ledgerTr.filter((l: any) => l.type === "جزاء" || l.type === "خصم" || l.type === "خصم عجز").reduce((sum: number, x: any) => sum + Math.abs(Number(x.amount || 0)), 0);
 
         const todayDate = tod();
-        const todayDelivered = ordersList.filter((o: any) => o.status === "تم التسليم" && o.delivDate && isDateToday(o.delivDate)).length;
-        const todayDelivCommission = todayDelivered * commissionSuccess;
-        const todayReturned = ordersList.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) && o.retDate && isDateToday(o.retDate)).length;
-        const todayReturnedPaidCount = ordersList.filter((o: any) => o.status === "مرتجع" && o.returnShippingType === "paid" && o.retDate && isDateToday(o.retDate)).length;
-        const todayReturnShippingCommission = todayReturnedPaidCount * commissionSuccess;
+
+        // Strict Courier Settlement Calculations (Today's performance):
+        // 1. Delivered Cash (كاش الأوردرات المسلمة اليوم): (ثمن المنتجات + مصاريف الشحن) لجميع الأوردرات "تم التسليم" اليوم
+        const todayDeliveredOrders = ordersList.filter((o: any) => o.status === "تم التسليم" && o.delivDate && isDateToday(o.delivDate));
+        const todayDeliveredCount = todayDeliveredOrders.length;
+        const todayDeliveredCash = todayDeliveredOrders.reduce((sum: number, o: any) => sum + Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0))), 0);
+
+        // 2. Returned Shipping Cash (كاش شحن المرتجعات اليوم): (مصاريف الشحن فقط) لجميع الأوردرات "مرتجع مدفوع الشحن" اليوم
+        const todayReturnedPaidOrders = ordersList.filter((o: any) => 
+          (o.status === "مرتجع والعميل دفع الشحن" || o.status === "مرتجع مدفوع الشحن" || (o.status === "مرتجع" && o.returnShippingType === "paid")) && 
+          o.retDate && isDateToday(o.retDate)
+        );
+        const todayReturnedPaidCount = todayReturnedPaidOrders.length;
+        const todayReturnedPaidCash = todayReturnedPaidOrders.reduce((sum: number, o: any) => sum + Number(o.shipPrice || o.shipCost || 0), 0);
+
+        // 3. Total Commission (عمولة المندوب الكلية اليوم): (deliveredCount * successRate) + (returnedPaidCount * successRate)
+        const todayTotalCommission = (todayDeliveredCount * commissionSuccess) + (todayReturnedPaidCount * commissionSuccess);
+
+        const todayBonuses = ledgerTr.filter((l: any) => l.type === "مكافأة" && l.date && isDateToday(l.date)).reduce((sum: number, x: any) => sum + Math.abs(Number(x.amount || 0)), 0);
+        const todayPenalties = ledgerTr.filter((l: any) => (l.type === "جزاء" || l.type === "خصم" || l.type === "خصم عجز") && l.date && isDateToday(l.date)).reduce((sum: number, x: any) => sum + Math.abs(Number(x.amount || 0)), 0);
+
+        // Final Settle Equation (الصافي المطلوب توريده للخزنة لليوم):
+        const requiredHandoverToday = (todayDeliveredCash + todayReturnedPaidCash) - todayTotalCommission - todayPenalties + todayBonuses;
 
         // Total commissions to pay consists of today's deliveries since past days are already closed & settled/paid.
-        const totalCommission = todayDelivCommission + todayReturnShippingCommission;
-        const totalEarnings = basicSalary + totalCommission + bonuses - Math.abs(penalties);
+        const totalCommission = todayTotalCommission;
+        const totalEarnings = basicSalary + totalCommission + bonuses - penalties;
 
         // Cumulative Daily Ledger calculations
         const nowCairo = getCairoDateObj();
@@ -2654,10 +2694,16 @@ app.post("/api", async (req: Request, res: Response) => {
           penalties,
           totalCommission,
           totalEarnings,
-          todayDelivered,
-          todayDelivCommission,
-          todayReturned,
-          todayReturnCommission: todayReturned * commissionReturn,
+          todayDelivered: todayDeliveredCount,
+          todayDelivCommission: todayTotalCommission,
+          todayReturned: todayReturnedPaidCount,
+          todayReturnCommission: todayReturnedPaidCount * commissionSuccess,
+          todayDeliveredCash,
+          todayReturnedPaidCash,
+          todayTotalCommission,
+          todayPenalties,
+          todayBonuses,
+          requiredHandoverToday,
           deficit: deficitOnInfo,
           totalCollected: totalCollectedOnInfo,
           totalPaidToCompany: totalPaidToCompanyOnInfo,

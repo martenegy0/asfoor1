@@ -1536,13 +1536,18 @@ export default function Orders({ token, role, username, orders, setOrders, couri
 
         // Financial Math
         const agentDeliveredOrders = orders.filter(o => o.courier === username && o.status === "تم التسليم" && o.delivDate && normalizeDateToYMD(o.delivDate) === targetDateStr);
-        const agentCustomerPaidReturns = orders.filter(o => o.courier === username && o.status === "مرتجع والعميل دفع الشحن" && o.retDate && normalizeDateToYMD(o.retDate) === targetDateStr);
+        const agentCustomerPaidReturns = orders.filter(o => 
+          o.courier === username && 
+          (o.status === "مرتجع والعميل دفع الشحن" || o.status === "مرتجع مدفوع الشحن" || (o.status === "مرتجع" && o.returnShippingType === "paid")) && 
+          o.retDate && 
+          normalizeDateToYMD(o.retDate) === targetDateStr
+        );
         
-        const totalCODDelivered = agentDeliveredOrders.reduce((sum, o) => sum + Number(o.totalCOD || o.prodPrice || 0), 0);
+        const totalCODDelivered = agentDeliveredOrders.reduce((sum, o) => sum + Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0))), 0);
         const totalShipReturnsPaidByCust = agentCustomerPaidReturns.reduce((sum, o) => sum + Number(o.shipPrice || o.shipCost || 0), 0);
         
         const totalReceivedCashInHand = totalCODDelivered + totalShipReturnsPaidByCust;
-        const totalCommissionsEarned = agentDeliveredOrders.reduce((sum, o) => sum + (Number(o.commission || rawCommission || 25)), 0);
+        const totalCommissionsEarned = (agentDeliveredOrders.length * rawCommission) + (agentCustomerPaidReturns.length * rawCommission);
         const netRequiredHandover = totalReceivedCashInHand - totalCommissionsEarned - courierExpenses;
 
         return (
