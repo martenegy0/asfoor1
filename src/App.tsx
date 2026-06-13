@@ -15,6 +15,7 @@ export default function App() {
   const [role, setRole] = useState("");
   const [perms, setPerms] = useState("");
   const [activeTab, setActiveTab] = useState<string>("orders");
+  const [isBgSyncing, setIsBgSyncing] = useState(false);
 
   // Load and refresh orders state
   const [orders, setOrders] = useState<any[]>([]);
@@ -82,6 +83,22 @@ export default function App() {
       setPerms(savedPerms || "");
       refreshAllData(savedToken, savedRole, savedUser);
     }
+  }, []);
+
+  // Sync background state indicators asynchronously
+  useEffect(() => {
+    function handleStart() {
+      setIsBgSyncing(true);
+    }
+    function handleEnd() {
+      setIsBgSyncing(false);
+    }
+    window.addEventListener("bg-sync-start", handleStart);
+    window.addEventListener("bg-sync-end", handleEnd);
+    return () => {
+      window.removeEventListener("bg-sync-start", handleStart);
+      window.removeEventListener("bg-sync-end", handleEnd);
+    };
   }, []);
 
   const exportCashboxToCSV = () => {
@@ -570,6 +587,12 @@ export default function App() {
             <div className="text-xs font-black text-slate-100">{username}</div>
             <div className="text-[9px] font-bold text-amber-500 uppercase tracking-widest mt-0.5">{role}</div>
           </div>
+          {isBgSyncing && (
+            <div className="mr-3 flex items-center gap-1.5 px-2.5 py-1 bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-xl text-[9.5px] font-black animate-pulse">
+              <RefreshCw size={11} className="animate-spin" />
+              <span>جاري المزامنة بالخلفية...</span>
+            </div>
+          )}
         </div>
 
         {/* Global Action items */}

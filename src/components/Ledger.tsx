@@ -167,27 +167,69 @@ export default function Ledger({ token, role, user }: LedgerProps) {
       alert("يرجى إرساء قيمة تعديل صحيحة");
       return;
     }
-    setSubmittingLedger(true);
-    try {
-      const res = await apiCall("addCourierAdjustment", token, {
-        courier: selectedCourier,
-        type: adjustmentType,
-        amount: Number(adjAmount),
-        desc: adjDesc.trim() || `${adjustmentType} للمندوب ${selectedCourier}`
+    
+    const val = Number(adjAmount);
+    const type = adjustmentType;
+    const desc = adjDesc.trim() || `${adjustmentType} للمندوب ${selectedCourier}`;
+    const courier = selectedCourier;
+
+    // 1. Reset inputs immediately for responsive Fire & Forget
+    setAdjAmount("");
+    setAdjDesc("");
+
+    // 2. Optimistically update local UI states immediately (0.1 seconds response)
+    if (courierSummary) {
+      const isBonus = type === "مكافأة";
+      const nextBonusesSum = courierSummary.bonusesSum + (isBonus ? val : 0);
+      const nextPenaltiesSum = courierSummary.penaltiesSum + (!isBonus ? val : 0);
+      const nextNetSalary = courierSummary.netSalary + (isBonus ? val : -val);
+
+      setCourierSummary({
+        ...courierSummary,
+        bonusesSum: nextBonusesSum,
+        penaltiesSum: nextPenaltiesSum,
+        netSalary: nextNetSalary
       });
-      if (res.ok) {
-        setAdjAmount("");
-        setAdjDesc("");
-        loadCourierLedger();
-        alert(`✅ تم إرسال الـ ${adjustmentType} بنجاح وتسويتها في الخزنة`);
-      } else {
-        alert("⚠️ " + res.error);
-      }
-    } catch (err) {
-      alert("فشل تسجيل التسوية المالية للمندوب");
-    } finally {
-      setSubmittingLedger(false);
     }
+
+    // Append a mock transaction record to the logs so the director/accountant sees it immediately
+    const mockTx = {
+      courier,
+      date: new Date().toISOString(),
+      type,
+      tracking: "ADJUST",
+      amount: val,
+      desc
+    };
+    setCourierTrs(prev => [mockTx, ...prev]);
+
+    // Show success alert immediately without any waiting
+    alert(`✅ تم حفظ تسوية الـ ${type} بنجاح وبدء يوم جديد (مزامنة خلفية جاهزة)`);
+
+    // 3. Dispatch bg-sync events and invoke background API Call
+    window.dispatchEvent(new CustomEvent("bg-sync-start"));
+
+    apiCall("addCourierAdjustment", token, {
+      courier,
+      type,
+      amount: val,
+      desc
+    })
+      .then((res) => {
+        if (res && res.ok) {
+          console.log("Asynchronous courier adjustment saved successfully");
+          // Silently reload the actual server ledger values
+          loadCourierLedger();
+        } else {
+          console.error("Asynchronous courier adjustment sync error:", res?.error);
+        }
+      })
+      .catch((err) => {
+        console.error("Asynchronous courier adjustment call failed:", err);
+      })
+      .finally(() => {
+        window.dispatchEvent(new CustomEvent("bg-sync-end"));
+      });
   }
 
   // Submit Physical COD Handover from Courier directly to Centralized Cashbox
@@ -197,28 +239,55 @@ export default function Ledger({ token, role, user }: LedgerProps) {
       alert("يرجى إدخال مبلغ صحيح للاستلام");
       return;
     }
-    setSubmittingLedger(true);
-    try {
-      const res = await apiCall("addCashbox", token, {
-        type: "استلام عهدة مندوب",
-        ref: selectedCourier,
-        amount: Number(handoverAmount),
-        desc: handoverDesc.trim() || `استلام دفعة عهدة نقدية من المندوب: ${selectedCourier} بموجب وصل: ${handoverRef || "—"}`
+
+    const val = Number(handoverAmount);
+    const ref = handoverRef;
+    const desc = handoverDesc.trim() || `استلام دفعة عهدة نقدية من المندوب: ${selectedCourier} بموجب وصل: ${handoverRef || "—"}`;
+    const courier = selectedCourier;
+
+    // 1. Reset inputs immediately for responsive Fire & Forget
+    setHandoverAmount("");
+    setHandoverRef("");
+    setHandoverDesc("");
+
+    // 2. Optimistically update local UI states immediately (0.1 seconds response)
+    if (courierSummary) {
+      const nextPaid = (courierSummary.totalPaidToCompany || 0) + val;
+      const nextDeficit = (courierSummary.totalCollected || 0) - nextPaid;
+
+      setCourierSummary({
+        ...courierSummary,
+        totalPaidToCompany: nextPaid,
+        deficit: nextDeficit
       });
-      if (res.ok) {
-        setHandoverAmount("");
-        setHandoverRef("");
-        setHandoverDesc("");
-        loadCourierLedger();
-        alert(`✅ تم استلام عهدة المندوب بنجاح وترحيلها إلى الخزنة المركزية وتصفيتها`);
-      } else {
-        alert("⚠️ " + res.error);
-      }
-    } catch (err) {
-      alert("فشل تسجيل حركة استلام العهدة المباشر");
-    } finally {
-      setSubmittingLedger(false);
     }
+
+    // Show success alert immediately
+    alert(`✅ تم استلام دفعة عهدة المندوب بنجاح وتصفية العجز وجاري ترحيل التعديلات للخلفية...`);
+
+    // 3. Dispatch bg-sync events and invoke background API Call
+    window.dispatchEvent(new CustomEvent("bg-sync-start"));
+
+    apiCall("addCashbox", token, {
+      type: "استلام عهدة مندوب",
+      ref: courier,
+      amount: val,
+      desc
+    })
+      .then((res) => {
+        if (res && res.ok) {
+          console.log("Asynchronous cashbox handover synchronization complete");
+          loadCourierLedger();
+        } else {
+          console.error("Asynchronous cashbox handover saved, error during refresh:", res?.error);
+        }
+      })
+      .catch((err) => {
+        console.error("Asynchronous cashbox handover background call failed:", err);
+      })
+      .finally(() => {
+        window.dispatchEvent(new CustomEvent("bg-sync-end"));
+      });
   }
 
   return (

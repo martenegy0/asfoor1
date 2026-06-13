@@ -1047,6 +1047,54 @@ app.post("/api", async (req: Request, res: Response) => {
         return ok(res, { msg: "تم تسجيل التسوية المالية للمندوب بنجاح" });
       }
 
+      if (d.action === "addDailyClosing") {
+        if (!["مدير", "محاسب"].includes(currentRole)) {
+          return err(res, "فقط المدير والمحاسب يمتلك صلاحية تسجيل التقفيل اليومي");
+        }
+
+        const { date, deliveredCount, returnedCount, totalCOD, shippingCost } = d;
+        if (!date) return err(res, "تاريخ التقفيل مطلوب");
+
+        // 1. Invalidate caches
+        READ_CACHE.clear();
+        ACTIVE_FETCHES.clear();
+
+        // 2. Perform optimistic local database write
+        const db = readDB();
+        if (!db.dailyClosing) db.dailyClosing = [];
+        db.dailyClosing = db.dailyClosing.filter((r: any) => r.date !== date);
+        db.dailyClosing.push({
+          date,
+          deliveredCount: Number(deliveredCount || 0),
+          returnedCount: Number(returnedCount || 0),
+          totalCOD: Number(totalCOD || 0),
+          shippingCost: Number(shippingCost || 0),
+          addedBy: currentUser,
+          createdAt: now()
+        });
+
+        // Add to audit logs optimistically
+        if (!db.auditLog) db.auditLog = [];
+        db.auditLog.push({
+          user: currentUser,
+          type: "ترصيد تقفيل يومي",
+          dateTime: now(),
+          oldVal: "—",
+          newVal: `تقفيل يوم: ${date} (مسلم: ${deliveredCount}، مرتجع: ${returnedCount}، محصل COD: ${totalCOD} ج.م)`,
+          reason: `ترصيد اليوم المالي من خلال أداة التصدير السريع`
+        });
+
+        writeDB(db);
+
+        // 3. Queue asynchronous Google Sheets write in background
+        executeProxyRequest(gscriptUrl, payloadToSheet).catch((syncErr) => {
+          console.error("Async Google Sheets synchronization for addDailyClosing failed:", syncErr);
+        });
+
+        // 4. Return instant fast response for Fire & Forget
+        return ok(res, { ok: true, msg: "تم ترحيل وحفظ التقرير اليومي بنجاح وجاري المزامنة في الخلفية", background: true });
+      }
+
       if (d.action === "dashboard") {
         try {
           // One single async fetch call to GAS (internally using cached/deduplicated proxy helper)

@@ -230,27 +230,50 @@ export default function DailyClosing({ token, role, user }: DailyClosingProps) {
   async function handleSaveClosing(record: ClosingRecord) {
     setErrorMsg("");
     setSuccessMsg("");
-    try {
-      const res = await apiCall("addDailyClosing", token, {
-        date: record.date,
-        deliveredCount: record.deliveredCount,
-        returnedCount: record.returnedCount,
-        totalCOD: record.totalCOD,
-        shippingCost: record.shippingCost
-      });
 
-      if (res.ok) {
-        setSuccessMsg(res.msg || `تم تسجيل التقفيل المالي لليوم ${record.date} بنجاح!`);
-        // Refresh closing archive list
-        fetchClosingRecords();
-        // Reset dynamic draft
-        setCalculatedDraft(null);
-      } else {
-        setErrorMsg(res.error || "فشل تسجيل التقفيل بجوجل شيت");
-      }
-    } catch (err: any) {
-      setErrorMsg("عطل اتصال أثناء الإرسال: " + (err.message || err));
-    }
+    // 1. Fire and Forget: Immediately close the draft, show success banner and add to list optimistically
+    setCalculatedDraft(null);
+    setSuccessMsg(`✅ تم ترحيل وحفظ التقفيل اليومي لـ ${record.date} بنجاح وبدء يوم جديد (جاري الحفظ بالمزامنة الخلفية)`);
+
+    // Let's build the optimistic record
+    const optimisticRecord: ClosingRecord = {
+      ...record,
+      addedBy: record.addedBy || user || "المحاسب",
+    };
+
+    setClosingRecords(prev => {
+      const filtered = prev.filter(r => r.date !== record.date);
+      return [optimisticRecord, ...filtered];
+    });
+
+    // 2. Dispatch background sync event to trigger the silent loader in the navbar
+    window.dispatchEvent(new CustomEvent("bg-sync-start"));
+
+    // 3. Fire local API in the background silently
+    apiCall("addDailyClosing", token, {
+      date: record.date,
+      deliveredCount: record.deliveredCount,
+      returnedCount: record.returnedCount,
+      totalCOD: record.totalCOD,
+      shippingCost: record.shippingCost
+    })
+      .then((res) => {
+        if (res && res.ok) {
+          console.log("Asynchronous daily closing saved successfully");
+          // Silently sync the actual list
+          fetchClosingRecords();
+        } else {
+          setErrorMsg(res?.error || "فشل تسجيل التقفيل بجوجل شيت عند المزامنة الخلفية");
+        }
+      })
+      .catch((err: any) => {
+        console.error("Async daily closing synchronization failed:", err);
+        setErrorMsg("عطل اتصال أثناء الحفظ الخلفي: " + (err.message || err));
+      })
+      .finally(() => {
+        // Dispatch bg-sync-end and stop silent loading
+        window.dispatchEvent(new CustomEvent("bg-sync-end"));
+      });
   }
 
   // Submit custom manual closing
