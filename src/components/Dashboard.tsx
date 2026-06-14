@@ -180,7 +180,7 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
       const bestSupplierObj = [...formattedSuppliers].sort((a, b) => b.delivered - a.delivered)[0];
 
       const rate = dStats.total ? Math.round((dStats.delivered / dStats.total) * 100) : 0;
-      const remainingStock = dStats.total - dStats.delivered - dStats.returned - dStats.returnedDeliveredToSupplier;
+      const remainingStock = dStats.total - dStats.delivered - dStats.returnedDeliveredToSupplier - dStats.active;
 
       setStats({ ...dStats, rate, remainingStock });
       setCouriers(formattedCouriers.sort((a, b) => b.delivered - a.delivered));

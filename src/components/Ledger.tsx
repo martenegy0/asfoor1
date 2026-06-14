@@ -26,6 +26,7 @@ export default function Ledger({ token, role, user }: LedgerProps) {
   const [payAmount, setPayAmount] = useState("");
   const [payDesc, setPayDesc] = useState("");
   const [submittingLedger, setSubmittingLedger] = useState(false);
+  const [ledgerCache, setLedgerCache] = useState<Record<string, { subscribes: any[], liveBalance: number, stats: any }>>({});
 
   // --- Courier Ledger States ---
   const [courierSummary, setCourierSummary] = useState<any>(null);
@@ -67,12 +68,29 @@ export default function Ledger({ token, role, user }: LedgerProps) {
 
   // --- Load Supplier accounts information ---
   async function loadSupplierLedger() {
-    if (!selectedSupplier && !isSupplier) return;
-    setLoading(true);
+    const targetSup = isSupplier ? user : selectedSupplier;
+    if (!targetSup) return;
+
     setFeedback("");
+
+    // Optimistically render from the client cache if available
+    if (ledgerCache[targetSup]) {
+      const cached = ledgerCache[targetSup];
+      setSubscribes(cached.subscribes);
+      setLiveBalance(cached.liveBalance);
+      setSupplierStats(cached.stats);
+      setLoading(false); // No full screen blocker
+    } else {
+      // Clear data to prevent old figures from sticking
+      setSubscribes([]);
+      setLiveBalance(0);
+      setSupplierStats(null);
+      setLoading(true);
+    }
+
     try {
       const res = await apiCall("getSupplierLedger", token, {
-        supplier: isSupplier ? user : selectedSupplier
+        supplier: targetSup
       });
       if (res.ok) {
         const rawEntries = res.entries || res.ledger || [];
@@ -85,19 +103,33 @@ export default function Ledger({ token, role, user }: LedgerProps) {
           return { ...item, balanceAfter: tempBalance };
         });
         
-        setSubscribes([...entriesWithBalance].reverse());
-        setLiveBalance(res.balance !== undefined ? res.balance : tempBalance);
-        setSupplierStats(res.stats || {
+        const finalEntries = [...entriesWithBalance].reverse();
+        const actualBalance = res.balance !== undefined ? res.balance : tempBalance;
+        const stats = res.stats || {
           totalOrdersCount: rawEntries.filter((e: any) => e.type === "حقوق بضاعة أوردر").length,
           totalGoodsUploaded: tempBalance,
           deliveredOrdersCount: 0,
-          deliveredOrdersValue: 0,
+          deliveredOrdersValue: actualBalance, // fallback mapping
           returnsDeliveredCount: rawEntries.filter((e: any) => e.type === "مرتجع مخصوم").length,
           returnsDeliveredValue: Math.abs(rawEntries.filter((e: any) => e.type === "مرتجع مخصوم").reduce((sum: number, x: any) => sum + Number(x.amount || 0), 0)),
           paymentsValue: Math.abs(rawEntries.filter((e: any) => ["دفع نقدي", "دفعة مورد", "صرف مورد"].includes(e.type) || e.tracking === "CASH-PAY").reduce((sum: number, x: any) => sum + Number(x.amount || 0), 0)),
-          outstanding: res.balance !== undefined ? res.balance : tempBalance,
+          outstanding: actualBalance,
           rate: 0
-        });
+        };
+
+        // Update the client local cache
+        setLedgerCache(prev => ({
+          ...prev,
+          [targetSup]: {
+            subscribes: finalEntries,
+            liveBalance: actualBalance,
+            stats: stats
+          }
+        }));
+
+        setSubscribes(finalEntries);
+        setLiveBalance(actualBalance);
+        setSupplierStats(stats);
       } else {
         setFeedback(res.error || "خطأ أثناء تحميل كشف حساب المورد");
       }
@@ -427,7 +459,7 @@ export default function Ledger({ token, role, user }: LedgerProps) {
                 <div className="bg-slate-950/80 border border-white/4 rounded-xl py-3 px-4 max-w-2xl mx-auto text-xs text-slate-300 leading-relaxed font-bold">
                   <span className="text-amber-400">معادلة الحساب المعتمدة للمطابقة التامة:</span>
                   <div className="mt-1 flex flex-wrap items-center justify-center gap-2 text-[11px] font-mono">
-                    <span className="text-slate-100">إجمالي المرفوعة ({Number(supplierStats.totalGoodsUploaded || 0).toLocaleString("ar")})</span>
+                    <span className="text-slate-100">المسلمات بنجاح ({Number(supplierStats.deliveredOrdersValue || 0).toLocaleString("ar")})</span>
                     <span className="text-slate-400 font-sans"> - </span>
                     <span className="text-red-400">المرتجع المخصوم ({Number(supplierStats.returnsDeliveredValue || 0).toLocaleString("ar")})</span>
                     <span className="text-slate-400 font-sans"> - </span>

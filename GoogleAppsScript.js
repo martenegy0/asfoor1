@@ -37,27 +37,48 @@ function onOpen() {
 }
 
 function doPost(e) {
-  const lock = LockService.getScriptLock();
+  if (!e || !e.postData || !e.postData.contents) {
+    return contentResponse({ ok: false, error: "لم يتم استقبال أي بيانات صالحة (Empty payload)" });
+  }
+
+  var requestData;
   try {
-    // محاولة الحصول على قفل حماية لمنع حدوث تداخل في البيانات عند الطلبات المتزامنة
-    lock.waitLock(15000); 
-  } catch (err) {
-    return contentResponse({ ok: false, error: "الخادم مشغول حالياً بطلب آخر، يرجى المحاولة بعد قليل." });
+    requestData = JSON.parse(e.postData.contents);
+  } catch(parseErr) {
+    return contentResponse({ ok: false, error: "فشل تحليل البيانات المرسلة: " + parseErr.toString() });
+  }
+
+  var action = requestData.action;
+  var token = requestData.token;
+
+  // التحقق من صحة التوكن المركزي للأمان لمنع أي اختراق أو استدعاء خارجي
+  if (token !== ACCESS_TOKEN) {
+    return contentResponse({ ok: false, error: "صلاحية الرمز البرمجي (Token) غير صحيحة أو منتهية" });
+  }
+
+  // تحديد ما إذا كان الإجراء عبارة عن كتابة أو تعديل يحتاج إلى قفل حماية
+  var writeActions = [
+    "addOrder", "addBulk", "updateStatus", "updateOrder", "deleteOrder", 
+    "bulkUpdate", "updateOrdersStatusBulk", "addSupplierPayment", 
+    "addCourierAdjustment", "addCashbox", "addExpense", "addUser", 
+    "registerUser", "updateUser", "updateCourier", "addDailyClosing"
+  ];
+  
+  var isWrite = writeActions.indexOf(action) !== -1;
+  var lock = LockService.getScriptLock();
+  var lockAcquired = false;
+
+  if (isWrite) {
+    try {
+      // محاولة الحصول على قفل حماية لمنع حدوث تداخل في البيانات عند الطلبات المتزامنة
+      lock.waitLock(15000);
+      lockAcquired = true;
+    } catch (err) {
+      return contentResponse({ ok: false, error: "الخادم مشغول حالياً بطلب كتابة آخر، يرجى المحاولة بعد قليل." });
+    }
   }
 
   try {
-    if (!e || !e.postData || !e.postData.contents) {
-      return contentResponse({ ok: false, error: "لم يتم استقبال أي بيانات صالحة (Empty payload)" });
-    }
-
-    const requestData = JSON.parse(e.postData.contents);
-    const { action, token } = requestData;
-
-    // التحقق من صحة التوكن المركزي للأمان لمنع أي اختراق أو استدعاء خارجي
-    if (token !== ACCESS_TOKEN) {
-      return contentResponse({ ok: false, error: "صلاحية الرمز البرمجي (Token) غير صحيحة أو منتهية" });
-    }
-
     const sheets = initSheets();
     let result = null;
 
@@ -167,7 +188,13 @@ function doPost(e) {
   } catch (error) {
     return contentResponse({ ok: false, error: "حدث خطأ داخلي في معالجة الطلب: " + error.toString() });
   } finally {
-    lock.releaseLock();
+    if (lockAcquired) {
+      try {
+        lock.releaseLock();
+      } catch (lockErr) {
+        // ignore
+      }
+    }
   }
 }
 
@@ -1240,17 +1267,20 @@ function getSupplierDashboard(sheets, d) {
 
   const supOrders = orders.filter(o => o.supplier === supplier);
   const total = supOrders.length;
-  const delivered = supOrders.filter(o => o.status === "تم التسليم").length;
-  const returned = supOrders.filter(o => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].indexOf(o.status) !== -1).length;
-
-  // 1. Total uploaded goods value (without shipping)
-  const totalGoodsUploaded = supOrders.reduce((sum, o) => {
+  
+  const deliveredOrders = supOrders.filter(o => o.status === "تم التسليم");
+  const delivered = deliveredOrders.length;
+  
+  // 1. COD of successfully delivered orders (without shipping)
+  const deliveredOrdersValue = deliveredOrders.reduce((sum, o) => {
     var prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
     return sum + prodPrice;
   }, 0);
 
+  const returned = supOrders.filter(o => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].indexOf(o.status) !== -1 || (o.status || "").indexOf("مرتجع") !== -1).length;
+
   // 2. Returns delivered back to supplier ("تم تسليم المرتجع للمورد" or equivalent)
-  const returnedDGoods = supOrders.filter(o => ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "التسليم للمورد"].indexOf(o.status) !== -1);
+  const returnedDGoods = supOrders.filter(o => ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "التسليم للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].indexOf(o.status) !== -1);
   const returnsDeliveredValue = returnedDGoods.reduce((sum, o) => {
     var prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
     return sum + prodPrice;
@@ -1260,8 +1290,8 @@ function getSupplierDashboard(sheets, d) {
   const sLedger = ledger.filter(l => l.supplier === supplier);
   const totalPaid = sLedger.filter(l => ["دفعة مورد", "دفع نقدي", "صرف مورد"].indexOf(l.type) !== -1 || l.type.indexOf("دفعة") !== -1).reduce((sum, l) => sum + Math.abs(Number(l.amount || 0)), 0);
 
-  // 4. Current outstanding balance
-  const remaining = totalGoodsUploaded - totalPaid - returnsDeliveredValue;
+  // 4. Current outstanding balance based on formula
+  const remaining = deliveredOrdersValue - totalPaid - returnsDeliveredValue;
 
   return {
     ok: true,
@@ -1269,7 +1299,7 @@ function getSupplierDashboard(sheets, d) {
       total,
       delivered,
       returned,
-      totalCredited: totalGoodsUploaded,
+      totalCredited: deliveredOrdersValue,
       totalPaid,
       remaining
     }
@@ -1285,14 +1315,15 @@ function getSupplierAccounts(sheets) {
     const sLedger = ledger.filter(l => l.supplier === s.name);
     const sOrders = orders.filter(o => o.supplier === s.name);
 
-    // 1. Total uploaded goods value (without shipping)
-    const totalGoodsUploaded = sOrders.reduce((sum, o) => {
+    // 1. Successful delivery value (without shipping)
+    const deliveredOrdersList = sOrders.filter(o => o.status === "تم التسليم");
+    const deliveredOrdersValue = deliveredOrdersList.reduce((sum, o) => {
       var prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
       return sum + prodPrice;
     }, 0);
 
     // 2. Returns delivered back to supplier ("تم تسليم المرتجع للمورد" or equivalent)
-    const returnedOrders = sOrders.filter(o => ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "التسليم للمورد"].indexOf(o.status) !== -1);
+    const returnedOrders = sOrders.filter(o => ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "التسليم للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].indexOf(o.status) !== -1);
     const returnsCount = returnedOrders.length;
     const returnsDeliveredValue = returnedOrders.reduce((sum, o) => {
       var prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
@@ -1303,16 +1334,16 @@ function getSupplierAccounts(sheets) {
     const paid = sLedger.filter(l => ["دفعة مورد", "دفع نقدي", "صرف مورد"].indexOf(l.type) !== -1 || l.type.indexOf("دفعة") !== -1).reduce((sum, l) => sum + Math.abs(Number(l.amount || 0)), 0);
 
     // 4. Current outstanding balance
-    const balance = totalGoodsUploaded - paid - returnsDeliveredValue;
+    const balance = deliveredOrdersValue - paid - returnsDeliveredValue;
 
     const totalOrders = sOrders.length;
-    const deliveredOrders = sOrders.filter(o => o.status === "تم التسليم").length;
+    const deliveredOrders = deliveredOrdersList.length;
 
     return {
       name: s.name,
       phone: s.phone || "—",
-      totalRevenue: totalGoodsUploaded,
-      totalCOD: totalGoodsUploaded,
+      totalRevenue: deliveredOrdersValue,
+      totalCOD: deliveredOrdersValue,
       returnsDelivered: returnsDeliveredValue,
       returnsCount: returnsCount,
       paid: paid,

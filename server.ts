@@ -463,7 +463,7 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
   }, 0);
 
   // 3. Returns delivered back to supplier
-  const returnedOrders = supplierOrders.filter((o: any) => ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "التسليم للمورد"].includes(o.status));
+  const returnedOrders = supplierOrders.filter((o: any) => ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "التسليم للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status));
   const returnsDeliveredCount = returnedOrders.length;
   const returnsDeliveredValue = returnedOrders.reduce((sum: number, o: any) => {
     const prodPrice = o.prodPrice !== undefined ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
@@ -483,14 +483,14 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
     return sum;
   }, 0);
 
-  // 5. Calculate outstanding balance: Outstanding = TotalGoods - ReturnsDelivered - PaymentsValue
-  const outstanding = totalGoodsUploaded - returnsDeliveredValue - paymentsValue;
+  // 5. Calculate outstanding balance: Outstanding = DeliveredOrdersValue - ReturnsDeliveredValue - PaymentsValue
+  const outstanding = deliveredOrdersValue - returnsDeliveredValue - paymentsValue;
 
   // Build the ledger entries list
   const entries: any[] = [];
 
-  // A. Uploaded orders as credit
-  for (const o of supplierOrders) {
+  // A. Delivered orders as credit
+  for (const o of deliveredOrders) {
     const prodPrice = o.prodPrice !== undefined ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
     entries.push({
       date: o.orderDate || o.createdAt || "",
@@ -1275,6 +1275,8 @@ app.post("/api", async (req: Request, res: Response) => {
             todayTotal: 0,
             delivered: 0,
             returned: 0,
+            returnedDeliveredToSupplier: 0,
+            returnedDeliveredToSupplierValue: 0,
             pending: 0,
             active: 0,
             assignedPending: 0,
@@ -1293,14 +1295,14 @@ app.post("/api", async (req: Request, res: Response) => {
               stats.todayTotal++; // Today's Orders created today
             }
 
-            const isClosed = ["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status);
+            const isClosed = ["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status);
             const isAssigned = o.courier && o.courier !== "";
             if (isAssigned && !isClosed) {
               stats.assignedPending++;
             }
 
-            const isSomeReturn = ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "مرتجع والعميل دفع الشحن"].includes(o.status) || (o.status || "").includes("مرتجع");
-            const isDeliveredToSupplier = ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status);
+            const isSomeReturn = ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "مرتجع والعميل دفع الشحن", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status) || (o.status || "").includes("مرتجع") || (o.status || "").includes("مرتجع في المخزن");
+            const isDeliveredToSupplier = ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status);
 
             if (o.status === "تم التسليم") {
               stats.delivered++;
@@ -1311,7 +1313,10 @@ app.post("/api", async (req: Request, res: Response) => {
                 stats.todayCOD += Number(o.totalCOD || 0);
               }
             } else if (isSomeReturn) {
-              if (!isDeliveredToSupplier) {
+              if (isDeliveredToSupplier) {
+                stats.returnedDeliveredToSupplier++;
+                stats.returnedDeliveredToSupplierValue += Number(o.prodPrice !== undefined ? o.prodPrice : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0)));
+              } else {
                 stats.returned++;
               }
             } else if (["جديد", "تم الإسناد", "مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)) {
@@ -1368,7 +1373,7 @@ app.post("/api", async (req: Request, res: Response) => {
           const bestSupplierObj = [...formattedSuppliers].sort((a, b) => b.delivered - a.delivered)[0];
 
           const rate = stats.total ? Math.round((stats.delivered / stats.total) * 100) : 0;
-          const remainingStock = ordersList.filter((o: any) => !["تم التسليم", "خارج مع المندوب", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)).length;
+          const remainingStock = ordersList.filter((o: any) => !["تم التسليم", "خارج مع المندوب", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "التسليم للمورد"].includes(o.status)).length;
           const inOfficeStock = stats.total - (stats.active + stats.returned);
 
           return ok(res, {
@@ -2615,7 +2620,7 @@ app.post("/api", async (req: Request, res: Response) => {
         const bestSupplierObj = [...formattedSuppliers].sort((a, b) => b.delivered - a.delivered)[0];
 
         const rate = stats.total ? Math.round((stats.delivered / stats.total) * 100) : 0;
-        const remainingStock = ordersList.filter((o: any) => !["تم التسليم", "خارج مع المندوب", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status) && !o.isClosed).length;
+        const remainingStock = ordersList.filter((o: any) => !["تم التسليم", "خارج مع المندوب", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "التسليم للمورد"].includes(o.status) && !o.isClosed).length;
         const inOfficeStock = stats.total - (stats.active + stats.returned + stats.returnedDeliveredToSupplier);
 
         return ok(res, {
@@ -2682,7 +2687,7 @@ app.post("/api", async (req: Request, res: Response) => {
           const unified = getSupplierUnifiedLedger(db, sup);
           return {
             name: sup,
-            totalCOD: unified.stats.totalGoodsUploaded,
+            totalCOD: unified.stats.deliveredOrdersValue,
             returnsDelivered: unified.stats.returnsDeliveredValue,
             adjustments: 0,
             payments: unified.stats.paymentsValue,
