@@ -484,8 +484,16 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
     return sum + prodPrice;
   }, 0);
 
-  // 3. Returns delivered back to supplier
-  const returnedOrders = supplierOrders.filter((o: any) => ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status));
+  // 3. Returns delivered back to supplier (Dynamic Status Matching)
+  const returnedOrders = supplierOrders.filter((o: any) => {
+    const status = (o.status || "").toString().trim();
+    return status.includes("مرتجع") || 
+           status.includes("مرفوض") || 
+           status.includes("فشل") || 
+           status.includes("مسترجع") || 
+           status.includes("التسليم للمورد") ||
+           status.includes("تصفية");
+  });
   const returnsDeliveredCount = returnedOrders.length;
   const returnsDeliveredValue = returnedOrders.reduce((sum: number, o: any) => {
     const prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));

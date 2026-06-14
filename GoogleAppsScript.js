@@ -1302,14 +1302,18 @@ function getSupplierDashboard(sheets, d) {
     return sum + prodPrice;
   }, 0);
 
-  const returned = supOrders.filter(o => {
-    var isSomeReturn = ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "مرتجع والعميل دفع الشحن", "تم تسليم المرتجع للمورد وتصفية حسابه"].indexOf(o.status) !== -1 || (o.status || "").indexOf("مرتجع") !== -1;
-    var isDeliveredToSupplier = ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].indexOf(o.status) !== -1;
-    return isSomeReturn && !isDeliveredToSupplier;
-  }).length;
-
+  const returnedDGoods = supOrders.filter(o => {
+    var status = (o.status || "").toString().trim();
+    return status.indexOf("مرتجع") !== -1 || 
+           status.indexOf("مرفوض") !== -1 || 
+           status.indexOf("فشل") !== -1 || 
+           status.indexOf("مسترجع") !== -1 || 
+           status.indexOf("التسليم للمورد") !== -1 ||
+           status.indexOf("تصفية") !== -1;
+  });
+  const returned = returnedDGoods.length;
+  
   // 2. Returns delivered back to supplier ("تم تسليم المرتجع للمورد" or equivalent)
-  const returnedDGoods = supOrders.filter(o => ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].indexOf(o.status) !== -1);
   const returnsDeliveredValue = returnedDGoods.reduce((sum, o) => {
     var prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
     return sum + prodPrice;
@@ -1351,8 +1355,16 @@ function getSupplierAccounts(sheets) {
       return sum + prodPrice;
     }, 0);
 
-    // 2. Returns delivered back to supplier ("تم تسليم المرتجع للمورد" or equivalent)
-    const returnedOrders = sOrders.filter(o => ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].indexOf(o.status) !== -1);
+    // 2. Returns delivered back to supplier ("تم تسليم المرتجع للمورد" or equivalent) with dynamic status matching
+    const returnedOrders = sOrders.filter(o => {
+      var status = (o.status || "").toString().trim();
+      return status.indexOf("مرتجع") !== -1 || 
+             status.indexOf("مرفوض") !== -1 || 
+             status.indexOf("فشل") !== -1 || 
+             status.indexOf("مسترجع") !== -1 || 
+             status.indexOf("التسليم للمورد") !== -1 ||
+             status.indexOf("تصفية") !== -1;
+    });
     const returnsCount = returnedOrders.length;
     const returnsDeliveredValue = returnedOrders.reduce((sum, o) => {
       var prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
