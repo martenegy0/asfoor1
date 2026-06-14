@@ -71,6 +71,8 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
         todayTotal: 0,
         delivered: 0,
         returned: 0,
+        returnedDeliveredToSupplier: 0,
+        returnedDeliveredToSupplierValue: 0,
         pending: 0,
         active: 0,
         assignedPending: 0,
@@ -102,8 +104,8 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
           dStats.assignedPending++;
         }
 
-        const isSomeReturn = ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "مرتجع والعميل دفع الشحن"].includes(o.status) || (o.status || "").includes("مرتجع");
-        const isDeliveredToSupplier = ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status);
+        const isSomeReturn = ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "مرتجع والعميل دفع الشحن", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status) || (o.status || "").includes("مرتجع");
+        const isDeliveredToSupplier = ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status);
 
         if (o.status === "تم التسليم") {
           dStats.delivered++;
@@ -118,7 +120,10 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
             dStats.todayCOD += codAmount;
           }
         } else if (isSomeReturn) {
-          if (!isDeliveredToSupplier) {
+          if (isDeliveredToSupplier) {
+            dStats.returnedDeliveredToSupplier++;
+            dStats.returnedDeliveredToSupplierValue += Number(o.prodPrice || 0);
+          } else {
             dStats.returned++;
           }
         } else if (["جديد", "تم الإسناد", "مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)) {
@@ -175,7 +180,7 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
       const bestSupplierObj = [...formattedSuppliers].sort((a, b) => b.delivered - a.delivered)[0];
 
       const rate = dStats.total ? Math.round((dStats.delivered / dStats.total) * 100) : 0;
-      const remainingStock = dStats.total - dStats.delivered - dStats.returned;
+      const remainingStock = dStats.total - dStats.delivered - dStats.returned - dStats.returnedDeliveredToSupplier;
 
       setStats({ ...dStats, rate, remainingStock });
       setCouriers(formattedCouriers.sort((a, b) => b.delivered - a.delivered));
@@ -388,7 +393,7 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
         </div>
       )}
       {/* Dynamic Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         {/* Total Orders */}
         <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 text-center relative overflow-hidden">
           <div className="absolute top-2 left-2 text-amber-500/15">
@@ -440,7 +445,19 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
             <AlertTriangle size={48} />
           </div>
           <div className="text-3xl font-black text-red-400">{s.returned}</div>
-          <div className="text-[11px] font-bold text-slate-500 mt-1 uppercase tracking-wider">المرتجع والمرفوض</div>
+          <div className="text-[11px] font-bold text-slate-500 mt-1 uppercase tracking-wider">المرتجع والمرفوض الحالي</div>
+        </div>
+
+        {/* Returned Delivered to Supplier Card */}
+        <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 text-center relative overflow-hidden">
+          <div className="absolute top-2 left-2 text-indigo-500/10">
+            <CheckCircle2 size={48} />
+          </div>
+          <div className="text-3xl font-black text-indigo-400">{s.returnedDeliveredToSupplier || 0}</div>
+          <div className="text-[11px] font-bold text-slate-505 mt-1 uppercase tracking-wider">مرتجع تم تسليمه للمورد</div>
+          <div className="text-[10px] text-indigo-455 font-bold mt-1 inline-block px-1.5 py-0.5 rounded bg-indigo-950/20">
+             إجمالي: {(s.returnedDeliveredToSupplierValue || 0).toLocaleString("ar")} ج.م
+          </div>
         </div>
       </div>
 

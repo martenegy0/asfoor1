@@ -83,6 +83,9 @@ function doPost(e) {
       case "bulkUpdate":
         result = bulkUpdate(sheets, requestData);
         break;
+      case "updateOrdersStatusBulk":
+        result = updateOrdersStatusBulk(sheets, requestData);
+        break;
       case "dashboard":
         result = getDashboardStats(sheets, requestData);
         break;
@@ -962,6 +965,209 @@ function bulkUpdate(sheets, d) {
   }
 
   return { ok: true, msg: `تم تحديث وإسناد ${updatedCount} أوردر بنجاح بمستوى أمني وقائي عالي`, done: updatedCount };
+}
+
+function updateOrdersStatusBulk(sheets, d) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000); // إجبار السيرفر على الانتظار حتى 10 ثوانٍ لو هناك ضغط عمليات متزامن
+
+  try {
+    const { updates, currentRole, currentUser } = d;
+    if (!updates || !updates.length) return { ok: false, error: "يرجى تقديم مصفوفة التحديثات الجماعية" };
+
+    // Role checks
+    const cleanRole = (currentRole || "").toString().trim();
+    const isAdmin = cleanRole === "مدير" || cleanRole === "مشرف";
+    const isAgent = cleanRole === "مندوب" || cleanRole.includes("مندوب");
+    const isOps = cleanRole === "موظف عمليات" || cleanRole.includes("عمليات");
+    const isReturnsOfficer = cleanRole === "مسؤول مرتجعات" || cleanRole.includes("مرتجع");
+    const isSupplier = cleanRole === "مورد" || cleanRole.includes("مورد");
+
+    if (isSupplier) {
+      return { ok: false, error: "Unauthorized Action: ليس للمورد صلاحية التعديل الجماعي" };
+    }
+
+    const sheet = sheets.orders;
+    const lastRow = sheet.getLastRow();
+    if (lastRow <= 1) return { ok: true, msg: "لا توجد أوردرات للتحديث", done: 0 };
+
+    const lastCol = sheet.getLastColumn();
+    const range = sheet.getRange(1, 1, lastRow, lastCol);
+    const data = range.getValues();
+    
+    const headers = data[0].map(h => h.toString().trim());
+    const trackingIdx = headers.indexOf("tracking");
+    const updatedAtIdx = headers.indexOf("updatedAt");
+    const courierIdx = headers.indexOf("courier");
+    const statusIdx = headers.indexOf("status");
+    const notesIdx = headers.indexOf("notes");
+    const delivDateIdx = headers.indexOf("delivDate");
+    const retDateIdx = headers.indexOf("retDate");
+    const returnShippingTypeIdx = headers.indexOf("returnShippingType");
+    const commissionIdx = headers.indexOf("commission");
+
+    if (trackingIdx === -1) return { ok: false, error: "عمود الكود التتبعي غير موجود في شيت الأوردرات" };
+
+    // Build a rows index map
+    const rowsMap = {};
+    for (let r = 1; r < data.length; r++) {
+      const trStr = data[r][trackingIdx].toString().trim().toUpperCase();
+      if (trStr) {
+        rowsMap[trStr] = r;
+      }
+    }
+
+    let updatedCount = 0;
+    const couriers = getTableData(sheets.couriers);
+    
+    for (var i = 0; i < updates.length; i++) {
+      const item = updates[i];
+      const tr = (item.tracking || "").toString().trim().toUpperCase();
+      const r = rowsMap[tr];
+      if (r === undefined) continue;
+
+      const rowCourierName = courierIdx !== -1 ? data[r][courierIdx].toString().trim() : "";
+      if (isAgent && rowCourierName !== currentUser) {
+        continue; // Security check
+      }
+
+      // Role status validation
+      let targetStatus = item.status;
+      if (targetStatus === "تم تسليم المرتجع للمورد وتصفية حسابه") targetStatus = "تم تسليم المرتجع للمورد";
+      if (targetStatus === "تم التسليم بنجاح") targetStatus = "تم التسليم";
+      if (targetStatus === "مؤجل بناءً على طلب العميل") targetStatus = "مؤجل";
+
+      if (targetStatus) {
+        if (isAgent) {
+          const allowed = ["تم التسليم", "مؤجل", "لا يوجد رد", "مرتجع"];
+          if (allowed.indexOf(targetStatus) === -1) continue;
+        }
+        if (isOps) {
+          const allowed = ["تم رد العميل وجاري التنسيق", "لا يرد - محاولة أولى/ثانية", "تحديث نتيجة الاتصال", "مؤجل", "لا يوجد رد", "جديد"];
+          if (allowed.indexOf(targetStatus) === -1) continue;
+        }
+        if (isReturnsOfficer) {
+          const allowed = ["مرتجع جديد", "مرتجع جاري تسليمه للمكتب", "جاري الرجوع للمورد", "تم تسليم المرتجع للمورد", "جديد"];
+          if (allowed.indexOf(targetStatus) === -1) continue;
+        }
+      }
+
+      const oldStatus = statusIdx !== -1 ? data[r][statusIdx].toString().trim() : "";
+
+      // Courier Assignment
+      if (item.courier !== undefined && courierIdx !== -1 && (isAdmin || cleanRole === "محاسب")) {
+        const newCourier = item.courier;
+        if (newCourier === "reset_warehouse" || newCourier === "") {
+          data[r][courierIdx] = "";
+          if (commissionIdx !== -1) data[r][commissionIdx] = 0;
+          if (statusIdx !== -1 && oldStatus !== "جديد") {
+            data[r][statusIdx] = "جديد";
+          }
+        } else if (newCourier !== rowCourierName) {
+          data[r][courierIdx] = newCourier;
+          const cProfile = couriers.find(function(c) { return c.name === newCourier; });
+          const comm = cProfile ? Number(cProfile.commission || 25) : 25;
+          if (commissionIdx !== -1) data[r][commissionIdx] = comm;
+
+          if (oldStatus === "جديد" && statusIdx !== -1) {
+            data[r][statusIdx] = "تم الإسناد";
+          }
+        }
+      }
+
+      // Apply Status Override
+      if (targetStatus !== undefined && statusIdx !== -1 && targetStatus !== oldStatus) {
+        data[r][statusIdx] = targetStatus;
+
+        if (targetStatus === "تم التسليم") {
+          const itemDate = item.date || item.delivDate || item.postponedDate;
+          if (delivDateIdx !== -1) data[r][delivDateIdx] = itemDate || now();
+          
+          const currentCourier = courierIdx !== -1 ? data[r][courierIdx].toString().trim() : "";
+          const cProfile = couriers.find(function(c) { return c.name === currentCourier; });
+          const comm = cProfile ? Number(cProfile.commission || 25) : 25;
+
+          appendToSheet(sheets.courierLedger, ["courier", "date", "type", "tracking", "amount", "desc"], {
+            courier: currentCourier,
+            date: now(),
+            type: "تسليم",
+            tracking: tr,
+            amount: comm,
+            desc: "عمولة تسليم الأوردر جماعياً (الدفعة المجمعة): " + tr
+          });
+
+          const totalCOD = headers.indexOf("totalCOD") !== -1 ? Number(data[r][headers.indexOf("totalCOD")] || 0) : 0;
+          appendToSheet(sheets.cashbox, ["date", "desc", "type", "amount", "ref", "addedBy"], {
+            date: now(),
+            desc: "تحصيل أوردر جماعي (الدفعة المجمعة): " + tr,
+            type: "تحصيل مندوب",
+            amount: totalCOD,
+            ref: tr,
+            addedBy: currentUser || "النظام الجماعي"
+          });
+
+          const prodPrice = headers.indexOf("prodPrice") !== -1 ? Number(data[r][headers.indexOf("prodPrice")] || 0) : 0;
+          const shipPrice = headers.indexOf("shipPrice") !== -1 ? Number(data[r][headers.indexOf("shipPrice")] || 0) : 0;
+          const supplierPrice = prodPrice !== 0 ? prodPrice : (totalCOD - shipPrice);
+          const supplierName = headers.indexOf("supplier") !== -1 ? data[r][headers.indexOf("supplier")].toString().trim() : "";
+          
+          if (supplierName) {
+            appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
+              supplier: supplierName,
+              date: now(),
+              type: "أوردر مستلم",
+              tracking: tr,
+              amount: supplierPrice,
+              desc: "حقوق توريد أوردر تم تسليمه جماعياً (الدفعة المجمعة): " + tr + " (بضاعة " + supplierPrice + ")"
+            });
+          }
+        }
+
+        if (["مرتجع", "تم تسليم المرتجع للمورد", "التسليم للمورد"].indexOf(targetStatus) !== -1) {
+          if (retDateIdx !== -1) data[r][retDateIdx] = now();
+          if (targetStatus === "تم تسليم المرتجع للمورد" || targetStatus === "التسليم للمورد") {
+            const prodPrice = headers.indexOf("prodPrice") !== -1 ? Number(data[r][headers.indexOf("prodPrice")] || 0) : 0;
+            const supplierName = headers.indexOf("supplier") !== -1 ? data[r][headers.indexOf("supplier")].toString().trim() : "";
+            if (supplierName) {
+              appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
+                supplier: supplierName,
+                date: now(),
+                type: "مرتجع تم تسليمه للمورد",
+                tracking: tr,
+                amount: -Number(prodPrice),
+                desc: "خصم قيمة المنتج لمرتجع تسلمه المورد جماعياً (الدفعة المجمعة): " + tr
+              });
+            }
+          }
+        }
+
+        appendToSheet(sheets.statusHistory, ["tracking", "oldStatus", "newStatus", "updatedBy", "dateTime"], {
+          tracking: tr,
+          oldStatus: oldStatus,
+          newStatus: targetStatus,
+          updatedBy: currentUser,
+          dateTime: now()
+        });
+      }
+
+      if (item.notes !== undefined && notesIdx !== -1) {
+        data[r][notesIdx] = item.notes;
+      }
+      if (updatedAtIdx !== -1) {
+        data[r][updatedAtIdx] = now();
+      }
+
+      updatedCount++;
+    }
+
+    if (updatedCount > 0) {
+      range.setValues(data);
+    }
+
+    return { ok: true, msg: "تم ترحيل وتحديث الفوج الجماعي لـ " + updatedCount + " أوردر دفعة واحدة بنجاح تام", done: updatedCount };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // ───────────────────────────────────────────────

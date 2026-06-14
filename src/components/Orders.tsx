@@ -396,9 +396,12 @@ export default function Orders({ token, role, username, orders, setOrders, couri
 
         // --- API CALL ---
         try {
-          const res = await apiCall("bulkUpdate", token, {
-            trackings: parsedTrackings,
+          const updatesList = parsedTrackings.map((tr) => ({
+            tracking: tr,
             status: reconcileStatus
+          }));
+          const res = await apiCall("updateOrdersStatusBulk", token, {
+            updates: updatesList
           });
           if (res && res.ok) {
             setReconFeedback(`⚡ نجح الارتجاع والتصفية لـ ${res.done} أوردر بنجاح تام!`);
@@ -812,10 +815,13 @@ export default function Orders({ token, role, username, orders, setOrders, couri
     alert(`⚡ تم إسناد وتعديل ${trackingsToUpdate.length} أوردر محلياً فورا، جاري التوزيع في الخلفية...`);
 
     // --- BG API CALL ---
-    apiCall("bulkUpdate", token, {
-      trackings: trackingsToUpdate,
+    const updatesList = trackingsToUpdate.map((tr) => ({
+      tracking: tr,
       status: bulkStatus || undefined,
       courier: bulkCourier || undefined,
+    }));
+    apiCall("updateOrdersStatusBulk", token, {
+      updates: updatesList,
     })
       .then((res) => {
         if (res && res.ok) {
@@ -899,12 +905,15 @@ export default function Orders({ token, role, username, orders, setOrders, couri
     alert(`⚡ جاري إرسال ومزامنة التعديل الجماعي لـ ${trackingsToUpdate.length} شحنات...`);
 
     // --- BG API CALL ---
-    apiCall("bulkUpdate", token, {
-      trackings: trackingsToUpdate,
+    const updatesList = trackingsToUpdate.map((tr) => ({
+      tracking: tr,
       status: floatingStatus || undefined,
       courier: floatingCourier || undefined,
       notes: floatingNotes || undefined,
       date: floatingDate || undefined,
+    }));
+    apiCall("updateOrdersStatusBulk", token, {
+      updates: updatesList,
     })
       .then((res) => {
         if (res && res.ok) {

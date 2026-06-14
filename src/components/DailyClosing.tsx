@@ -16,12 +16,16 @@ interface ClosingRecord {
   date: string;
   deliveredCount: number;
   returnedCount: number;
+  returnedValue?: number;
   totalCOD: number;
   shippingCost: number;
   addedBy: string;
   pendingCount?: number;
   pendingCOD?: number;
   courierCommissions?: number;
+  cashboxIn?: number;
+  cashboxOut?: number;
+  cashboxNet?: number;
 }
 
 export default function DailyClosing({ token, role, user, orders }: DailyClosingProps) {
@@ -168,16 +172,43 @@ export default function DailyClosing({ token, role, user, orders }: DailyClosing
 
         let delivered = 0;
         let returned = 0;
+        let returnedValue = 0;
         let cod = 0;
         let shipping = 0;
         let pendingCount = 0;
         let pendingCOD = 0;
         let courierCommissions = 0;
 
+        // Dynamic check of Cashbox database entries for live checking
+        let cashboxIn = 0;
+        let cashboxOut = 0;
+        try {
+          const cashboxRes = await apiCall("cashbox", token);
+          if (cashboxRes && cashboxRes.ok && Array.isArray(cashboxRes.entries)) {
+            cashboxRes.entries.forEach((item: any) => {
+              if (item.date) {
+                const entryYMD = item.date.substring(0, 10);
+                if (entryYMD === targetDate) {
+                  const isDeposit = ["وارد", "تحصيل مندوب", "إيداع خزنة direct", "إيداع", "استلام عهدة مندوب"].includes(item.type);
+                  const amt = Number(item.amount || 0);
+                  if (isDeposit) {
+                    cashboxIn += amt;
+                  } else {
+                    cashboxOut += amt;
+                  }
+                }
+              }
+            });
+          }
+        } catch (e) {
+          console.error("Failed to read cashbox for DailyClosing:", e);
+        }
+        const cashboxNet = cashboxIn - cashboxOut;
+
         ordersList.forEach((o: any) => {
           // Calculate outstanding (pending) orders created on this target date
           if (isCreatedOnDate(o)) {
-            const isClosed = ["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status);
+            const isClosed = ["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status);
             if (!isClosed) {
               pendingCount++;
               pendingCOD += Number(o.totalCOD || 0);
@@ -194,6 +225,7 @@ export default function DailyClosing({ token, role, user, orders }: DailyClosing
             }
             if (isReturnedOnDate(o)) {
               returned++;
+              returnedValue += Number(o.prodPrice || 0);
               // For returns where customer paid the shipping, add the shipping revenue
               if (o.returnShippingType === "paid") {
                 shipping += Number(o.shipCost || o.shipPrice || 0);
@@ -208,8 +240,9 @@ export default function DailyClosing({ token, role, user, orders }: DailyClosing
                 cod += Number(o.totalCOD || 0);
                 shipping += Number(o.shipCost || o.shipPrice || 0);
                 courierCommissions += Number(o.commission || 25);
-              } else if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)) {
+              } else if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status) || (o.status || "").includes("مرتجع")) {
                 returned++;
+                returnedValue += Number(o.prodPrice || 0);
                 if (o.returnShippingType === "paid") {
                   shipping += Number(o.shipCost || o.shipPrice || 0);
                 }
@@ -223,12 +256,16 @@ export default function DailyClosing({ token, role, user, orders }: DailyClosing
           date: targetDate,
           deliveredCount: delivered,
           returnedCount: returned,
+          returnedValue: returnedValue,
           totalCOD: cod,
           shippingCost: shipping,
           addedBy: user,
           pendingCount,
           pendingCOD,
-          courierCommissions
+          courierCommissions,
+          cashboxIn,
+          cashboxOut,
+          cashboxNet
         });
       } else {
         setErrorMsg("تعذر تحميل قائمة الأوردرات لحساب التقفيل اللحظي");
@@ -274,8 +311,12 @@ export default function DailyClosing({ token, role, user, orders }: DailyClosing
       date: record.date,
       deliveredCount: record.deliveredCount,
       returnedCount: record.returnedCount,
+      returnedValue: record.returnedValue || 0,
       totalCOD: record.totalCOD,
-      shippingCost: record.shippingCost
+      shippingCost: record.shippingCost,
+      cashboxIn: record.cashboxIn || 0,
+      cashboxOut: record.cashboxOut || 0,
+      cashboxNet: record.cashboxNet || 0
     })
       .then((res) => {
         if (res && res.ok) {
@@ -473,9 +514,12 @@ export default function DailyClosing({ token, role, user, orders }: DailyClosing
                 </div>
 
                 <div className="bg-slate-900/60 p-3 rounded-xl border border-white/4">
-                  <div className="text-[10px] text-slate-500 font-black">المرتجعات المحسومة</div>
+                  <div className="text-[10px] text-slate-500 font-black">📦 المرتجع المستلم للمكتب</div>
                   <div className="text-lg font-black text-red-400 mt-1">
                     {calculatedDraft.returnedCount} <span className="text-[10px] font-medium text-slate-400">أوردر</span>
+                  </div>
+                  <div className="text-[10px] text-slate-400 font-bold mt-1 font-mono">
+                    قيمة البضاعة: {(calculatedDraft.returnedValue || 0).toLocaleString("ar")} ج.م
                   </div>
                 </div>
 
@@ -514,6 +558,30 @@ export default function DailyClosing({ token, role, user, orders }: DailyClosing
                   <div className="text-[10px] text-emerald-400 font-black">💰 صافي ربح شحن اليوم الفعلي</div>
                   <div className="text-sm font-black text-emerald-300 mt-1.5 font-mono">
                     {((calculatedDraft.shippingCost || 0) - (calculatedDraft.courierCommissions || 0)).toLocaleString("ar")} <span className="text-[10px] font-medium text-slate-400">ج.م</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Cashbox Live Verification Ledger */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 border-t border-white/4 pt-3">
+                <div className="bg-indigo-950/20 p-3 rounded-xl border border-indigo-500/10">
+                  <div className="text-[10px] text-indigo-400 font-black">📥 واردات الخزنة اليومية (حركات حقيقية)</div>
+                  <div className="text-sm font-black text-indigo-300 mt-1.5 font-mono">
+                    {(calculatedDraft.cashboxIn || 0).toLocaleString("ar")} <span className="text-[10px] font-medium text-slate-400">ج.م</span>
+                  </div>
+                </div>
+
+                <div className="bg-rose-950/20 p-3 rounded-xl border border-rose-500/10">
+                  <div className="text-[10px] text-rose-400 font-black">📤 مدفوعات ومصروفات الخزنة اليوم</div>
+                  <div className="text-sm font-black text-rose-350 mt-1.5 font-mono">
+                    {(calculatedDraft.cashboxOut || 0).toLocaleString("ar")} <span className="text-[10px] font-medium text-slate-400">ج.م</span>
+                  </div>
+                </div>
+
+                <div className="bg-emerald-950/20 p-3 rounded-xl border border-emerald-500/10">
+                  <div className="text-[10px] text-emerald-400 font-black">🔒 صافي حركة الخزنة اللحظي (في الدرج الفعلي)</div>
+                  <div className="text-sm font-black text-emerald-300 mt-1.5 font-mono">
+                    {(calculatedDraft.cashboxNet || 0).toLocaleString("ar")} <span className="text-[10px] font-medium text-slate-400">ج.م</span>
                   </div>
                 </div>
               </div>

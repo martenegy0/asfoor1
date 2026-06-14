@@ -770,7 +770,7 @@ function getCacheKey(payload: any): string {
 
 async function executeProxyRequest(gscriptUrl: string, payload: any): Promise<any> {
   const isWrite = [
-    "addOrder", "addBulk", "updateStatus", "updateOrder", "deleteOrder", "bulkUpdate",
+    "addOrder", "addBulk", "updateStatus", "updateOrder", "deleteOrder", "bulkUpdate", "updateOrdersStatusBulk",
     "addSupplierPayment", "addCourierAdjustment", "addCashbox", "addExpense",
     "addUser", "registerUser", "updateUser", "addDailyClosing", "updateCourier",
     "archiveOrder"
@@ -1193,7 +1193,7 @@ app.post("/api", async (req: Request, res: Response) => {
           return err(res, "فقط المدير والمحاسب يمتلك صلاحية تسجيل التقفيل اليومي");
         }
 
-        const { date, deliveredCount, returnedCount, totalCOD, shippingCost } = d;
+        const { date, deliveredCount, returnedCount, returnedValue, totalCOD, shippingCost, cashboxIn, cashboxOut, cashboxNet } = d;
         if (!date) return err(res, "تاريخ التقفيل مطلوب");
 
         // 1. Invalidate caches
@@ -1213,8 +1213,12 @@ app.post("/api", async (req: Request, res: Response) => {
           date,
           deliveredCount: Number(deliveredCount || 0),
           returnedCount: Number(returnedCount || 0),
+          returnedValue: Number(returnedValue || 0),
           totalCOD: Number(totalCOD || 0),
           shippingCost: Number(shippingCost || 0),
+          cashboxIn: Number(cashboxIn || 0),
+          cashboxOut: Number(cashboxOut || 0),
+          cashboxNet: Number(cashboxNet || 0),
           addedBy: currentUser,
           createdAt: now()
         });
@@ -1225,7 +1229,7 @@ app.post("/api", async (req: Request, res: Response) => {
             const orderDelivDate = o.delivDate ? o.delivDate.substring(0, 10) : "";
             const orderRetDate = o.retDate ? o.retDate.substring(0, 10) : "";
             const isDelivClosed = o.status === "تم التسليم" && orderDelivDate <= date;
-            const isRetClosed = ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status) && orderRetDate <= date;
+            const isRetClosed = ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status) && orderRetDate <= date;
             if (isDelivClosed || isRetClosed) {
               o.isClosed = true;
             }
@@ -1239,7 +1243,7 @@ app.post("/api", async (req: Request, res: Response) => {
           type: "ترصيد تقفيل يومي",
           dateTime: now(),
           oldVal: "—",
-          newVal: `تقفيل يوم: ${date} (مسلم: ${deliveredCount}، مرتجع: ${returnedCount}، محصل COD: ${totalCOD} ج.م)`,
+          newVal: `تقفيل يوم: ${date} (مسلم: ${deliveredCount}، مرتجع: ${returnedCount} (بقيمة ${returnedValue || 0} ج.م)، محصل COD: ${totalCOD} ج.م، صافي الخزنة: ${cashboxNet || 0} ج.م)`,
           reason: `ترصيد اليوم المالي من خلال أداة التصدير السريع`
         });
 
@@ -2329,6 +2333,183 @@ app.post("/api", async (req: Request, res: Response) => {
       }
 
       // ─────────────────────────────────────────────────────────────
+      // BATCH UPDATE: updateOrdersStatusBulk
+      // ─────────────────────────────────────────────────────────────
+      case "updateOrdersStatusBulk": {
+        const allowedRoles = ["مدير", "مشرف", "مسؤول مرتجعات", "موظف عمليات", "مندوب"];
+        if (!allowedRoles.includes(currentRole)) {
+          return err(res, "لا تمتلك الصلاحيات اللازمة للقيام بالتعديل الجماعي");
+        }
+
+        const updates = d.updates || [];
+        if (!Array.isArray(updates) || updates.length === 0) {
+          return err(res, "لم يتم استلام مصفوفة تحديثات جماعية صالحة");
+        }
+
+        let modified = 0;
+
+        for (const item of updates) {
+          const t = item.tracking;
+          if (!t) continue;
+
+          const order = db.orders.find((o: any) => o.tracking === t);
+          if (!order) continue;
+
+          // Double check that the rider can only touch their OWN assigned orders
+          if (currentRole === "مندوب" && order.courier !== currentUser) {
+            continue; 
+          }
+
+          const oldStatus = order.status;
+
+          // Set optional notes or postponed dates collectively
+          if (item.notes !== undefined && item.notes !== "") {
+            order.notes = item.notes;
+          }
+          const itemDate = item.date || item.delivDate || item.postponedDate;
+          if (itemDate !== undefined && itemDate !== "") {
+            order.delivDate = itemDate;
+          }
+
+          // Apply courier re-assignment if permitted
+          if (item.courier !== undefined && ["مدير", "مشرف"].includes(currentRole)) {
+            const courier = item.courier;
+            if (courier === "reset_warehouse" || courier === "") {
+              order.courier = "";
+              order.commission = 0;
+              if (order.status !== "جديد") {
+                const prevStatus = order.status;
+                order.status = "جديد";
+                if (!db.statusHistory) db.statusHistory = [];
+                db.statusHistory.push({
+                  tracking: t,
+                  oldStatus: prevStatus,
+                  newStatus: "جديد",
+                  updatedBy: currentUser,
+                  dateTime: now()
+                });
+              }
+            } else if (courier !== order.courier) {
+              order.courier = courier;
+              const cProfile = db.couriers.find((c: any) => c.name === courier);
+              order.commission = cProfile ? Number(cProfile.commission || 25) : 25;
+
+              // If courier is assigned, move 'جديد' to 'تم الإسناد'
+              if (courier && oldStatus === "جديد") {
+                order.status = "تم الإسناد";
+                if (!db.statusHistory) db.statusHistory = [];
+                db.statusHistory.push({
+                  tracking: t,
+                  oldStatus: "جديد",
+                  newStatus: "تم الإسناد",
+                  updatedBy: currentUser,
+                  dateTime: now()
+                });
+              }
+            }
+          }
+
+          // Map labels to standard schema statuses safely
+          let status = item.status;
+          if (status === "تم التسليم بنجاح") status = "تم التسليم";
+          if (status === "مؤجل بناءً على طلب العميل") status = "مؤجل";
+          if (status === "تم تسليم المرتجع للمورد وتصفية حسابه") status = "تم تسليم المرتجع للمورد";
+
+          // Enforce role-based allowed status boundaries
+          if (status) {
+            if (currentRole === "مسؤول مرتجعات") {
+              const returnsOfficerAllowed = ["مرتجع جديد", "مرتجع جاري تسليمه للمكتب", "جاري الرجوع للمورد", "تم تسليم المرتجع للمورد", "جديد"];
+              if (!returnsOfficerAllowed.includes(status)) continue;
+            } else if (currentRole === "موظف عمليات") {
+              const opsAllowed = ["تم رد العميل وجاري التنسيق", "لا يرد - محاولة أولى/ثانية", "تحديث نتيجة الاتصال", "مؤجل", "لا يوجد رد", "جديد"];
+              if (!opsAllowed.includes(status)) continue;
+            } else if (currentRole === "مندوب") {
+              const agentAllowed = ["تم التسليم", "مؤجل", "لا يوجد رد", "مرتجع"];
+              if (!agentAllowed.includes(status)) continue;
+            }
+          }
+
+          // Apply status override
+          if (status !== undefined && status !== order.status && (item.courier !== "reset_warehouse" && item.courier !== "")) {
+            order.status = status;
+            order.updatedAt = now();
+
+            if (status === "تم التسليم") {
+              order.delivDate = itemDate || now();
+              // Add to Courier Ledger
+              const cProfile = db.couriers.find((c: any) => c.name === order.courier);
+              const comm = cProfile ? Number(cProfile.commission || 25) : 25;
+              db.courierLedger.push({
+                courier: order.courier,
+                date: now(),
+                type: "تسليم",
+                tracking: order.tracking,
+                amount: comm,
+                desc: `عمولة تسليم الأوردر جماعياً (الدفعة المجمعة): ${order.tracking}`
+              });
+
+              // Add to Cashbox
+              db.cashbox.push({
+                date: now(),
+                desc: `تحصيل أوردر جماعي (الدفعة المجمعة): ${order.tracking}`,
+                type: "تحصيل مندوب",
+                amount: Number(order.totalCOD),
+                ref: order.tracking,
+                addedBy: "النظام الجماعي"
+              });
+
+              // Credit Supplier Ledger if not already done
+              const dupLedger = db.supplierLedger.find((l: any) => l.tracking === order.tracking && (l.type === "أوردر مستلم" || l.type === "تسليم"));
+              if (!dupLedger) {
+                const supplierShare = Number(order.prodPrice || 0) - Number(order.shipPrice || 0);
+                db.supplierLedger.push({
+                  supplier: order.supplier,
+                  date: now(),
+                  type: "أوردر مستلم",
+                  tracking: order.tracking,
+                  amount: supplierShare,
+                  desc: `حقوق أوردر تم تسليمه جماعياً (الدفعة المجمعة): ${order.tracking} (صافي بضاعة ${supplierShare})`
+                });
+              }
+            }
+
+            if (["مرتجع", "تم تسليم المرتجع للمورد", "التسليم للمورد"].includes(status)) {
+              order.retDate = now();
+              if (status === "تم تسليم المرتجع للمورد" || status === "التسليم للمورد") {
+                order.returnQueueStatus = "تم تسليم المرتجع للمورد";
+                const dupLedger = db.supplierLedger.find((l: any) => l.tracking === order.tracking && (l.type === "مرتجع" || l.type === "مرتجع تم تسليمه للمورد"));
+                if (!dupLedger) {
+                  db.supplierLedger.push({
+                    supplier: order.supplier,
+                    date: now(),
+                    type: "مرتجع تم تسليمه للمورد",
+                    tracking: order.tracking,
+                    amount: -Number(order.prodPrice || 0),
+                    desc: `خصم قيمة المنتج لمرتجع تسلمه المورد جماعياً (الدفعة المجمعة): ${order.tracking}`
+                  });
+                }
+              }
+            }
+
+            if (!db.statusHistory) db.statusHistory = [];
+            db.statusHistory.push({
+              tracking: t,
+              oldStatus,
+              newStatus: status,
+              updatedBy: currentUser,
+              dateTime: now()
+            });
+          }
+
+          order.updatedAt = now();
+          modified++;
+        }
+
+        writeDB(db);
+        return ok(res, { done: modified, msg: `تم تحديث وإسناد ${modified} أوردر مجمّعاً بنجاح فائق السرعة` });
+      }
+
+      // ─────────────────────────────────────────────────────────────
       // DASHBOARD COUNTERS & PERFORMANCE METRICS
       // ─────────────────────────────────────────────────────────────
       case "dashboard": {
@@ -2340,6 +2521,8 @@ app.post("/api", async (req: Request, res: Response) => {
           todayTotal: 0,
           delivered: 0,
           returned: 0,
+          returnedDeliveredToSupplier: 0,
+          returnedDeliveredToSupplierValue: 0,
           pending: 0,
           active: 0,
           assignedPending: 0,
@@ -2358,14 +2541,14 @@ app.post("/api", async (req: Request, res: Response) => {
             stats.todayTotal++; // Today's Orders created today
           }
 
-          const isClosed = ["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status);
+          const isClosed = ["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status);
           const isAssigned = o.courier && o.courier !== "";
           if (isAssigned && !isClosed) {
             stats.assignedPending++;
           }
 
-          const isSomeReturn = ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "مرتجع والعميل دفع الشحن"].includes(o.status) || (o.status || "").includes("مرتجع");
-          const isDeliveredToSupplier = ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status);
+          const isSomeReturn = ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "مرتجع والعميل دفع الشحن", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status) || (o.status || "").includes("مرتجع");
+          const isDeliveredToSupplier = ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status);
 
           if (o.status === "تم التسليم") {
             stats.delivered++;
@@ -2376,7 +2559,10 @@ app.post("/api", async (req: Request, res: Response) => {
               stats.todayCOD += Number(o.totalCOD || 0); // Money collected today
             }
           } else if (isSomeReturn) {
-            if (!isDeliveredToSupplier) {
+            if (isDeliveredToSupplier) {
+              stats.returnedDeliveredToSupplier++;
+              stats.returnedDeliveredToSupplierValue += Number(o.prodPrice || 0);
+            } else {
               stats.returned++;
             }
           } else if (["جديد", "تم الإسناد", "مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)) {
@@ -2429,8 +2615,8 @@ app.post("/api", async (req: Request, res: Response) => {
         const bestSupplierObj = [...formattedSuppliers].sort((a, b) => b.delivered - a.delivered)[0];
 
         const rate = stats.total ? Math.round((stats.delivered / stats.total) * 100) : 0;
-        const remainingStock = ordersList.filter((o: any) => !["تم التسليم", "خارج مع المندوب", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)).length;
-        const inOfficeStock = stats.total - (stats.active + stats.returned);
+        const remainingStock = ordersList.filter((o: any) => !["تم التسليم", "خارج مع المندوب", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status) && !o.isClosed).length;
+        const inOfficeStock = stats.total - (stats.active + stats.returned + stats.returnedDeliveredToSupplier);
 
         return ok(res, {
           stats: { ...stats, rate, remainingStock, inOfficeStock },
