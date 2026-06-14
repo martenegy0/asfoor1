@@ -448,9 +448,31 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
   const supplierOrders = (db.orders || []).filter((o: any) => o.supplier === supplierName);
   const rawLedger = (db.supplierLedger || []).filter((l: any) => l.supplier === supplierName);
 
+  // Helper function to check for genuine human payouts/adjustments
+  const isHumanLedgedPayout = (l: any) => {
+    if (!l) return false;
+    const type = (l.type || "").toString().trim();
+    const desc = (l.desc || "").toString().trim();
+    const tracking = (l.tracking || "").toString().trim();
+
+    const isPayOrAdj = ["دفع نقدي", "دفعة مورد", "صرف مورد", "دفعة", "مسحوبات", "طرح", "تسوية"].includes(type) ||
+                       type.includes("دفعة") ||
+                       type.includes("صرف") ||
+                       tracking === "CASH-PAY";
+
+    const isAutoOrReturn = type.includes("مرتجع") ||
+                           desc.includes("مرتجع") ||
+                           type.includes("أوردر") ||
+                           type.includes("حقوق") ||
+                           desc.includes("حقوق") ||
+                           (tracking !== "" && tracking !== "—" && tracking !== "CASH-PAY" && tracking.startsWith("FP-"));
+
+    return isPayOrAdj && !isAutoOrReturn;
+  };
+
   // 1. Total uploaded goods (value of products only without shipping)
   const totalGoodsUploaded = supplierOrders.reduce((sum: number, o: any) => {
-    const prodPrice = o.prodPrice !== undefined ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
+    const prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
     return sum + prodPrice;
   }, 0);
 
@@ -458,29 +480,23 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
   const deliveredOrders = supplierOrders.filter((o: any) => o.status === "تم التسليم");
   const deliveredOrdersCount = deliveredOrders.length;
   const deliveredOrdersValue = deliveredOrders.reduce((sum: number, o: any) => {
-    const prodPrice = o.prodPrice !== undefined ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
+    const prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
     return sum + prodPrice;
   }, 0);
 
   // 3. Returns delivered back to supplier
-  const returnedOrders = supplierOrders.filter((o: any) => ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "التسليم للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status));
+  const returnedOrders = supplierOrders.filter((o: any) => ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status));
   const returnsDeliveredCount = returnedOrders.length;
   const returnsDeliveredValue = returnedOrders.reduce((sum: number, o: any) => {
-    const prodPrice = o.prodPrice !== undefined ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
+    const prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
     return sum + prodPrice;
   }, 0);
 
-  // 4. Payments made to supplier from ledger
-  const adjustmentsAndPayments = rawLedger.filter((l: any) => {
-    const isPayOrAdj = ["دفع نقدي", "دفعة مورد", "صرف مورد", "تسوية", "طرح", "اضافة"].includes(l.type) || l.tracking === "CASH-PAY" || (l.type && l.type.includes("دفعة"));
-    return isPayOrAdj;
-  });
+  // 4. Payments made to supplier from ledger (Strict human payout classification)
+  const adjustmentsAndPayments = rawLedger.filter(isHumanLedgedPayout);
 
   const paymentsValue = adjustmentsAndPayments.reduce((sum: number, l: any) => {
-    if (["دفع نقدي", "دفعة مورد", "صرف مورد"].includes(l.type) || l.tracking === "CASH-PAY" || (l.type && l.type.includes("دفعة"))) {
-      return sum + Math.abs(Number(l.amount || 0));
-    }
-    return sum;
+    return sum + Math.abs(Number(l.amount || 0));
   }, 0);
 
   // 5. Calculate outstanding balance: Outstanding = DeliveredOrdersValue - ReturnsDeliveredValue - PaymentsValue
@@ -491,7 +507,7 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
 
   // A. Delivered orders as credit
   for (const o of deliveredOrders) {
-    const prodPrice = o.prodPrice !== undefined ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
+    const prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
     entries.push({
       date: o.orderDate || o.createdAt || "",
       type: "حقوق بضاعة أوردر",
@@ -503,7 +519,7 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
 
   // B. Returned orders as debit
   for (const o of returnedOrders) {
-    const prodPrice = o.prodPrice !== undefined ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
+    const prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
     entries.push({
       date: o.retDate || o.updatedAt || o.createdAt || "",
       type: "مرتجع مخصوم",
@@ -1256,6 +1272,91 @@ app.post("/api", async (req: Request, res: Response) => {
 
         // 4. Return instant fast response for Fire & Forget
         return ok(res, { ok: true, msg: "تم ترحيل وحفظ التقرير اليومي بنجاح وجاري المزامنة في الخلفية", background: true });
+      }
+
+      if (["getSupplierLedger", "supplierAccounts", "supplierDashboard"].includes(d.action)) {
+        try {
+          // Fetch raw orders and ledger from Google Sheets proxy using cached helpers
+          const resOrders = await executeProxyRequest(gscriptUrl, {
+            action: "getOrders",
+            token: "14014",
+            currentUser,
+            currentRole
+          });
+          const resLedger = await executeProxyRequest(gscriptUrl, {
+            action: "getSupplierLedger",
+            token: "14014",
+            currentUser,
+            currentRole
+          });
+
+          const mockDb = {
+            orders: resOrders.orders || [],
+            supplierLedger: resLedger.ledger || []
+          };
+
+          if (d.action === "getSupplierLedger") {
+            const supplierName = currentRole === "مورد" ? currentUser : (d.supplier || "");
+            const unified = getSupplierUnifiedLedger(mockDb, supplierName);
+            // Return identical structure with local mode
+            return ok(res, { 
+              entries: unified.entries, 
+              balance: unified.balance, 
+              stats: unified.stats 
+            });
+          }
+
+          if (d.action === "supplierDashboard") {
+            const isSupplier = currentRole === "مورد";
+            const targetSupplier = isSupplier ? currentUser : (d.supplier || "");
+            if (!targetSupplier) return err(res, "المورد غير معروف");
+
+            const unified = getSupplierUnifiedLedger(mockDb, targetSupplier);
+
+            return ok(res, {
+              stats: {
+                total: unified.stats.totalOrdersCount,
+                delivered: unified.stats.deliveredOrdersCount,
+                returned: unified.stats.returnsDeliveredCount,
+                pending: unified.stats.totalOrdersCount - unified.stats.deliveredOrdersCount - unified.stats.returnsDeliveredCount,
+                cod: unified.stats.totalGoodsUploaded,
+                rate: unified.stats.rate,
+                due: unified.stats.outstanding,
+                returnsDeliveredValue: unified.stats.returnsDeliveredValue,
+                paymentsValue: unified.stats.paymentsValue
+              }
+            });
+          }
+
+          if (d.action === "supplierAccounts") {
+            if (!["مدير", "مشرف", "محاسب"].includes(currentRole)) {
+              return err(res, "ليس لديك صلاحية سحب كشوفات الموردين المالية");
+            }
+
+            const allSuppliers = Array.from(new Set(mockDb.orders.map((o: any) => o.supplier).filter(Boolean)));
+            const accountsList = allSuppliers.map((supName: any) => {
+              const sup = String(supName);
+              const unified = getSupplierUnifiedLedger(mockDb, sup);
+              return {
+                name: sup,
+                totalCOD: unified.stats.deliveredOrdersValue,
+                returnsDelivered: unified.stats.returnsDeliveredValue,
+                adjustments: 0,
+                payments: unified.stats.paymentsValue,
+                totalOrders: unified.stats.totalOrdersCount,
+                deliveredOrders: unified.stats.deliveredOrdersCount,
+                returnsCount: unified.stats.returnsDeliveredCount,
+                balance: unified.stats.outstanding,
+                rate: unified.stats.rate
+              };
+            });
+
+            return ok(res, { accounts: accountsList });
+          }
+        } catch (calcError: any) {
+          console.error("Local supplier calculations in Sheets mode failed:", calcError);
+          return err(res, "خطأ في حساب مديونيات الموردين: " + calcError.message);
+        }
       }
 
       if (d.action === "dashboard") {

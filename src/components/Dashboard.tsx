@@ -445,7 +445,7 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
             <AlertTriangle size={48} />
           </div>
           <div className="text-3xl font-black text-red-400">{s.returned}</div>
-          <div className="text-[11px] font-bold text-slate-500 mt-1 uppercase tracking-wider">المرتجع والمرفوض الحالي</div>
+          <div className="text-[11px] font-bold text-slate-500 mt-1 uppercase tracking-wider">عهدة المرتجعات بالمكتب</div>
         </div>
 
         {/* Returned Delivered to Supplier Card */}

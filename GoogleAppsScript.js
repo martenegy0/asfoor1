@@ -1252,10 +1252,35 @@ function getAuditLog(sheets) {
 // ───────────────────────────────────────────────
 // (ج) حركات حسابات الموردين والدفعات المالية
 // ───────────────────────────────────────────────
+// HELPER FOR GENUINE HUMAN PAYOUT CLASSIFICATION
+// ───────────────────────────────────────────────
+function isHumanPayout(l) {
+  if (!l) return false;
+  var type = (l.type || "").toString().trim();
+  var desc = (l.desc || "").toString().trim();
+  var tracking = (l.tracking || "").toString().trim();
+  
+  var isPayOrAdj = ["دفع نقدي", "دفعة مورد", "صرف مورد", "دفعة", "مسحوبات"].indexOf(type) !== -1 || 
+                     type.indexOf("دفعة") !== -1 || 
+                     type.indexOf("صرف") !== -1 || 
+                     tracking === "CASH-PAY";
+                     
+  var isAutoOrReturn = type.indexOf("مرتجع") !== -1 || 
+                         desc.indexOf("مرتجع") !== -1 || 
+                         type.indexOf("أوردر") !== -1 ||
+                         type.indexOf("حقوق") !== -1 ||
+                         desc.indexOf("حقوق") !== -1 ||
+                         (tracking !== "" && tracking !== "—" && tracking !== "CASH-PAY" && tracking.indexOf("FP-") === 0);
+                         
+  return isPayOrAdj && !isAutoOrReturn;
+}
 
 function getSupplierLedger(sheets, d) {
   const { supplier } = d;
   const ledger = getTableData(sheets.supplierLedger);
+  if (!supplier) {
+    return { ok: true, ledger: ledger };
+  }
   const filtered = ledger.filter(l => l.supplier === supplier);
   return { ok: true, ledger: filtered.reverse() };
 }
@@ -1277,18 +1302,22 @@ function getSupplierDashboard(sheets, d) {
     return sum + prodPrice;
   }, 0);
 
-  const returned = supOrders.filter(o => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].indexOf(o.status) !== -1 || (o.status || "").indexOf("مرتجع") !== -1).length;
+  const returned = supOrders.filter(o => {
+    var isSomeReturn = ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "مرتجع والعميل دفع الشحن", "تم تسليم المرتجع للمورد وتصفية حسابه"].indexOf(o.status) !== -1 || (o.status || "").indexOf("مرتجع") !== -1;
+    var isDeliveredToSupplier = ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].indexOf(o.status) !== -1;
+    return isSomeReturn && !isDeliveredToSupplier;
+  }).length;
 
   // 2. Returns delivered back to supplier ("تم تسليم المرتجع للمورد" or equivalent)
-  const returnedDGoods = supOrders.filter(o => ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "التسليم للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].indexOf(o.status) !== -1);
+  const returnedDGoods = supOrders.filter(o => ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].indexOf(o.status) !== -1);
   const returnsDeliveredValue = returnedDGoods.reduce((sum, o) => {
     var prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
     return sum + prodPrice;
   }, 0);
 
-  // 3. Cash payments paid to supplier
+  // 3. Cash payments paid to supplier (Strict human payout classification)
   const sLedger = ledger.filter(l => l.supplier === supplier);
-  const totalPaid = sLedger.filter(l => ["دفعة مورد", "دفع نقدي", "صرف مورد"].indexOf(l.type) !== -1 || l.type.indexOf("دفعة") !== -1).reduce((sum, l) => sum + Math.abs(Number(l.amount || 0)), 0);
+  const totalPaid = sLedger.filter(isHumanPayout).reduce((sum, l) => sum + Math.abs(Number(l.amount || 0)), 0);
 
   // 4. Current outstanding balance based on formula
   const remaining = deliveredOrdersValue - totalPaid - returnsDeliveredValue;
@@ -1323,15 +1352,15 @@ function getSupplierAccounts(sheets) {
     }, 0);
 
     // 2. Returns delivered back to supplier ("تم تسليم المرتجع للمورد" or equivalent)
-    const returnedOrders = sOrders.filter(o => ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "التسليم للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].indexOf(o.status) !== -1);
+    const returnedOrders = sOrders.filter(o => ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].indexOf(o.status) !== -1);
     const returnsCount = returnedOrders.length;
     const returnsDeliveredValue = returnedOrders.reduce((sum, o) => {
       var prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
       return sum + prodPrice;
     }, 0);
 
-    // 3. Cash payments paid to supplier
-    const paid = sLedger.filter(l => ["دفعة مورد", "دفع نقدي", "صرف مورد"].indexOf(l.type) !== -1 || l.type.indexOf("دفعة") !== -1).reduce((sum, l) => sum + Math.abs(Number(l.amount || 0)), 0);
+    // 3. Cash payments paid to supplier (Strict human payout classification)
+    const paid = sLedger.filter(isHumanPayout).reduce((sum, l) => sum + Math.abs(Number(l.amount || 0)), 0);
 
     // 4. Current outstanding balance
     const balance = deliveredOrdersValue - paid - returnsDeliveredValue;

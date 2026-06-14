@@ -305,33 +305,6 @@ export default function App() {
         orderList = orderList.filter((o: any) => ["مرتجع", "التسليم للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) || o.returnQueueStatus);
       }
 
-      // --- Monitor courier updates to trigger manager Alerts ---
-      if (activeRole === "مدير" && orders && orders.length > 0) {
-        orderList.forEach((newOrder: any) => {
-          const oldOrder = orders.find((o) => o.tracking === newOrder.tracking);
-          if (oldOrder) {
-            if (oldOrder.status !== newOrder.status) {
-              if (newOrder.status === "تم التسليم" || newOrder.status === "مرتجع") {
-                const courierName = newOrder.courier || "غير محدد";
-                const orderCode = newOrder.tracking;
-                const statusName = newOrder.status === "تم التسليم" ? "تم التسليم" : "مرتجع";
-                const customerName = newOrder.customer || "عميل غير محدد";
-
-                triggerToastNotification({
-                  id: `${orderCode}-${newOrder.status}-${Date.now()}`,
-                  message: `تحديث من المندوب (${courierName}): الأوردر ${orderCode} للعميل (${customerName}) أصبح [${statusName}]`,
-                  type: newOrder.status === "تم التسليم" ? "success" : "error",
-                  tracking: orderCode,
-                  customer: customerName,
-                  courier: courierName,
-                  status: newOrder.status,
-                });
-              }
-            }
-          }
-        });
-      }
-
       setOrders(orderList);
 
       // Compute calculations programmatically (client-side)
