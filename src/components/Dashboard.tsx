@@ -1,12 +1,17 @@
 import React, { useEffect, useState } from "react";
-import { TrendingUp, Award, Calendar, Wallet, CheckCircle2, AlertTriangle, Truck, Layers, Search, BarChart3, Package } from "lucide-react";
-import { apiCall, getMockOrders, getTodayDateStr } from "../utils";
+import { TrendingUp, Award, Calendar, Wallet, CheckCircle2, AlertTriangle, Truck, Layers, Search, BarChart3, Package, ShieldCheck, RefreshCw } from "lucide-react";
+import { apiCall, getMockOrders, getTodayDateStr, normalizeDateToYMD } from "../utils";
 
 interface DashboardProps {
   token: string;
+  role?: string;
+  username?: string;
+  orders?: any[];
+  setOrders?: React.Dispatch<React.SetStateAction<any[]>>;
+  onRefresh?: () => void;
 }
 
-export default function Dashboard({ token }: DashboardProps) {
+export default function Dashboard({ token, role, username, orders, setOrders, onRefresh }: DashboardProps) {
   const [stats, setStats] = useState<any>(null);
   const [couriers, setCouriers] = useState<any[]>([]);
   const [suppliers, setSuppliers] = useState<any[]>([]);
@@ -14,20 +19,28 @@ export default function Dashboard({ token }: DashboardProps) {
   const [bestSupplier, setBestSupplier] = useState("—");
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
+  const [allOrders, setAllOrders] = useState<any[]>([]);
+
+  const [settling, setSettling] = useState(false);
+  const [settleSuccess, setSettleSuccess] = useState(false);
 
   async function loadData() {
     setLoading(true);
     setErrorMsg("");
     try {
-      // 1. Fetch raw orders from the server API
+      // 1. Fetch raw orders from the server API or props
       let serverOrders: any[] = [];
-      try {
-        const resOrd = await apiCall("getOrders", token);
-        if (resOrd && resOrd.ok && Array.isArray(resOrd.orders)) {
-          serverOrders = resOrd.orders;
+      if (orders && orders.length > 0) {
+        serverOrders = orders;
+      } else {
+        try {
+          const resOrd = await apiCall("getOrders", token);
+          if (resOrd && resOrd.ok && Array.isArray(resOrd.orders)) {
+            serverOrders = resOrd.orders;
+          }
+        } catch (err) {
+          console.warn("Could not load server orders, falling back to mock", err);
         }
-      } catch (err) {
-        console.warn("Could not load server orders, falling back to mock", err);
       }
 
       // 2. Identify environment
@@ -48,11 +61,13 @@ export default function Dashboard({ token }: DashboardProps) {
         finalOrders = [...serverOrders, ...filteredMock];
       }
 
+      setAllOrders(finalOrders);
+
       const todayStr = getTodayDateStr();
 
       // Precision Client-Side calculations
       let dStats = {
-        total: finalOrders.length,
+        total: 0,
         todayTotal: 0,
         delivered: 0,
         returned: 0,
@@ -68,6 +83,12 @@ export default function Dashboard({ token }: DashboardProps) {
       const supplierStats: { [name: string]: { total: number; delivered: number; returned: number } } = {};
 
       for (const o of finalOrders) {
+        if (o.isClosed) {
+          continue;
+        }
+
+        dStats.total++;
+
         const createdAtDate = o.createdAt || o.orderDate || "";
         const isCreatedToday = createdAtDate.startsWith(todayStr);
 
@@ -172,7 +193,7 @@ export default function Dashboard({ token }: DashboardProps) {
 
   useEffect(() => {
     loadData();
-  }, [token]);
+  }, [token, orders]);
 
   if (loading) {
     return (
@@ -208,8 +229,164 @@ export default function Dashboard({ token }: DashboardProps) {
     return "text-red-400 bg-red-950/20 border border-red-950/30";
   };
 
+  const isManagerOrAccountant = (role || "").toString().trim() === "مدير" || 
+                                (role || "").toString().trim().includes("مدير") || 
+                                (role || "").toString().trim() === "محاسب" || 
+                                (role || "").toString().trim().includes("محاسب");
+
+  const todayStr = getTodayDateStr();
+  
+  // Calculate today's pending settlement orders (active, not yet isClosed flag)
+  const todDelivered = allOrders.filter(o => 
+    !o.isClosed && 
+    o.status === "تم التسليم" && 
+    o.delivDate && 
+    o.delivDate.substring(0, 10) === todayStr
+  );
+  
+  const todReturned = allOrders.filter(o => 
+    !o.isClosed && 
+    ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع والعميل دفع الشحن", "مرتجع مدفوع الشحن"].includes(o.status) && 
+    o.retDate && 
+    o.retDate.substring(0, 10) === todayStr
+  );
+
+  const todayCODVal = todDelivered.reduce((sum, o) => sum + (Number(o.prodPrice || 0) + Number(o.shipPrice || 0)), 0);
+  const shippingCostVal = todDelivered.reduce((sum, o) => sum + Number(o.shipPrice || o.shipCost || 25), 0);
+
+  const handleArchiveSettle = async () => {
+    if (!window.confirm("حاسم: هل أنت متأكد من تصفية خزنة وإقفال اليومية؟\n\n سيؤدي هذا لتصفير كاش التحصيل اليومي ووسم شحنات اليوم المنتهية بالإقفال النهائي وترحيلها للأرشيف التاريخي المركزي وتصفير لوجة الموظفين.")) {
+      return;
+    }
+    setSettling(true);
+    setSettleSuccess(false);
+    try {
+      const payload = {
+        date: todayStr,
+        deliveredCount: todDelivered.length,
+        returnedCount: todReturned.length,
+        totalCOD: todayCODVal,
+        shippingCost: shippingCostVal
+      };
+
+      const res = await apiCall("addDailyClosing", token, payload);
+      if (res && res.ok) {
+        setSettleSuccess(true);
+        // Mark orders in local state
+        if (setOrders) {
+          setOrders((prev: any[]) => prev.map(o => {
+            const oDelivDate = o.delivDate ? o.delivDate.substring(0, 10) : "";
+            const oRetDate = o.retDate ? o.retDate.substring(0, 10) : "";
+            const isClosedStatus = ["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status);
+            if (o.status === "تم التسليم" && oDelivDate <= todayStr) {
+              return { ...o, isClosed: true };
+            }
+            if (isClosedStatus && o.status !== "تم التسليم" && oRetDate <= todayStr) {
+              return { ...o, isClosed: true };
+            }
+            return o;
+          }));
+        }
+        if (onRefresh) {
+          onRefresh();
+        } else {
+          loadData();
+        }
+        setTimeout(() => setSettleSuccess(false), 8000);
+      } else {
+        alert(res?.msg || "حدث خطأ أثناء الاتصال بالخادم للتصفية اليومية");
+      }
+    } catch (e: any) {
+      console.error(e);
+      alert("خطأ أثناء تصفية اليومية: " + e.message);
+    } finally {
+      setSettling(false);
+    }
+  };
+
   return (
     <div className="p-4 space-y-6 select-none font-sans text-right">
+      {/* 💼 Central Settlement & Cashbox Settle Panel */}
+      {isManagerOrAccountant && (
+        <div className="bg-gradient-to-l from-slate-900 to-slate-950 border border-amber-500/20 rounded-2xl p-6 shadow-xl space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/6 pb-4">
+            <div className="flex items-center gap-3">
+              <span className="p-2.5 bg-amber-500/10 text-amber-400 rounded-xl">
+                <ShieldCheck size={24} />
+              </span>
+              <div>
+                <h2 className="text-sm font-black text-slate-100">بوابة تصفية اليومية وإقفال الخزنة وتصفير المناديب</h2>
+                <p className="text-[10px] text-slate-400 font-bold mt-0.5"> ترحيل وتسوية الحركات المكتملة وتصفير كاش الأجهزة اللحظية لبدء يوم مالي جديد </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 text-xs font-mono bg-slate-950 px-3.5 py-1.5 rounded-lg border border-white/5 text-slate-300">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              اليومية المفتوحة: <span className="text-amber-400 font-bold">{todayStr}</span>
+            </div>
+          </div>
+
+          {/* Settle Metrics Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="bg-slate-950/60 p-4 rounded-xl border border-white/5 space-y-1">
+              <span className="text-[10px] text-slate-500 font-bold block">تسليمات اليوم قيد التجميع</span>
+              <span className="text-xl font-black text-emerald-400 font-mono">{todDelivered.length}</span>
+              <span className="text-[9px] text-slate-405 block">سيتم دمجها ووسمها بالإغلاق النهائي</span>
+            </div>
+
+            <div className="bg-slate-950/60 p-4 rounded-xl border border-white/5 space-y-1">
+              <span className="text-[10px] text-slate-500 font-bold block">مرتجع اليوم المورّد للمخزن</span>
+              <span className="text-xl font-black text-red-400 font-mono">{todReturned.length}</span>
+              <span className="text-[9px] text-slate-405 block">سيتم ترحيلها واستبعادها من الحركة النشطة</span>
+            </div>
+
+            <div className="bg-slate-950/60 p-4 rounded-xl border border-white/5 space-y-1">
+              <span className="text-[10px] text-slate-500 font-bold block">إجمالي كاش التحصيل المكتمل للتصفية</span>
+              <span className="text-xl font-black text-amber-400 font-mono">
+                {todayCODVal.toLocaleString("ar")} <span className="text-xs">ج.م</span>
+              </span>
+              <span className="text-[9px] text-slate-405 block">سيتم ترحيله للأرشيف المركزي وإراحة الخزنة</span>
+            </div>
+          </div>
+
+          {/* Action Trigger Row */}
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-1">
+            <div className="text-[10px] text-amber-500/90 font-bold leading-relaxed max-w-md">
+              ⚠️ بمجرد الضغط على زر التصفية، سيتم وسم كافة الأوردرات السابقة للمناديب كـ (مقفلة ومرحومة)، مما يصفر عدادات أجهزتهم تلقائياً تحسباً ليوم عمل جديد.
+            </div>
+
+            <div className="flex items-center gap-3 shrink-0">
+              {settleSuccess && (
+                <span className="text-xs font-bold text-emerald-400 bg-emerald-950/20 border border-emerald-900/40 px-3 py-2 rounded-lg animate-bounce">
+                  تمت التصفية والتوريد بنجاح فوراً! 🎉
+                </span>
+              )}
+
+              <button
+                onClick={handleArchiveSettle}
+                disabled={settling || (todDelivered.length === 0 && todReturned.length === 0)}
+                className={`px-5 py-2.5 rounded-xl text-xs font-black flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap shadow-lg ${
+                  todDelivered.length === 0 && todReturned.length === 0
+                    ? "bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed"
+                    : "bg-amber-500 text-slate-950 hover:bg-amber-400 hover:scale-[1.02] border border-amber-600/30 font-black"
+                }`}
+              >
+                {settling ? (
+                  <>
+                    <span className="animate-spin text-sm">⏳</span>
+                    جاري ترحيل اليومية...
+                  </>
+                ) : (
+                  <>
+                    <span>كبس تصفية الخزنة وتوريد اليومية وتصفير الأجهزة</span>
+                    <ShieldCheck size={16} />
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Dynamic Summary Cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
         {/* Total Orders */}

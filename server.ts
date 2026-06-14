@@ -427,6 +427,142 @@ function writeDB(data: any): void {
   }
 }
 
+function getSupplierUnifiedLedger(db: any, supplierName: string) {
+  if (!db) {
+    return {
+      entries: [],
+      stats: {
+        totalOrdersCount: 0,
+        totalGoodsUploaded: 0,
+        deliveredOrdersCount: 0,
+        deliveredOrdersValue: 0,
+        returnsDeliveredCount: 0,
+        returnsDeliveredValue: 0,
+        paymentsValue: 0,
+        outstanding: 0,
+        rate: 0
+      }
+    };
+  }
+
+  const supplierOrders = (db.orders || []).filter((o: any) => o.supplier === supplierName);
+  const rawLedger = (db.supplierLedger || []).filter((l: any) => l.supplier === supplierName);
+
+  // 1. Total uploaded goods (value of products only without shipping)
+  const totalGoodsUploaded = supplierOrders.reduce((sum: number, o: any) => {
+    const prodPrice = o.prodPrice !== undefined ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
+    return sum + prodPrice;
+  }, 0);
+
+  // 2. Successful deliveries
+  const deliveredOrders = supplierOrders.filter((o: any) => o.status === "تم التسليم");
+  const deliveredOrdersCount = deliveredOrders.length;
+  const deliveredOrdersValue = deliveredOrders.reduce((sum: number, o: any) => {
+    const prodPrice = o.prodPrice !== undefined ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
+    return sum + prodPrice;
+  }, 0);
+
+  // 3. Returns delivered back to supplier
+  const returnedOrders = supplierOrders.filter((o: any) => ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "التسليم للمورد"].includes(o.status));
+  const returnsDeliveredCount = returnedOrders.length;
+  const returnsDeliveredValue = returnedOrders.reduce((sum: number, o: any) => {
+    const prodPrice = o.prodPrice !== undefined ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
+    return sum + prodPrice;
+  }, 0);
+
+  // 4. Payments made to supplier from ledger
+  const adjustmentsAndPayments = rawLedger.filter((l: any) => {
+    const isPayOrAdj = ["دفع نقدي", "دفعة مورد", "صرف مورد", "تسوية", "طرح", "اضافة"].includes(l.type) || l.tracking === "CASH-PAY" || (l.type && l.type.includes("دفعة"));
+    return isPayOrAdj;
+  });
+
+  const paymentsValue = adjustmentsAndPayments.reduce((sum: number, l: any) => {
+    if (["دفع نقدي", "دفعة مورد", "صرف مورد"].includes(l.type) || l.tracking === "CASH-PAY" || (l.type && l.type.includes("دفعة"))) {
+      return sum + Math.abs(Number(l.amount || 0));
+    }
+    return sum;
+  }, 0);
+
+  // 5. Calculate outstanding balance: Outstanding = TotalGoods - ReturnsDelivered - PaymentsValue
+  const outstanding = totalGoodsUploaded - returnsDeliveredValue - paymentsValue;
+
+  // Build the ledger entries list
+  const entries: any[] = [];
+
+  // A. Uploaded orders as credit
+  for (const o of supplierOrders) {
+    const prodPrice = o.prodPrice !== undefined ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
+    entries.push({
+      date: o.orderDate || o.createdAt || "",
+      type: "حقوق بضاعة أوردر",
+      tracking: o.tracking,
+      amount: prodPrice,
+      desc: `حقوق توريد أوردر رقم #${o.tracking} (صافي بضاعة: ${prodPrice} ج.م - حالة الأوردر: ${o.status})`
+    });
+  }
+
+  // B. Returned orders as debit
+  for (const o of returnedOrders) {
+    const prodPrice = o.prodPrice !== undefined ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
+    entries.push({
+      date: o.retDate || o.updatedAt || o.createdAt || "",
+      type: "مرتجع مخصوم",
+      tracking: o.tracking,
+      amount: -prodPrice,
+      desc: `خصم مرتجع مستلم للمورد أوردر رقم #${o.tracking} (بضاعة: -${prodPrice} ج.م)`
+    });
+  }
+
+  // C. Payouts and adjustments
+  for (const l of adjustmentsAndPayments) {
+    entries.push({
+      date: l.date || "",
+      type: l.type || "تعديل حساب",
+      tracking: l.tracking || "CASH-PAY",
+      amount: Number(l.amount || 0),
+      desc: l.desc || `تسوية/دفعة مالية للمورد بمبلغ ${l.amount} ج.م`
+    });
+  }
+
+  // Sort entries chronologically to compute running balance correctly
+  entries.sort((a, b) => {
+    const dateA = a.date || "";
+    const dateB = b.date || "";
+    if (dateA < dateB) return -1;
+    if (dateA > dateB) return 1;
+    const typeOrder: { [key: string]: number } = { "حقوق بضاعة أوردر": 1, "مرتجع مخصوم": 2 };
+    const orderA = typeOrder[a.type] || 3;
+    const orderB = typeOrder[b.type] || 3;
+    return orderA - orderB;
+  });
+
+  // Calculate live running balance Chronologically
+  let runBal = 0;
+  const finalEntries = entries.map((item) => {
+    runBal += item.amount;
+    return { ...item, balanceAfter: runBal };
+  });
+
+  const totalOrdersCount = supplierOrders.length;
+  const rate = totalOrdersCount ? Math.round((deliveredOrdersCount / totalOrdersCount) * 100) : 0;
+
+  return {
+    entries: finalEntries.reverse(), // latest first
+    balance: outstanding,
+    stats: {
+      totalOrdersCount,
+      totalGoodsUploaded,
+      deliveredOrdersCount,
+      deliveredOrdersValue,
+      returnsDeliveredCount,
+      returnsDeliveredValue,
+      paymentsValue,
+      outstanding,
+      rate
+    }
+  };
+}
+
 function getSanitizedSupplierLedger(db: any): any[] {
   if (!db || !db.supplierLedger || !db.orders) return [];
   return db.supplierLedger.map((item: any) => {
@@ -1253,22 +1389,40 @@ app.post("/api", async (req: Request, res: Response) => {
             const isAgent = (currentRole || "").toString().trim() === "مندوب" || (currentRole || "").toString().trim().includes("مندوب");
             const isSupplier = (currentRole || "").toString().trim() === "مورد" || (currentRole || "").toString().trim().includes("مورد");
             const isReturnsOfficer = (currentRole || "").toString().trim() === "مسؤول مرتجعات" || (currentRole || "").toString().trim().includes("مرتجعات");
+            const isOps = (currentRole || "").toString().trim() === "موظف عمليات" || (currentRole || "").toString().trim().includes("عمليات");
             let ordersList = [...resData.orders];
 
-            if (isAgent) {
-              ordersList = ordersList.filter((o: any) => o.courier && o.courier.toString().trim().toLowerCase() === currentUser.trim().toLowerCase());
-              if (d.todayOnly) {
-                ordersList = ordersList.filter((o: any) => {
-                  const dt = o.createdAt?.substring(0, 10);
-                  const isToday = dt === tod();
-                  const isPending = ["جديد", "تم الإسناد", "خارج مع المندوب", "مؤجل", "لا يوجد رد"].includes(o.status);
-                  return isToday || isPending;
-                });
-              }
+            if (isAgent || isReturnsOfficer || isOps) {
+              const todayStr = tod(); // Cairo YYYY-MM-DD
+              ordersList = ordersList.filter((o: any) => {
+                // 1. Role boundaries
+                if (isAgent) {
+                  if (!o.courier || o.courier.toString().trim().toLowerCase() !== currentUser.trim().toLowerCase()) return false;
+                } else if (isReturnsOfficer) {
+                  const isRet = ["مرتجع", "التسليم للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) || o.returnQueueStatus;
+                  if (!isRet) return false;
+                }
+                
+                // 2. Strict Today's Filter - Filter out orders completed and completed on previous days
+                const orderDateYMD = o.orderDate ? o.orderDate.substring(0, 10) : (o.createdAt ? o.createdAt.substring(0, 10) : "");
+                const updateDateYMD = o.updatedAt ? o.updatedAt.substring(0, 10) : "";
+                const delivDateYMD = o.delivDate ? o.delivDate.substring(0, 10) : "";
+                const retDateYMD = o.retDate ? o.retDate.substring(0, 10) : "";
+                
+                const isClosedStatus = o.isClosed || ["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع والعميل دفع الشحن", "مرتجع مدفوع الشحن"].includes(o.status);
+                
+                if (isClosedStatus) {
+                  const completedToday = (delivDateYMD === todayStr) || (retDateYMD === todayStr) || (updateDateYMD === todayStr);
+                  if (!completedToday) {
+                    return false;
+                  }
+                }
+                
+                const activeOrUpdatedToday = (orderDateYMD === todayStr) || (updateDateYMD === todayStr) || !isClosedStatus;
+                return activeOrUpdatedToday;
+              });
             } else if (isSupplier) {
               ordersList = ordersList.filter((o: any) => o.supplier && o.supplier.toString().trim().toLowerCase() === currentUser.trim().toLowerCase());
-            } else if (isReturnsOfficer) {
-              ordersList = ordersList.filter((o: any) => ["مرتجع", "التسليم للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) || o.returnQueueStatus);
             }
             resData.orders = ordersList;
           }
@@ -1326,25 +1480,41 @@ app.post("/api", async (req: Request, res: Response) => {
         const isAgent = currentRole === "مندوب";
         const isSupplier = currentRole === "مورد";
         const isReturnsOfficer = currentRole === "مسؤول مرتجعات";
+        const isOps = currentRole === "موظف عمليات" || (currentRole || "").toString().includes("عمليات");
         let ordersList = [...db.orders];
 
         // Apply role filter
-        if (isAgent) {
-          ordersList = ordersList.filter((o: any) => o.courier && o.courier.toString().trim().toLowerCase() === currentUser.trim().toLowerCase());
-          // If todayOnly is request, filter by today + pending
-          if (d.todayOnly) {
-            ordersList = ordersList.filter((o: any) => {
-              const dt = o.createdAt.substring(0, 10);
-              const isToday = dt === tod();
-              const isPending = ["جديد", "تم الإسناد", "خارج مع المندوب", "مؤجل", "لا يوجد رد"].includes(o.status);
-              return isToday || isPending;
-            });
-          }
+        if (isAgent || isReturnsOfficer || isOps) {
+          const todayStr = tod(); // Cairo YYYY-MM-DD
+          ordersList = ordersList.filter((o: any) => {
+            // 1. Role boundaries
+            if (isAgent) {
+              if (!o.courier || o.courier.toString().trim().toLowerCase() !== currentUser.trim().toLowerCase()) return false;
+            } else if (isReturnsOfficer) {
+              const isRet = ["مرتجع", "التسليم للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) || o.returnQueueStatus;
+              if (!isRet) return false;
+            }
+            
+            // 2. Strict Today's Filter - Filter out orders completed and completed on previous days
+            const orderDateYMD = o.orderDate ? o.orderDate.substring(0, 10) : (o.createdAt ? o.createdAt.substring(0, 10) : "");
+            const updateDateYMD = o.updatedAt ? o.updatedAt.substring(0, 10) : "";
+            const delivDateYMD = o.delivDate ? o.delivDate.substring(0, 10) : "";
+            const retDateYMD = o.retDate ? o.retDate.substring(0, 10) : "";
+            
+            const isClosedStatus = o.isClosed || ["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع والعميل دفع الشحن", "مرتجع مدفوع الشحن"].includes(o.status);
+            
+            if (isClosedStatus) {
+              const completedToday = (delivDateYMD === todayStr) || (retDateYMD === todayStr) || (updateDateYMD === todayStr);
+              if (!completedToday) {
+                return false;
+              }
+            }
+            
+            const activeOrUpdatedToday = (orderDateYMD === todayStr) || (updateDateYMD === todayStr) || !isClosedStatus;
+            return activeOrUpdatedToday;
+          });
         } else if (isSupplier) {
           ordersList = ordersList.filter((o: any) => o.supplier && o.supplier.toString().trim().toLowerCase() === currentUser.trim().toLowerCase());
-        } else if (isReturnsOfficer) {
-          // Returns Officer sees all orders that are returned (مرتجع) to manage them
-          ordersList = ordersList.filter((o: any) => ["مرتجع", "التسليم للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) || o.returnQueueStatus);
         }
 
         // Apply filters
@@ -2283,18 +2453,12 @@ app.post("/api", async (req: Request, res: Response) => {
       // ─────────────────────────────────────────────────────────────
       case "getSupplierLedger": {
         const supplierName = currentRole === "مورد" ? currentUser : (d.supplier || "");
-        const sanitizedLedger = getSanitizedSupplierLedger(db);
-        const ledger = sanitizedLedger.filter((l: any) => l.supplier === supplierName && l.amount !== 0);
-
-        // Compute running balance live
-        // Live Balance = Sum of amounts in ledger
-        let balance = 0;
-        const entries = ledger.map((item: any) => {
-          balance += Number(item.amount);
-          return { ...item, balanceAfter: balance };
+        const unified = getSupplierUnifiedLedger(db, supplierName);
+        return ok(res, { 
+          entries: unified.entries, 
+          balance: unified.balance, 
+          stats: unified.stats 
         });
-
-        return ok(res, { entries: entries.reverse(), balance });
       }
 
       case "supplierDashboard": {
@@ -2303,54 +2467,19 @@ app.post("/api", async (req: Request, res: Response) => {
 
         if (!targetSupplier) return err(res, "المورد غير معروف");
 
-        const orderList = db.orders.filter((o: any) => o.supplier === targetSupplier);
-        const ledgerTransactions = db.supplierLedger.filter((l: any) => l.supplier === targetSupplier);
-
-        let total = 0, delivered = 0, returned = 0, pending = 0;
-
-        for (const o of orderList) {
-          total++;
-          const st = o.status;
-          if (st === "تم التسليم") {
-            delivered++;
-          } else if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(st)) {
-            returned++;
-          } else {
-            pending++;
-          }
-        }
-
-        // 1. Total uploaded goods value (without shipping)
-        const totalGoodsUploaded = orderList.reduce((sum: number, o: any) => {
-          const prodPrice = o.prodPrice !== undefined ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
-          return sum + prodPrice;
-        }, 0);
-
-        // 2. Returns delivered back to supplier ("تم تسليم المرتجع للمورد" or equivalent)
-        const returnedOrders = orderList.filter((o: any) => ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "التسليم للمورد"].includes(o.status));
-        const returnsDeliveredValue = returnedOrders.reduce((sum: number, o: any) => {
-          const prodPrice = o.prodPrice !== undefined ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
-          return sum + prodPrice;
-        }, 0);
-
-        // 3. Payments made to the supplier (representing all cash payouts from ledger)
-        const paymentsValue = ledgerTransactions
-          .filter((l: any) => ["دفع نقدي", "دفعة مورد", "صرف مورد"].includes(l.type) || l.tracking === "CASH-PAY" || l.type.includes("دفعة"))
-          .reduce((sum: number, l: any) => sum + Math.abs(Number(l.amount)), 0);
-
-        // 4. Current outstanding balance based on explicit formula
-        const balance = totalGoodsUploaded - paymentsValue - returnsDeliveredValue;
-        const rate = total ? Math.round((delivered / total) * 100) : 0;
+        const unified = getSupplierUnifiedLedger(db, targetSupplier);
 
         return ok(res, {
           stats: {
-            total,
-            delivered,
-            returned,
-            pending,
-            cod: totalGoodsUploaded,
-            rate,
-            due: balance
+            total: unified.stats.totalOrdersCount,
+            delivered: unified.stats.deliveredOrdersCount,
+            returned: unified.stats.returnsDeliveredCount,
+            pending: unified.stats.totalOrdersCount - unified.stats.deliveredOrdersCount - unified.stats.returnsDeliveredCount,
+            cod: unified.stats.totalGoodsUploaded,
+            rate: unified.stats.rate,
+            due: unified.stats.outstanding,
+            returnsDeliveredValue: unified.stats.returnsDeliveredValue,
+            paymentsValue: unified.stats.paymentsValue
           }
         });
       }
@@ -2361,58 +2490,22 @@ app.post("/api", async (req: Request, res: Response) => {
           return err(res, "ليس لديك صلاحية سحب كشوفات الموردين المالية");
         }
 
-        const accountsMap: { [supplier: string]: { name: string; totalCOD: number; returnsDelivered: number; adjustments: number; payments: number; totalOrders: number; deliveredOrders: number; returnsCount: number; balance: number } } = {};
-
-        // Iterate through all unique suppliers
         const allSuppliers = Array.from(new Set(db.orders.map((o: any) => o.supplier).filter(Boolean)));
-        
-        for (const supName of allSuppliers) {
+        const accountsList = allSuppliers.map((supName: any) => {
           const sup = String(supName);
-          const supplierOrders = db.orders.filter((o: any) => o.supplier === sup);
-          const supplierLedger = db.supplierLedger.filter((l: any) => l.supplier === sup);
-
-          // Calculates metrics based on master blueprint v7 specifications:
-          // 1. Total uploaded goods value (without shipping)
-          const totalGoodsUploaded = supplierOrders.reduce((sum: number, o: any) => {
-            const prodPrice = o.prodPrice !== undefined ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
-            return sum + prodPrice;
-          }, 0);
-
-          // 2. Returns delivered back to supplier (status is "تم تسليم المرتجع للمورد" or equivalent)
-          const returnedOrders = supplierOrders.filter((o: any) => ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "التسليم للمورد"].includes(o.status));
-          const returnsCount = returnedOrders.length;
-          const returnsDeliveredValue = returnedOrders.reduce((sum: number, o: any) => {
-            const prodPrice = o.prodPrice !== undefined ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
-            return sum + prodPrice;
-          }, 0);
-
-          // 3. Payments made to the supplier (representing all cash withdrawals/payouts in ledger)
-          const paymentsValue = supplierLedger
-            .filter((l: any) => ["دفع نقدي", "دفعة مورد", "صرف مورد"].includes(l.type) || l.tracking === "CASH-PAY" || l.type.includes("دفعة"))
-            .reduce((sum: number, l: any) => sum + Math.abs(Number(l.amount)), 0);
-
-          // 4. Current outstanding balance based on Goods Purchase Model: Dues = TotalGoods - Payments - ReturnsDelivered
-          const balance = totalGoodsUploaded - paymentsValue - returnsDeliveredValue;
-
-          const totalOrders = supplierOrders.length;
-          const deliveredOrders = supplierOrders.filter((o: any) => o.status === "تم التسليم").length;
-
-          accountsMap[sup] = {
+          const unified = getSupplierUnifiedLedger(db, sup);
+          return {
             name: sup,
-            totalCOD: totalGoodsUploaded, // Bind totalGoodsUploaded to totalCOD to map seamlessly to "إجمالي المسلم الصافي" (total uploaded goods value) in UI
-            returnsDelivered: returnsDeliveredValue,
+            totalCOD: unified.stats.totalGoodsUploaded,
+            returnsDelivered: unified.stats.returnsDeliveredValue,
             adjustments: 0,
-            payments: paymentsValue,
-            totalOrders,
-            deliveredOrders,
-            returnsCount,
-            balance
+            payments: unified.stats.paymentsValue,
+            totalOrders: unified.stats.totalOrdersCount,
+            deliveredOrders: unified.stats.deliveredOrdersCount,
+            returnsCount: unified.stats.returnsDeliveredCount,
+            balance: unified.stats.outstanding,
+            rate: unified.stats.rate
           };
-        }
-
-        const accountsList = Object.values(accountsMap).map((a: any) => {
-          const rate = a.totalOrders ? Math.round((a.deliveredOrders / a.totalOrders) * 100) : 0;
-          return { ...a, rate };
         });
 
         return ok(res, { accounts: accountsList });

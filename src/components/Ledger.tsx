@@ -20,6 +20,7 @@ export default function Ledger({ token, role, user }: LedgerProps) {
   // --- Supplier Ledger States ---
   const [subscribes, setSubscribes] = useState<any[]>([]);
   const [liveBalance, setLiveBalance] = useState(0);
+  const [supplierStats, setSupplierStats] = useState<any>(null);
   const [selectedSupplier, setSelectedSupplier] = useState(isSupplier ? user : "");
   const [allSuppliers, setAllSuppliers] = useState<any[]>([]);
   const [payAmount, setPayAmount] = useState("");
@@ -86,6 +87,17 @@ export default function Ledger({ token, role, user }: LedgerProps) {
         
         setSubscribes([...entriesWithBalance].reverse());
         setLiveBalance(res.balance !== undefined ? res.balance : tempBalance);
+        setSupplierStats(res.stats || {
+          totalOrdersCount: rawEntries.filter((e: any) => e.type === "حقوق بضاعة أوردر").length,
+          totalGoodsUploaded: tempBalance,
+          deliveredOrdersCount: 0,
+          deliveredOrdersValue: 0,
+          returnsDeliveredCount: rawEntries.filter((e: any) => e.type === "مرتجع مخصوم").length,
+          returnsDeliveredValue: Math.abs(rawEntries.filter((e: any) => e.type === "مرتجع مخصوم").reduce((sum: number, x: any) => sum + Number(x.amount || 0), 0)),
+          paymentsValue: Math.abs(rawEntries.filter((e: any) => ["دفع نقدي", "دفعة مورد", "صرف مورد"].includes(e.type) || e.tracking === "CASH-PAY").reduce((sum: number, x: any) => sum + Number(x.amount || 0), 0)),
+          outstanding: res.balance !== undefined ? res.balance : tempBalance,
+          rate: 0
+        });
       } else {
         setFeedback(res.error || "خطأ أثناء تحميل كشف حساب المورد");
       }
@@ -345,22 +357,104 @@ export default function Ledger({ token, role, user }: LedgerProps) {
             </div>
           )}
 
-          {/* Supplier Live accounts balance displays (Supplier Ledger حقيقي) */}
-          <div className="bg-gradient-to-br from-slate-900 to-slate-950 border border-white/6 rounded-2xl p-6 text-center space-y-2 relative overflow-hidden">
-            <div className="absolute top-2 left-2 text-emerald-500/10">
-              <Wallet size={64} />
+          {/* 📦 5-Field Mirror Data Grid for Supplier Portal & Statement */}
+          {supplierStats ? (
+            <div className="space-y-6" id="supplier-mirror-grid">
+              {/* Main Top Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                {/* 1. إجمالي الطلبات المرفوعة */}
+                <div className="bg-slate-900 border border-white/6 rounded-2xl p-4 space-y-2 text-right hover:border-amber-500/20 transition-all">
+                  <span className="text-[10px] font-black text-slate-400 block tracking-wider uppercase">📦  إجمالي الطلبات المرفوعة</span>
+                  <div className="text-xl font-mono font-black text-slate-100">
+                    {Number(supplierStats.totalGoodsUploaded || 0).toLocaleString("ar")} <span className="text-xs">ج.م</span>
+                  </div>
+                  <div className="text-[9.5px] text-amber-400 font-bold">
+                     عدد: {supplierStats.totalOrdersCount || 0} أوردر كلي (بضاعة فقط)
+                  </div>
+                </div>
+
+                {/* 2. الطلبات المسلمة بنجاح */}
+                <div className="bg-slate-900 border border-white/6 rounded-2xl p-4 space-y-2 text-right hover:border-emerald-500/20 transition-all">
+                  <span className="text-[10px] font-black text-slate-400 block tracking-wider uppercase">🟢  الطلبات المسلمة بنجاح</span>
+                  <div className="text-xl font-mono font-black text-emerald-400">
+                    {Number(supplierStats.deliveredOrdersValue || 0).toLocaleString("ar")} <span className="text-xs">ج.م</span>
+                  </div>
+                  <div className="text-[9.5px] text-emerald-500 font-bold">
+                     عدد: {supplierStats.deliveredOrdersCount || 0} أوردر مسلّم
+                  </div>
+                </div>
+
+                {/* 3. المرتجع المخصوم بالكامل */}
+                <div className="bg-slate-900 border border-white/6 rounded-2xl p-4 space-y-2 text-right hover:border-red-500/20 transition-all">
+                  <span className="text-[10px] font-black text-slate-400 block tracking-wider uppercase">🔴  المرتجع المخصوم بالكامل</span>
+                  <div className="text-xl font-mono font-black text-red-400">
+                    {Number(supplierStats.returnsDeliveredValue || 0).toLocaleString("ar")} <span className="text-xs">ج.م</span>
+                  </div>
+                  <div className="text-[9.5px] text-red-500 font-bold">
+                     عدد: {supplierStats.returnsDeliveredCount || 0} أوردر مستلم للمورد
+                  </div>
+                </div>
+
+                {/* 4. كلي الدفعات المصروفة */}
+                <div className="bg-slate-900 border border-white/6 rounded-2xl p-4 space-y-2 text-right hover:border-cyan-500/20 transition-all">
+                  <span className="text-[10px] font-black text-slate-400 block tracking-wider uppercase">💵  كلي الدفعات المصروفة</span>
+                  <div className="text-xl font-mono font-black text-cyan-400">
+                    {Number(supplierStats.paymentsValue || 0).toLocaleString("ar")} <span className="text-xs">ج.م</span>
+                  </div>
+                  <div className="text-[9.5px] text-cyan-500 font-bold">
+                     إجمالي المسحوبات النقدية كاش
+                  </div>
+                </div>
+              </div>
+
+              {/* 5. الحقل الرئيسي البارز [المبلغ المستحق الحالي للمورد] */}
+              <div className="bg-gradient-to-l from-slate-900 via-slate-950 to-slate-900 border-2 border-emerald-500/25 rounded-2xl p-6 text-center space-y-3 relative overflow-hidden shadow-xl">
+                <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/5 rounded-full blur-2xl"></div>
+                <div className="absolute top-2 left-2 text-emerald-500/10">
+                  <Wallet size={50} />
+                </div>
+                
+                <span className="px-3 py-1 bg-emerald-950/40 border border-emerald-900/40 text-emerald-400 text-[10px] font-black rounded-lg uppercase tracking-widest inline-block">
+                  🏆 المبلغ المستحق الحالي للمورد (الرصيد الصافي القابل للصرف)
+                </span>
+
+                <div className="text-4xl font-mono font-black text-emerald-400 tracking-tight animate-pulse">
+                  {Number(supplierStats.outstanding || 0).toLocaleString("ar")}{" "}
+                  <span className="text-sm font-medium">جنيهاً مصرياً</span>
+                </div>
+
+                {/* Formula display */}
+                <div className="bg-slate-950/80 border border-white/4 rounded-xl py-3 px-4 max-w-2xl mx-auto text-xs text-slate-300 leading-relaxed font-bold">
+                  <span className="text-amber-400">معادلة الحساب المعتمدة للمطابقة التامة:</span>
+                  <div className="mt-1 flex flex-wrap items-center justify-center gap-2 text-[11px] font-mono">
+                    <span className="text-slate-100">إجمالي المرفوعة ({Number(supplierStats.totalGoodsUploaded || 0).toLocaleString("ar")})</span>
+                    <span className="text-slate-400 font-sans"> - </span>
+                    <span className="text-red-400">المرتجع المخصوم ({Number(supplierStats.returnsDeliveredValue || 0).toLocaleString("ar")})</span>
+                    <span className="text-slate-400 font-sans"> - </span>
+                    <span className="text-cyan-400">الدفعات المصروفة ({Number(supplierStats.paymentsValue || 0).toLocaleString("ar")})</span>
+                    <span className="text-slate-400 font-sans"> = </span>
+                    <span className="text-emerald-400 font-black">{Number(supplierStats.outstanding || 0).toLocaleString("ar")} ج.م</span>
+                  </div>
+                </div>
+              </div>
             </div>
-            <div className="text-xs font-black text-slate-400 uppercase tracking-widest">
-               الرصيد الدائن الحالي للمورد (ج.م)
+          ) : (
+            <div className="bg-gradient-to-br from-slate-900 to-slate-950 border border-white/6 rounded-2xl p-6 text-center space-y-2 relative overflow-hidden">
+              <div className="absolute top-2 left-2 text-emerald-500/10">
+                <Wallet size={64} />
+              </div>
+              <div className="text-xs font-black text-slate-400 uppercase tracking-widest">
+                 الرصيد الدائن الحالي للمورد (ج.م)
+              </div>
+              <div className="text-4xl font-black text-emerald-400">
+                {liveBalance.toLocaleString("ar")}{" "}
+                <span className="text-sm font-medium">جنيهاً مصرياً</span>
+              </div>
+              <p className="text-[10px] text-slate-500 leading-relaxed font-semibold max-w-[420px] mx-auto">
+                تُعنى هذه القيمة بإجمالي COD سعر المنتجات المحصّلة من عملائه مطروحاً منه الدفعات النقدية المسلمة له والمرتجع الذي تسلمه من الشركة.
+              </p>
             </div>
-            <div className="text-4xl font-black text-emerald-400">
-              {liveBalance.toLocaleString("ar")}{" "}
-              <span className="text-sm font-medium">جنيهاً مصرياً</span>
-            </div>
-            <p className="text-[10px] text-slate-500 leading-relaxed font-semibold max-w-[420px] mx-auto">
-              تُعنى هذه القيمة بإجمالي COD سعر المنتجات المحصّلة من عملائه مطروحاً منه الدفعات النقدية المسلمة له والمرتجع الذي تسلمه من الشركة.
-            </p>
-          </div>
+          )}
 
           {/* Settle Outlay Panel (Only visible to Admin / Controller) */}
           {isFinancial && (

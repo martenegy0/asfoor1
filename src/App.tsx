@@ -903,7 +903,16 @@ export default function App() {
           />
         )}
 
-        {activeTab === "dash" && <Dashboard token={token} />}
+        {activeTab === "dash" && (
+          <Dashboard
+            token={token}
+            role={role}
+            username={username}
+            orders={orders}
+            setOrders={setOrders}
+            onRefresh={() => refreshAllData()}
+          />
+        )}
 
         {activeTab === "ops_room" && showOpsRoomTab && (
           <OpsRoom

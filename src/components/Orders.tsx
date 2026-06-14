@@ -192,7 +192,28 @@ export default function Orders({ token, role, username, orders, setOrders, couri
 
   const todayDateStr = getTodayDateStr();
 
-  const todayDeliveredOrders = orders.filter((o: any) => {
+  const roleFilteredOrders = React.useMemo(() => {
+    if (isAgent || isReturnsOfficer || isOps) {
+      return orders.filter((o: any) => {
+        const orderDateYMD = normalizeDateToYMD(o.orderDate || o.createdAt);
+        const updateDateYMD = o.updatedAt ? normalizeDateToYMD(o.updatedAt) : "";
+        const delivDateYMD = o.delivDate ? normalizeDateToYMD(o.delivDate) : "";
+        const retDateYMD = o.retDate ? normalizeDateToYMD(o.retDate) : "";
+        const isClosedStatus = o.isClosed || ["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع والعميل دفع الشحن", "مرتجع مدفوع الشحن"].includes(o.status);
+        
+        if (isClosedStatus) {
+          const completedToday = (delivDateYMD === todayDateStr) || (retDateYMD === todayDateStr) || (updateDateYMD === todayDateStr);
+          if (!completedToday) return false;
+        }
+        
+        const activeOrUpdatedToday = (orderDateYMD === todayDateStr) || (updateDateYMD === todayDateStr) || !isClosedStatus;
+        return activeOrUpdatedToday;
+      });
+    }
+    return orders;
+  }, [orders, isAgent, isReturnsOfficer, isOps, todayDateStr]);
+
+  const todayDeliveredOrders = roleFilteredOrders.filter((o: any) => {
     const isMyDeliv = o.courier === username && o.status === "تم التسليم";
     if (!isMyDeliv) return false;
     const isDelivToday = o.delivDate && normalizeDateToYMD(o.delivDate) === todayDateStr;
@@ -406,7 +427,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
   ];
 
   // Filters mapping
-  const visibleOrders = orders
+  const visibleOrders = roleFilteredOrders
     .filter((o) => {
       // Strict role-based filter safety enforcement
       if (isAgent) {
@@ -453,7 +474,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
     });
 
   // Today's hold-ups / suspended orders ("معلقات اليوم") for agent/courier view
-  const suspendedOrders = isAgent ? orders.filter((o) => {
+  const suspendedOrders = isAgent ? roleFilteredOrders.filter((o) => {
     if (!o.courier || o.courier.toString().trim().toLowerCase() !== username.trim().toLowerCase()) return false;
     const isSuspended = ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status);
     if (!isSuspended) return false;
@@ -1421,8 +1442,8 @@ export default function Orders({ token, role, username, orders, setOrders, couri
           <div className="text-xs font-black text-amber-505 bg-amber-950/20 px-3 py-1 border border-amber-900/40 rounded-lg">
             إجمالي أوردرات اليوم المحدد: <span className="font-mono text-sm underline text-amber-400">{
               selectedDate === "all"
-                ? orders.filter(o => !o.isArchived && o.status !== "مؤرشف").length
-                : orders.filter(o => normalizeDateToYMD(o.orderDate || o.createdAt) === selectedDate).length
+                ? roleFilteredOrders.filter(o => !o.isArchived && o.status !== "مؤرشف").length
+                : roleFilteredOrders.filter(o => normalizeDateToYMD(o.orderDate || o.createdAt) === selectedDate).length
             }</span> أوردر
           </div>
         </div>
@@ -1438,12 +1459,12 @@ export default function Orders({ token, role, username, orders, setOrders, couri
             }`}
           >
             <span>الكل</span>
-            <span className="text-[10px] opacity-75 mt-0.5">({orders.filter(o => !o.isArchived && o.status !== "مؤرشف").length})</span>
+            <span className="text-[10px] opacity-75 mt-0.5">({roleFilteredOrders.filter(o => !o.isArchived && o.status !== "مؤرشف").length})</span>
           </button>
 
           {/* Map of last days */}
           {lastDays.map((day) => {
-            const dayOrders = orders.filter((o: any) => normalizeDateToYMD(o.orderDate || o.createdAt) === day.ymd);
+            const dayOrders = roleFilteredOrders.filter((o: any) => normalizeDateToYMD(o.orderDate || o.createdAt) === day.ymd);
             const totalCount = dayOrders.length;
             const delivCount = dayOrders.filter((o: any) => o.status === "تم التسليم").length;
             const delivRate = totalCount > 0 ? Math.round((delivCount / totalCount) * 100) : 0;
@@ -1608,7 +1629,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       {/* 📊 Courier Dashboard Operational Counters */}
       {isAgent && (() => {
         const targetDateStr = selectedDate === "all" ? getTodayDateStr() : selectedDate;
-        const myActiveOrders = orders.filter((o) => o.courier === username);
+        const myActiveOrders = roleFilteredOrders.filter((o) => o.courier === username);
         const myTotal = myActiveOrders.filter((o) => normalizeDateToYMD(o.orderDate || o.createdAt) === targetDateStr).length;
 
         const myDelivered = myActiveOrders.filter((o) => 
@@ -1632,8 +1653,8 @@ export default function Orders({ token, role, username, orders, setOrders, couri
         const myRemaining = Math.max(0, myActiveOrders.filter((o) => !o.isClosed && !["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)).length);
 
         // Financial Math
-        const agentDeliveredOrders = orders.filter(o => o.courier === username && o.status === "تم التسليم" && o.delivDate && normalizeDateToYMD(o.delivDate) === targetDateStr);
-        const agentCustomerPaidReturns = orders.filter(o => 
+        const agentDeliveredOrders = roleFilteredOrders.filter(o => o.courier === username && o.status === "تم التسليم" && o.delivDate && normalizeDateToYMD(o.delivDate) === targetDateStr);
+        const agentCustomerPaidReturns = roleFilteredOrders.filter(o => 
           o.courier === username && 
           (o.status === "مرتجع والعميل دفع الشحن" || o.status === "مرتجع مدفوع الشحن" || (o.status === "مرتجع" && o.returnShippingType === "paid")) && 
           o.retDate && 
