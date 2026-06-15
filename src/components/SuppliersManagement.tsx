@@ -324,7 +324,7 @@ export default function SuppliersManagement({ token, role, orders = [] }: Suppli
                       <span className="text-emerald-400 font-extrabold font-mono">
                         {acc.totalCOD.toLocaleString()} ج.م
                       </span>
-                      <span className="text-slate-500">: إجمالي مديونية المورد الثابتة (بضاعة)</span>
+                      <span className="text-slate-500">: إجمالي البضاعة المرفوعة (صافي بضاعة)</span>
                     </div>
 
                     <div className="flex justify-between text-[11px]">
@@ -404,7 +404,7 @@ export default function SuppliersManagement({ token, role, orders = [] }: Suppli
                   <span className="font-extrabold font-mono text-emerald-400">
                     {activeSupplier.totalCOD.toLocaleString()} ج.م
                   </span>
-                  <span>إجمالي مديونية المورد الثابتة (بضاعة)</span>
+                  <span>إجمالي البضاعة المرفوعة (صافي بضاعة)</span>
                 </div>
 
                 <div className="flex justify-between items-center text-slate-300">

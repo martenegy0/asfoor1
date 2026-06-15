@@ -465,13 +465,11 @@ export default function Ledger({ token, role, user }: LedgerProps) {
                 <div className="bg-slate-950/80 border border-white/4 rounded-xl py-3 px-4 max-w-2xl mx-auto text-xs text-slate-300 leading-relaxed font-bold">
                   <span className="text-amber-400">المعادلة البرمجية الإجبارية لتصفية الحساب:</span>
                   <div className="mt-1 flex flex-wrap items-center justify-center gap-2 text-[11px] font-mono">
-                    <span className="text-slate-100">إجمالي المنتجات المرفوعة ({Number(supplierStats.totalGoodsUploaded || 0).toLocaleString("ar")})</span>
+                    <span className="text-emerald-400">إجمالي المنتجات المرفوعة ({Number(supplierStats.totalGoodsUploaded || 0).toLocaleString("ar")})</span>
                     <span className="text-slate-400 font-sans"> - </span>
                     <span className="text-red-400">المرتجع المعتمد المستلم ({Number(supplierStats.returnsDeliveredValue || 0).toLocaleString("ar")})</span>
                     <span className="text-slate-400 font-sans"> - </span>
-                    <span className="text-cyan-400">إجمالي الدفعات النقدية ({Number(supplierStats.paymentsValue || 0).toLocaleString("ar")})</span>
-                    <span className="text-slate-400 font-sans"> - </span>
-                    <span className="text-red-300">التسويات العكسية الصادرة ({Number(supplierStats.reverseAdjustmentsValue || 0).toLocaleString("ar")})</span>
+                    <span className="text-cyan-400">إجمالي الدفعات النقدية والخصومات ({Number((supplierStats.paymentsValue || 0) + (supplierStats.reverseAdjustmentsValue || 0)).toLocaleString("ar")})</span>
                     <span className="text-slate-400 font-sans"> = </span>
                     <span className="text-emerald-400 font-black">{Number(supplierStats.outstanding || 0).toLocaleString("ar")} ج.م</span>
                   </div>

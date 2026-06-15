@@ -1333,8 +1333,7 @@ function getSupplierDashboard(sheets, d) {
   
   // 1. Total uploaded goods (value of products only without shipping)
   const totalGoodsUploaded = supOrders.reduce((sum, o) => {
-    var prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
-    return sum + prodPrice;
+    return sum + (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
   }, 0);
 
   const returnedDGoods = supOrders.filter(o => isReturnedDeliveredToSupplier(o.status));
@@ -1342,29 +1341,15 @@ function getSupplierDashboard(sheets, d) {
   
   // 2. Returns delivered back to supplier ("تم تسليم المرتجع للمورد" or equivalent)
   const returnsDeliveredValue = returnedDGoods.reduce((sum, o) => {
-    var prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
-    return sum + prodPrice;
+    return sum + (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
   }, 0);
 
   // 3. Cash payments paid to supplier (Strict signed human payout classification)
   const sLedger = ledger.filter(l => l.supplier === supplier);
   const totalPaid = sLedger.filter(isHumanPayout).reduce((sum, l) => sum - Number(l.amount || 0), 0);
 
-  // 4. Current outstanding balance based on formula: Outstanding = (Calculated Delivered/Partial Product Value) - (Total Paid)
-  const deliveredAndPartialOrders = supOrders.filter(function(o) { return o.status === "تم التسليم" || o.status === "تسليم جزئي"; });
-  const deliveredProductValue = deliveredAndPartialOrders.reduce(function(sum, o) {
-    var price = 0;
-    if (o.status === "تسليم جزئي") {
-      var partialCOD = Number(o.partialCODAmount || 0);
-      var shipPrice = Number(o.shipPrice || 0);
-      price = Math.max(0, partialCOD - shipPrice);
-    } else {
-      price = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
-    }
-    return sum + price;
-  }, 0);
-
-  const remaining = deliveredProductValue - totalPaid;
+  // 4. Current outstanding balance based on formula: Outstanding = TotalGoodsUploaded - Returned - Paid
+  const remaining = Math.max(0, totalGoodsUploaded - returnsDeliveredValue - totalPaid);
 
   return {
     ok: true,
@@ -1402,36 +1387,21 @@ function getSupplierAccounts(sheets) {
 
     // 1. Total Goods Uploaded (without shipping)
     const totalGoodsUploaded = sOrders.reduce((sum, o) => {
-      var prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
-      return sum + prodPrice;
+      return sum + (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
     }, 0);
 
     // 2. Returns delivered back to supplier ("تم تسليم المرتجع للمورد" or equivalent)
     const returnedOrders = sOrders.filter(o => isReturnedDeliveredToSupplier(o.status));
     const returnsCount = returnedOrders.length;
     const returnsDeliveredValue = returnedOrders.reduce((sum, o) => {
-      var prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
-      return sum + prodPrice;
+      return sum + (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
     }, 0);
 
     // 3. Cash payments paid to supplier (Strict signed human payout classification)
     const paid = sLedger.filter(isHumanPayout).reduce((sum, l) => sum - Number(l.amount || 0), 0);
 
-    // 4. Current outstanding balance based on final formula: Outstanding = (Calculated Delivered/Partial Product Value) - (Total Paid)
-    const deliveredAndPartialOrders = sOrders.filter(function(o) { return o.status === "تم التسليم" || o.status === "تسليم جزئي"; });
-    const deliveredProductValue = deliveredAndPartialOrders.reduce(function(sum, o) {
-      var price = 0;
-      if (o.status === "تسليم جزئي") {
-        var partialCOD = Number(o.partialCODAmount || 0);
-        var shipPrice = Number(o.shipPrice || 0);
-        price = Math.max(0, partialCOD - shipPrice);
-      } else {
-        price = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
-      }
-      return sum + price;
-    }, 0);
-
-    const balance = deliveredProductValue - paid;
+    // 4. Current outstanding balance based on final formula: Outstanding = TotalGoodsUploaded - Returned - Paid
+    const balance = Math.max(0, totalGoodsUploaded - returnsDeliveredValue - paid);
 
     const totalOrders = sOrders.length;
     const deliveredOrders = sOrders.filter(o => o.status === "تم التسليم").length;

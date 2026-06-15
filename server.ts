@@ -556,29 +556,16 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
     return sum - Number(l.amount || 0);
   }, 0);
 
-  // 5. Calculate outstanding balance: Outstanding = (Calculated Delivered/Partial Product Value) - (Total Paid)
-  const deliveredAndPartialOrders = supplierOrders.filter((o: any) => o.status === "تم التسليم" || o.status === "تسليم جزئي");
-  const deliveredProductValue = deliveredAndPartialOrders.reduce((sum: number, o: any) => {
-    let price = 0;
-    if (o.status === "تسليم جزئي") {
-      const partialCOD = Number(o.partialCODAmount || 0);
-      const shipPrice = Number(o.shipPrice || 0);
-      price = Math.max(0, partialCOD - shipPrice);
-    } else {
-      price = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
-    }
-    return sum + price;
-  }, 0);
-
-  const outstanding = deliveredProductValue - paymentsValue - reverseAdjustmentsValue;
+  // 5. Calculate outstanding balance: Outstanding = TotalGoodsUploaded - Returned - Paid
+  const rawOutstanding = totalGoodsUploaded - returnsDeliveredValue - paymentsValue - reverseAdjustmentsValue;
+  const outstanding = Math.max(0, rawOutstanding);
 
   // Build the ledger entries list
   const entries: any[] = [];
 
-  // A. All uploaded orders as credit
+  // A. All uploaded orders count as supplier credit
   for (const o of supplierOrders) {
-    const prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
-    const prodPriceNum = Number(prodPrice);
+    const prodPriceNum = Number(o.totalCOD || 0) - Number(o.shipPrice || 0);
     entries.push({
       date: o.orderDate || o.createdAt || "",
       type: "حقوق بضاعة أوردر",
@@ -590,7 +577,7 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
 
   // B. Returned orders as debit
   for (const o of returnedOrders) {
-    const prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
+    const prodPrice = Number(o.totalCOD || 0) - Number(o.shipPrice || 0);
     entries.push({
       date: o.retDate || o.updatedAt || o.createdAt || "",
       type: "مرتجع مخصوم",
