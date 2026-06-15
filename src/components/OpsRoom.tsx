@@ -19,7 +19,7 @@ import {
   ClipboardCheck,
   Package
 } from "lucide-react";
-import { getTodayDateStr, normalizeDateToYMD, toWA, toWAUrl } from "../utils";
+import { getTodayDateStr, normalizeDateToYMD, toWA, toWAUrl, getOrderWAMessage } from "../utils";
 import { motion, AnimatePresence } from "motion/react";
 import { Order } from "../types";
 
@@ -557,7 +557,7 @@ export default function OpsRoom({ token, role, username, orders, couriers, onRef
                                         <PhoneCall className="w-3 h-3 text-slate-400" />
                                       </a>
                                       <a 
-                                        href={toWAUrl(o.phone)}
+                                        href={toWAUrl(o.phone, getOrderWAMessage(o))}
                                         target="_blank" 
                                         rel="noreferrer"
                                         className="text-emerald-500 hover:text-emerald-400 shrink-0"

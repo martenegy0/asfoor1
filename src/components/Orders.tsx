@@ -1,6 +1,6 @@
 import React, { useState, useRef } from "react";
 import { Search, MapPin, Phone, MessageSquare, Check, Truck, User, Calendar, Trash2, Edit3, ShieldAlert, ArrowLeftRight, Download, FileSpreadsheet, Upload, Loader2, XCircle } from "lucide-react";
-import { apiCall, toWA, toWAUrl, getTodayDateStr, normalizeDateToYMD } from "../utils";
+import { apiCall, toWA, toWAUrl, getOrderWAMessage, getTodayDateStr, normalizeDateToYMD } from "../utils";
 
 interface OrdersProps {
   token: string;
@@ -1425,7 +1425,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                 <span>اتصال هاتفي</span>
               </a>
               <a
-                href={toWAUrl(o.phone)}
+                href={toWAUrl(o.phone, getOrderWAMessage(o))}
                 target="_blank"
                 rel="noreferrer"
                 className="flex items-center justify-center gap-1.5 py-2.5 hover:bg-emerald-600/10 text-emerald-400 bg-emerald-950/20 border border-emerald-950/30 rounded-xl text-xs font-black tracking-wide cursor-pointer transition-colors text-center font-sans"
@@ -2420,7 +2420,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                         <span>اتصال هاتفي</span>
                       </a>
                       <a
-                        href={toWAUrl(o.phone)}
+                        href={toWAUrl(o.phone, getOrderWAMessage(o))}
                         target="_blank"
                         rel="noreferrer"
                         className="flex items-center justify-center gap-1.5 py-2.5 hover:bg-emerald-600/10 text-emerald-400 bg-emerald-950/20 border border-emerald-950/30 rounded-xl text-xs font-black tracking-wide cursor-pointer transition-colors text-center font-sans"

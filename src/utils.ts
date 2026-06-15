@@ -9,18 +9,66 @@ export function fixPhoneJS(p: string | number): string {
   return pStr;
 }
 
+export function formatPhoneForWA(phone: string | number): string {
+  if (!phone) return "";
+  let digits = phone.toString().replace(/\D/g, "");
+  
+  // If starts with 0020 and has 14 digits, clean off the 00
+  if (digits.startsWith("0020") && digits.length === 14) {
+    return digits.substring(2);
+  }
+  else if (digits.startsWith("00") && digits.length > 10) {
+    digits = digits.substring(2);
+  }
+
+  // If starts with 20 and has 12 digits, perfect Egyptian WhatsApp number
+  if (digits.startsWith("20") && digits.length === 12) {
+    return digits;
+  }
+
+  // If starts with 0 and has 11 digits (like 01012345678), remove the 0 and prepend 20
+  if (digits.startsWith("0") && digits.length === 11) {
+    return "20" + digits.substring(1);
+  }
+
+  // If 10 digits and starts with 1 (like 1012345678)
+  if (!digits.startsWith("0") && digits.length === 10 && /^(10|11|12|15)/.test(digits)) {
+    return "20" + digits;
+  }
+
+  // General fallback
+  if (digits.startsWith("0")) {
+    digits = "20" + digits.substring(1);
+  } else if (!digits.startsWith("20")) {
+    digits = "20" + digits;
+  }
+  return digits;
+}
+
+export function getOrderWAMessage(o: any): string {
+  if (!o) return "";
+  const trackingCode = o.tracking || "—";
+  const productName = o.notes ? o.notes.toString().trim() : "بضاعة متنوعة";
+  const totalAmount = o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
+
+  return `* شركة أسفور ستور للشحن *
+مرحباً يا فندم، مع حضرتك مندوب شركة أسفور ستور. 
+لدينا شحنة قادمة لحضرتك اليوم تفاصيلها كالتالي:
+- كود الشحنة: ${trackingCode}
+- محتويات الشحنة: ${productName}
+- المبلغ المطلوب شامل الشحن: ${totalAmount} ج.م
+رجاء تأكيد التواجد للاستلام، شكراً لك.`;
+}
+
 export function toWA(phone: string): string {
-  const p = fixPhoneJS(phone);
-  if (!p) return "";
-  return "20" + p.substring(1);
+  return formatPhoneForWA(phone);
 }
 
 export function toWAUrl(phone: string | number, message: string = ""): string {
-  const p = fixPhoneJS(phone);
-  if (!p) return "#";
-  const number = p;
-  const encodedMsg = encodeURIComponent(message);
-  return `https://web.whatsapp.com/send?phone=2${number}&text=${encodedMsg}`;
+  const cleanPhone = formatPhoneForWA(phone);
+  if (!cleanPhone) return "#";
+  const encodedText = encodeURIComponent(message);
+  return `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encodedText}`;
 }
 
 export function validatePhone(ph: string): { valid: boolean; msg: string } {
