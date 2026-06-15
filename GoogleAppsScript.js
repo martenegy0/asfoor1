@@ -794,15 +794,9 @@ function updateStatus(sheets, d) {
       desc: `عمولة تسليم الأوردر والتحصيل للأوردر: ${tracking}`
     });
 
-    // جلب وحساب القيمة المستلمة (COD) وترحيلها كعهدة معلقة حتى التوريد الفعلي
-    appendToSheet(sheets.cashbox, ["date", "desc", "type", "amount", "ref", "addedBy"], {
-      date: now(),
-      desc: `تحصيل أوردر مسلّم: ${tracking} (المندوب: ${order.courier})`,
-      type: "تحصيل مندوب",
-      amount: Number(order.totalCOD),
-      ref: tracking,
-      addedBy: "النظام التلقائي"
-    });
+    // يتم ترحيلها كعهدة معلقة حتى التوريد والإنهاء الفعلي يدوياً من المشرف
+    // تم إلغاء التسجيل التلقائي هنا تماشيًا مع فصل كاش الشارع
+    // appendToSheet(sheets.cashbox, ["date", "desc", "type", "amount", "ref", "addedBy"], { ... });
   }
 
   // إتمام الحفظ والتعديل
@@ -1126,14 +1120,8 @@ function updateOrdersStatusBulk(sheets, d) {
           });
 
           const totalCOD = headers.indexOf("totalCOD") !== -1 ? Number(data[r][headers.indexOf("totalCOD")] || 0) : 0;
-          appendToSheet(sheets.cashbox, ["date", "desc", "type", "amount", "ref", "addedBy"], {
-            date: now(),
-            desc: "تحصيل أوردر جماعي (الدفعة المجمعة): " + tr,
-            type: "تحصيل مندوب",
-            amount: totalCOD,
-            ref: tr,
-            addedBy: currentUser || "النظام الجماعي"
-          });
+          // تم إلغاء التسجيل التلقائي هنا لمطابقة فصل كاش الشارع
+          // appendToSheet(sheets.cashbox, ["date", "desc", "type", "amount", "ref", "addedBy"], { ... });
 
           const prodPrice = headers.indexOf("prodPrice") !== -1 ? Number(data[r][headers.indexOf("prodPrice")] || 0) : 0;
           const shipPrice = headers.indexOf("shipPrice") !== -1 ? Number(data[r][headers.indexOf("shipPrice")] || 0) : 0;

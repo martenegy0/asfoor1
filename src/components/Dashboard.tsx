@@ -82,7 +82,9 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
         todayCOD: 0,
         profit: 0,
         remainingStock: 0,
-        remainingStockValue: 0
+        remainingStockValue: 0,
+        marketPendingCount: 0,
+        marketPendingValue: 0
       };
 
       const courierStats: { [name: string]: { total: number; delivered: number; returned: number; cod: number } } = {};
@@ -114,6 +116,20 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
         if (!isDelivered && !isHandedOverToSupplier && statusStr !== "مؤرشف" && !o.isArchived) {
           dStats.remainingStock++;
           dStats.remainingStockValue += (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
+        }
+
+        // Calculate dynamic Backlog / الباقي للتشغيل: any active/pending order in market/warehouse not yet fully completed, closed or returned
+        const isTerminalForBacklog = [
+          "تم التسليم",
+          "تم تسليم المرتجع للمورد",
+          "مرتجع تم تسليمه للمورد",
+          "مرتجع بالمستودع",
+          "مؤرشف"
+        ].includes(statusStr) || o.isArchived || o.isClosed;
+
+        if (!isTerminalForBacklog) {
+          dStats.marketPendingCount++;
+          dStats.marketPendingValue += Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0)));
         }
 
         if (o.isClosed) {
@@ -261,7 +277,7 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
     );
   }
 
-  const s = stats || { total: 0, todayTotal: 0, delivered: 0, returned: 0, pending: 0, active: 0, assignedPending: 0, totalCOD: 0, todayCOD: 0, profit: 0, rate: 0, remainingStock: 0, remainingStockValue: 0, inOfficeStock: 0 };
+  const s = stats || { total: 0, todayTotal: 0, delivered: 0, returned: 0, pending: 0, active: 0, assignedPending: 0, totalCOD: 0, todayCOD: 0, profit: 0, rate: 0, remainingStock: 0, remainingStockValue: 0, inOfficeStock: 0, marketPendingCount: 0, marketPendingValue: 0 };
 
   const remainingStock = s.remainingStock;
 
@@ -395,9 +411,9 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
           <h3 className="text-xs font-black text-slate-300 flex items-center gap-1.5 uppercase tracking-wider">
             <span>⚙️ لوحة تشغيل اليومية الحالية (لجميع الأقسام)</span>
           </h3>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             {/* Today's Added Orders */}
-            <div className="bg-slate-900 border border-white/6 rounded-2xl p-6 text-center relative overflow-hidden">
+            <div className="bg-slate-900 border border-white/6 rounded-2xl p-6 text-center relative overflow-hidden flex flex-col justify-between min-h-[143px]">
               <div className="absolute top-2 left-2 text-amber-500/10">
                 <Calendar size={44} />
               </div>
@@ -407,7 +423,7 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
             </div>
 
             {/* Remaining Warehouse Stock Card */}
-            <div className="bg-slate-900 border border-white/6 rounded-2xl p-6 text-center relative overflow-hidden flex flex-col justify-between min-h-[140px]">
+            <div className="bg-slate-900 border border-white/6 rounded-2xl p-6 text-center relative overflow-hidden flex flex-col justify-between min-h-[143px]">
               <div className="absolute top-2 left-2 text-orange-500/10">
                 <Package size={44} />
               </div>
@@ -422,13 +438,28 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
             </div>
 
             {/* Assigned Pending Card */}
-            <div className="bg-slate-900 border border-white/6 rounded-2xl p-6 text-center relative overflow-hidden" id="assigned-pending-metric-card">
+            <div className="bg-slate-900 border border-white/6 rounded-2xl p-6 text-center relative overflow-hidden flex flex-col justify-between min-h-[143px]" id="assigned-pending-metric-card">
               <div className="absolute top-2 left-2 text-blue-500/15">
                 <Truck size={44} className="rotate-12" />
               </div>
               <div className="text-3xl font-black text-blue-400 font-mono">{assignedPending}</div>
               <div className="text-[11px] font-black text-slate-400 mt-1 uppercase tracking-wider font-sans">شحنات قيد التوصيل بالشارع حالياً</div>
               <p className="text-[10px] text-slate-500 font-bold mt-1">المكلفة مع المناديب ولم تُقفل بعد</p>
+            </div>
+
+            {/* Crucial Backlog Widget (الباقي للتشغيل) */}
+            <div className="bg-slate-900 border border-white/6 rounded-2xl p-6 text-center relative overflow-hidden flex flex-col justify-between min-h-[143px]" id="backlog-widget-card">
+              <div className="absolute top-2 left-2 text-violet-500/15">
+                <RefreshCw size={44} className="text-violet-500/20" />
+              </div>
+              <div>
+                <div className="text-3xl font-black text-violet-400 font-mono">{s.marketPendingCount} <span className="text-xs font-bold text-slate-400">طلب</span></div>
+                <div className="text-[11px] font-black text-slate-100 mt-1 uppercase tracking-wider">الباقي للتشغيل (المعلقات بالسوق)</div>
+              </div>
+              <div className="border-t border-white/5 pt-2 mt-2 space-y-0.5">
+                <div className="text-xs font-black text-violet-300 font-mono">{(s.marketPendingValue || 0).toLocaleString("ar")} ج.م</div>
+                <div className="text-[9px] font-extrabold text-slate-450">القيمة المالية الإجمالية المتوقعة (COD + الشحن)</div>
+              </div>
             </div>
           </div>
 

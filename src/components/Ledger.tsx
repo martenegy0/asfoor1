@@ -866,17 +866,17 @@ export default function Ledger({ token, role, user }: LedgerProps) {
                   <div className="text-[9px] text-emerald-500">إجمالي التوريدات المسجلة بالخزنة</div>
                 </div>
 
-                <div className={`p-4 rounded-xl space-y-1 border ${
+                 <div className={`p-4 rounded-xl space-y-1 border ${
                   (courierSummary.deficit || 0) > 0 
                   ? "bg-rose-950/15 border-rose-900/40" 
                   : "bg-emerald-950/10 border-emerald-900/30"
                 }`}>
-                  <div className="text-[10px] font-bold text-slate-200">عجز المندوب المتبقي (العهدة المعلقة)</div>
+                  <div className="text-[10px] font-bold text-slate-200">العهدة المعلقة مع المندوب (Courier Custody)</div>
                   <div className={`text-xl font-black font-mono ${(courierSummary.deficit || 0) > 0 ? "text-rose-450" : "text-emerald-400"}`}>
                     {Number(courierSummary.deficit || 0).toLocaleString("ar")} <span className="text-xs font-medium">ج.م</span>
                   </div>
                   <div className="text-[9px] text-slate-400 leading-none">
-                    {(courierSummary.deficit || 0) > 0 ? "⚠️ توجد عهدة مالية معلقة برقبته للجهة" : "✅ ذمة المندوب خالية تماماً"}
+                    {(courierSummary.deficit || 0) > 0 ? "⚠️ توجد عهدة مالية في الشارع لم تُسلم بعد للشركة" : "✅ ذمة المندوب خالية تماماً من العهدة"}
                   </div>
                 </div>
               </div>
@@ -885,7 +885,7 @@ export default function Ledger({ token, role, user }: LedgerProps) {
               {isFinancial && (
                 <div className="bg-slate-950 p-4 rounded-xl border border-white/4 space-y-4">
                   <h4 className="text-[11px] font-black text-emerald-400 flex items-center gap-1.5 border-b border-white/6 pb-2">
-                     📥 تصفية الحساب اليومية الصارمة وإخلاء العهدة لـ {selectedCourier}
+                     🤝 بوابة التسوية والمطابقة وجهاً لوجه لـ {selectedCourier}
                   </h4>
 
                   {/* Strict Settlement Verification Box */}
@@ -969,12 +969,12 @@ export default function Ledger({ token, role, user }: LedgerProps) {
                       />
                     </div>
 
-                    <button
+                     <button
                       type="submit"
                       disabled={submittingLedger}
                       className="w-full bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-black text-xs py-2.5 rounded-lg cursor-pointer transition-colors disabled:opacity-50"
                     >
-                      تصفية وتوريد كاش المندوب
+                      🤝 تسوية حساب المندوب وإغلاق اليوم
                     </button>
                   </form>
                 </div>

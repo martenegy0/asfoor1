@@ -2085,15 +2085,8 @@ app.post("/api", async (req: Request, res: Response) => {
               desc: `عمولة تسليم الأوردر والتحصيل للأوردر: ${order.tracking}`
             });
 
-            // Automatically register the delivery in cashbox as physical collection pending handover
-            db.cashbox.push({
-              date: now(),
-              desc: `تحصيل أوردر مسلّم: ${order.tracking} (المندوب: ${order.courier})`,
-              type: "تحصيل مندوب",
-              amount: Number(order.totalCOD),
-              ref: order.tracking,
-              addedBy: "النظام التلقائي"
-            });
+            // PREVENT AUTOMATIC COMPOUNDING IN CENTRAL CASHBOX - Held under Courier Custody (العهدة المعلقة مع المندوب)
+            // It will only enter the cashbox when the Supervisor settles the courier's account from the Ledger page.
 
             // Credit the Supplier Ledger under the formula: Product_Price - Shipping_Price
             const dupLedger = db.supplierLedger.find((l: any) => l.tracking === order.tracking && (l.type === "أوردر مستلم" || l.type === "تسليم"));
@@ -2437,15 +2430,7 @@ app.post("/api", async (req: Request, res: Response) => {
                 desc: `عمولة تسليم الأوردر جماعياً: ${order.tracking}`
               });
 
-              // Add to Cashbox
-              db.cashbox.push({
-                date: now(),
-                desc: `تحصيل أوردر جماعي: ${order.tracking}`,
-                type: "تحصيل مندوب",
-                amount: Number(order.totalCOD),
-                ref: order.tracking,
-                addedBy: "النظام الجماعي"
-              });
+              // Held under Courier Custody (العهدة المعلقة مع المندوب) - No automatic central cashbox entry on bulk delivery.
 
               // Credit Supplier Ledger if not already done
               const dupLedger = db.supplierLedger.find((l: any) => l.tracking === order.tracking && (l.type === "أوردر مستلم" || l.type === "تسليم"));
@@ -2614,15 +2599,7 @@ app.post("/api", async (req: Request, res: Response) => {
                 desc: `عمولة تسليم الأوردر جماعياً (الدفعة المجمعة): ${order.tracking}`
               });
 
-              // Add to Cashbox
-              db.cashbox.push({
-                date: now(),
-                desc: `تحصيل أوردر جماعي (الدفعة المجمعة): ${order.tracking}`,
-                type: "تحصيل مندوب",
-                amount: Number(order.totalCOD),
-                ref: order.tracking,
-                addedBy: "النظام الجماعي"
-              });
+              // Held under Courier Custody (العهدة المعلقة مع المندوب) - No automatic central cashbox entry on bulk delivery.
 
               // Credit Supplier Ledger if not already done
               const dupLedger = db.supplierLedger.find((l: any) => l.tracking === order.tracking && (l.type === "أوردر مستلم" || l.type === "تسليم"));
