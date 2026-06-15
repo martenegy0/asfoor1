@@ -21,6 +21,7 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
   const [allOrders, setAllOrders] = useState<any[]>([]);
+  const [dashboardSubTab, setDashboardSubTab] = useState<"daily" | "owner">("daily");
 
   const [settling, setSettling] = useState(false);
   const [settleSuccess, setSettleSuccess] = useState(false);
@@ -96,7 +97,21 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
           dStats.todayTotal++; 
         }
 
-        if (o.status === "بالمستودع") {
+        const statusStr = (o.status || "").toString().trim();
+        const deliveredToSupplierPatterns = [
+          "تم تسليم المرتجع للمورد",
+          "مرتجع تم تسليمه للمورد",
+          "التسليم للمورد",
+          "تم تسليم المرتجع للمورد وتصفية حسابه",
+          "تسليم المرتجع للمورد",
+          "مرتجع بالمستودع",
+          "بالمستودع"
+        ];
+        const isHandedOverToSupplier = deliveredToSupplierPatterns.some(p => statusStr.includes(p));
+        const isDelivered = statusStr === "تم التسليم";
+
+        // Remaining warehouse stock: any active order that is NOT yet delivered to customer and NOT yet returned to supplier
+        if (!isDelivered && !isHandedOverToSupplier && statusStr !== "مؤرشف" && !o.isArchived) {
           dStats.remainingStock++;
           dStats.remainingStockValue += (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
         }
@@ -107,7 +122,6 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
 
         dStats.total++;
 
-        const statusStr = (o.status || "").toString().trim();
         const deliveredPatterns = [
           "تم تسليم المرتجع للمورد",
           "مرتجع تم تسليمه للمورد",
@@ -249,7 +263,7 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
 
   const s = stats || { total: 0, todayTotal: 0, delivered: 0, returned: 0, pending: 0, active: 0, assignedPending: 0, totalCOD: 0, todayCOD: 0, profit: 0, rate: 0, remainingStock: 0, remainingStockValue: 0, inOfficeStock: 0 };
 
-  const remainingStock = Math.max(0, s.remainingStock || (s.total - s.delivered - s.returned));
+  const remainingStock = s.remainingStock;
 
   const assignedPending = s.assignedPending !== undefined 
     ? s.assignedPending 
@@ -287,7 +301,7 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
   const shippingCostVal = todDelivered.reduce((sum, o) => sum + Number(o.shipPrice || o.shipCost || 25), 0);
 
   const handleArchiveSettle = async () => {
-    if (!window.confirm("حاسم: هل أنت متأكد من تصفية خزنة وإقفال اليومية؟\n\n سيؤدي هذا لتصفير كاش التحصيل اليومي ووسم شحنات اليوم المنتهية بالإقفال النهائي وترحيلها للأرشيف التاريخي المركزي وتصفير لوجة الموظفين.")) {
+    if (!window.confirm("حاسم: هل أنت متأكد من تصفية خزنة وإقفال اليومية؟\n\n سيؤدي هذا لتصفير كاش التحصيل اليومي وإقفال اليومية في الحسابات وترحيل الأرقام إلى شيت التحصيلات المركزية.")) {
       return;
     }
     setSettling(true);
@@ -304,21 +318,6 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
       const res = await apiCall("addDailyClosing", token, payload);
       if (res && res.ok) {
         setSettleSuccess(true);
-        // Mark orders in local state
-        if (setOrders) {
-          setOrders((prev: any[]) => prev.map(o => {
-            const oDelivDate = o.delivDate ? o.delivDate.substring(0, 10) : "";
-            const oRetDate = o.retDate ? o.retDate.substring(0, 10) : "";
-            const isClosedStatus = ["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status);
-            if (o.status === "تم التسليم" && oDelivDate <= todayStr) {
-              return { ...o, isClosed: true };
-            }
-            if (isClosedStatus && o.status !== "تم التسليم" && oRetDate <= todayStr) {
-              return { ...o, isClosed: true };
-            }
-            return o;
-          }));
-        }
         if (onRefresh) {
           onRefresh();
         } else {
@@ -338,8 +337,34 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
 
   return (
     <div className="p-4 space-y-6 select-none font-sans text-right">
-      {/* 💼 Sleek Admin Navigation Ribbon */}
+      {/* 🛡️ Owner & Central Management Navigation Tabs */}
       {isManagerOrAccountant && (
+        <div className="flex border-b border-white/10 gap-2 pb-0 mb-4 font-sans justify-start">
+          <button
+            onClick={() => setDashboardSubTab("daily")}
+            className={`pb-2 px-4 text-xs font-black cursor-pointer transition-all border-b-2 outline-none ${
+              dashboardSubTab === "daily"
+                ? "text-amber-500 border-amber-500"
+                : "text-slate-400 border-transparent hover:text-slate-200"
+            }`}
+          >
+            ⚙️ لوحة التشغيل اليومية (لجميع الأقسام)
+          </button>
+          <button
+            onClick={() => setDashboardSubTab("owner")}
+            className={`pb-2 px-4 text-xs font-black cursor-pointer transition-all border-b-2 outline-none ${
+              dashboardSubTab === "owner"
+                ? "text-amber-500 border-amber-500 font-bold"
+                : "text-slate-400 border-transparent hover:text-slate-200"
+            }`}
+          >
+            🔒 لوحة المالك والمالية التراكمية (Owner Dashboard)
+          </button>
+        </div>
+      )}
+
+      {/* 💼 Sleek Admin Navigation Ribbon */}
+      {isManagerOrAccountant && dashboardSubTab === "owner" && (
         <div className="bg-slate-900/80 border border-amber-500/15 rounded-2xl p-4 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-xl">
           <div className="flex items-center gap-3">
             <span className="p-2 bg-amber-500/10 text-amber-500 rounded-xl">
@@ -362,52 +387,62 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
           </button>
         </div>
       )}
-      {/* 🟢 لوحة تشغيل اليومية الحالية (متاحة لجميع الأقسام) */}
-      <div className="space-y-3">
-        <h3 className="text-xs font-black text-slate-300 flex items-center gap-1.5 uppercase tracking-wider">
-          <span>⚙️ لوحة تحكم تشغيل اليومية الحالية (لجميع الأقسام)</span>
-        </h3>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {/* Today's Added Orders */}
-          <div className="bg-slate-900 border border-white/6 rounded-2xl p-6 text-center relative overflow-hidden">
-            <div className="absolute top-2 left-2 text-amber-500/10">
-              <Calendar size={44} />
+
+      {/* Render based on selected Tab */}
+      {(!isManagerOrAccountant || dashboardSubTab === "daily") ? (
+        /* 🟢 لوحة تشغيل اليومية الحالية (متاحة لجميع الأقسام) */
+        <div className="space-y-3">
+          <h3 className="text-xs font-black text-slate-300 flex items-center gap-1.5 uppercase tracking-wider">
+            <span>⚙️ لوحة تشغيل اليومية الحالية (لجميع الأقسام)</span>
+          </h3>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {/* Today's Added Orders */}
+            <div className="bg-slate-900 border border-white/6 rounded-2xl p-6 text-center relative overflow-hidden">
+              <div className="absolute top-2 left-2 text-amber-500/10">
+                <Calendar size={44} />
+              </div>
+              <div className="text-3xl font-black text-amber-400 font-mono">{s.todayTotal}</div>
+              <div className="text-[11px] font-black text-slate-400 mt-1 uppercase tracking-wider">تشغيل اليوم (الأوردرات المضافة اليومية)</div>
+              <p className="text-[10px] text-slate-500 font-bold mt-1">عدد الطلبات التي سُجلت بالملفات اليوم</p>
             </div>
-            <div className="text-3xl font-black text-amber-400 font-mono">{s.todayTotal}</div>
-            <div className="text-[11px] font-black text-slate-400 mt-1 uppercase tracking-wider">تشغيل اليوم (الأوردرات المضافة اليومية)</div>
-            <p className="text-[10px] text-slate-500 font-bold mt-1">عدد الطلبات التي سُجلت بالملفات اليوم</p>
+
+            {/* Remaining Warehouse Stock Card */}
+            <div className="bg-slate-900 border border-white/6 rounded-2xl p-6 text-center relative overflow-hidden flex flex-col justify-between min-h-[140px]">
+              <div className="absolute top-2 left-2 text-orange-500/10">
+                <Package size={44} />
+              </div>
+              <div>
+                <div className="text-3xl font-black text-orange-500 font-mono">{remainingStock} <span className="text-xs font-bold text-slate-400">طلب</span></div>
+                <div className="text-[11px] font-black text-slate-100 mt-1 uppercase tracking-wider">المخزون المتبقي بالمستودع</div>
+              </div>
+              <div className="border-t border-white/5 pt-2 mt-2 space-y-0.5">
+                <div className="text-xs font-black text-emerald-400 font-mono">{(s.remainingStockValue || 0).toLocaleString("ar")} ج.م</div>
+                <div className="text-[9px] font-extrabold text-slate-400">القيمة الفورية للبضائع المتواجدة بالمخزن</div>
+              </div>
+            </div>
+
+            {/* Assigned Pending Card */}
+            <div className="bg-slate-900 border border-white/6 rounded-2xl p-6 text-center relative overflow-hidden" id="assigned-pending-metric-card">
+              <div className="absolute top-2 left-2 text-blue-500/15">
+                <Truck size={44} className="rotate-12" />
+              </div>
+              <div className="text-3xl font-black text-blue-400 font-mono">{assignedPending}</div>
+              <div className="text-[11px] font-black text-slate-400 mt-1 uppercase tracking-wider font-sans">شحنات قيد التوصيل بالشارع حالياً</div>
+              <p className="text-[10px] text-slate-500 font-bold mt-1">المكلفة مع المناديب ولم تُقفل بعد</p>
+            </div>
           </div>
 
-          {/* Remaining Warehouse Stock Card */}
-          <div className="bg-slate-900 border border-white/6 rounded-2xl p-6 text-center relative overflow-hidden flex flex-col justify-between min-h-[140px]">
-            <div className="absolute top-2 left-2 text-orange-500/10">
-              <Package size={44} />
+          {!isManagerOrAccountant && (
+            <div className="p-4 mt-4 bg-orange-950/10 border border-orange-900/15 rounded-xl text-center">
+              <p className="text-[10px] font-black text-orange-400">
+                🔒 تم حجب وإخفاء التحصيلات التراكمية التاريخية ومؤشرات الإدارة والمالية الكلية تلقائياً لدواعي الأمان. الأرقام تظهر للمالك والمدراء فقط من خلال لوحة المالك المخصصة.
+              </p>
             </div>
-            <div>
-              <div className="text-3xl font-black text-orange-500 font-mono">{s.remainingStock} <span className="text-xs font-bold text-slate-400">طلب</span></div>
-              <div className="text-[11px] font-black text-slate-100 mt-1 uppercase tracking-wider">المخزون المتبقي بالمستودع</div>
-            </div>
-            <div className="border-t border-white/5 pt-2 mt-2 space-y-0.5">
-              <div className="text-xs font-black text-emerald-400 font-mono">{(s.remainingStockValue || 0).toLocaleString("ar")} ج.م</div>
-              <div className="text-[9px] font-extrabold text-slate-400">القيمة الفورية للبضائع المتواجدة بالمخزن</div>
-            </div>
-          </div>
-
-          {/* Assigned Pending Card */}
-          <div className="bg-slate-900 border border-white/6 rounded-2xl p-6 text-center relative overflow-hidden" id="assigned-pending-metric-card">
-            <div className="absolute top-2 left-2 text-blue-500/15">
-              <Truck size={44} className="rotate-12" />
-            </div>
-            <div className="text-3xl font-black text-blue-400 font-mono">{assignedPending}</div>
-            <div className="text-[11px] font-black text-slate-400 mt-1 uppercase tracking-wider font-sans">شحنات قيد التوصيل بالشارع حالياً</div>
-            <p className="text-[10px] text-slate-500 font-bold mt-1">المكلفة مع المناديب ولم تُقفل بعد</p>
-          </div>
+          )}
         </div>
-      </div>
-
-      {/* 🔒 لوحة الإدارة المركزية والأرشيف التراكمي المالي (مخفية ومؤمنة تماماً للمالك والمدراء فقط) */}
-      {isManagerOrAccountant ? (
-        <div className="space-y-4 pt-4 border-t border-white/5">
+      ) : (
+        /* 🔒 لوحة الإدارة المركزية والأرشيف التراكمي المالي (مخفية ومؤمنة تماماً للمالك والمدراء فقط) */
+        <div className="space-y-4 pt-2">
           <div className="flex items-center gap-2 border-r-2 border-amber-500 pr-2">
             <h3 className="text-xs font-black text-amber-500 tracking-wider">
               🔒 لوحة الإدارة المركزية وحسابات التراكمية (صلاحيات المالك والمحاسبة فقط)
@@ -467,7 +502,7 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
                 {(s.totalCOD || 0).toLocaleString("ar")}
               </div>
               <div className="text-[10px] font-black text-slate-400 mt-1 uppercase tracking-wider">التحصيل التراكمي</div>
-              <div className="text-[8px] text-slate-500 font-bold mt-1">شامل التحميلات والمنتجات المسلّمة</div>
+              <div className="text-[8px] text-slate-550 text-slate-400 font-bold mt-1">شامل التحميلات والمنتجات المسلّمة</div>
             </div>
           </div>
 
@@ -485,11 +520,11 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
             </div>
 
             {/* High Performers Courier */}
-            <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 flex items-center justify-between">
+            <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 flex items-center justify-between font-sans">
               <div className="flex items-center gap-3">
                 <span className="text-2xl ring-4 ring-purple-900/10 p-2.5 rounded-xl bg-purple-950/20">🛵</span>
                 <div>
-                  <div className="text-[10px] text-slate-550 font-bold">أفضل مندوب تسليم</div>
+                  <div className="text-[10px] text-slate-400 font-bold">أفضل مندوب تسليم</div>
                   <div className="text-sm font-black text-purple-400 mt-0.5">{bestCourier}</div>
                 </div>
               </div>
@@ -499,11 +534,11 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
             </div>
 
             {/* High Performers Supplier */}
-            <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 flex items-center justify-between">
+            <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 flex items-center justify-between font-sans">
               <div className="flex items-center gap-3">
                 <span className="text-2xl ring-4 ring-amber-900/10 p-2.5 rounded-xl bg-amber-950/20">📦</span>
                 <div>
-                  <div className="text-[10px] text-slate-550 font-bold">أفضل مورد للشركة</div>
+                  <div className="text-[10px] text-slate-400 font-bold">أفضل مورد للشركة</div>
                   <div className="text-sm font-black text-amber-400 mt-0.5">{bestSupplier}</div>
                 </div>
               </div>
@@ -512,12 +547,6 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
               </div>
             </div>
           </div>
-        </div>
-      ) : (
-        <div className="p-4 bg-orange-950/10 border border-orange-900/15 rounded-xl text-center">
-          <p className="text-[10px] font-black text-orange-450 text-orange-400">
-            🔒 تم حجب وإخفاء التحصيلات التراكمية التاريخية ومؤشرات الإدارة والمالية الكلية تلقائياً لدواعي الأمان. الأرقام تظهر للمالك والمدراء فقط.
-          </p>
         </div>
       )}
 

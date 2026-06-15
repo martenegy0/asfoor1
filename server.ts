@@ -1310,19 +1310,6 @@ app.post("/api", async (req: Request, res: Response) => {
           createdAt: now()
         });
 
-        // 2.5 Mark as archived/closed so that daily metrics are reset
-        if (db.orders) {
-          for (const o of db.orders) {
-            const orderDelivDate = o.delivDate ? o.delivDate.substring(0, 10) : "";
-            const orderRetDate = o.retDate ? o.retDate.substring(0, 10) : "";
-            const isDelivClosed = o.status === "تم التسليم" && orderDelivDate <= date;
-            const isRetClosed = ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status) && orderRetDate <= date;
-            if (isDelivClosed || isRetClosed) {
-              o.isClosed = true;
-            }
-          }
-        }
-
         // Add to audit logs optimistically
         if (!db.auditLog) db.auditLog = [];
         db.auditLog.push({
@@ -1764,6 +1751,7 @@ app.post("/api", async (req: Request, res: Response) => {
            updatedAt: tNow,
            orderDate: tod(),
            supplier: currentRole === "مورد" ? currentUser : (o.supplier || ""),
+           prodType: o.prodType || "",
            customer: o.customer || "",
            phone: phoneClean,
            phone2: fixPhone(o.phone2 || ""),
@@ -1897,6 +1885,7 @@ app.post("/api", async (req: Request, res: Response) => {
             orderDate: tod(),
             supplier: orderSupplier,
             customer: item.customer || "",
+            prodType: item.prodType || "",
             phone: ph,
             phone2: "",
             gov: item.gov || "",
@@ -2171,6 +2160,7 @@ app.post("/api", async (req: Request, res: Response) => {
         order.gov = o.gov !== undefined ? o.gov : order.gov;
         order.region = o.region !== undefined ? o.region : order.region;
         order.address = o.address !== undefined ? o.address : order.address;
+        order.prodType = o.prodType !== undefined ? o.prodType : order.prodType;
         order.notes = o.notes !== undefined ? o.notes : order.notes;
 
         if (o.prodPrice !== undefined || o.shipPrice !== undefined) {
@@ -2791,7 +2781,7 @@ app.post("/api", async (req: Request, res: Response) => {
         const bestSupplierObj = [...formattedSuppliers].sort((a, b) => b.delivered - a.delivered)[0];
 
         const rate = stats.total ? Math.round((stats.delivered / stats.total) * 100) : 0;
-        const remainingStock = ordersList.filter((o: any) => !["تم التسليم", "خارج مع المندوب", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "التسليم للمورد"].includes(o.status) && !o.isClosed).length;
+        const remainingStock = ordersList.filter((o: any) => !["تم التسليم", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "التسليم للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "بالمستودع"].includes(o.status)).length;
         const inOfficeStock = stats.total - (stats.active + stats.returned + stats.returnedDeliveredToSupplier);
 
         return ok(res, {

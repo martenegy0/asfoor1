@@ -236,6 +236,7 @@ export default function Inputs({ token, role, user, onSuccess }: InputsProps) {
           prodPrice: resolvedProd,
           shipPrice: resolvedShip,
           totalCOD: resolvedTotal,
+          prodType: obj["نوع المنتج"] || obj["المنتج"] || obj["الصنف"] || obj["صنف"] || obj["الأصناف"] || obj["المحتويات"] || obj["المحتوى"] || obj["product"] || obj["prodType"] || obj["type"] || "",
           notes: obj["ملاحظات"] || obj["الملاحظات"] || obj["notes"] || "",
           supplier: obj["المورد"] || obj["اسم المورد"] || obj["مورد"] || obj["merchant"] || obj["supplier"] || vals[6] || ""
         });

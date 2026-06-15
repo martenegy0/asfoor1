@@ -47,17 +47,18 @@ export function formatPhoneForWA(phone: string | number): string {
 
 export function getOrderWAMessage(o: any): string {
   if (!o) return "";
-  const trackingCode = o.tracking || "—";
-  const productName = o.notes ? o.notes.toString().trim() : "بضاعة متنوعة";
+  const productName = (o.prodType && o.prodType.toString().trim()) || (o.product && o.product.toString().trim()) || "بضاعة متنوعة";
   const totalAmount = o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
 
-  return `* شركة أسفور ستور للشحن *
-مرحباً يا فندم، مع حضرتك مندوب شركة أسفور ستور. 
-لدينا شحنة قادمة لحضرتك اليوم تفاصيلها كالتالي:
-- كود الشحنة: ${trackingCode}
-- محتويات الشحنة: ${productName}
-- المبلغ المطلوب شامل الشحن: ${totalAmount} ج.م
-رجاء تأكيد التواجد للاستلام، شكراً لك.`;
+  return `🚨 *تأكيد استلام شحنة من عصفور* 🚨
+
+مساء الخير يا فندم، مع حضرتك مندوب شركة *Asfoor Store* للشحن والتوصيل.
+معايا لحضرتك أوردر جاهز للتسليم اليوم، تفاصيله كالتالي:
+
+📦 *محتويات الشحنة:* ${productName}
+💵 *المبلغ المطلوب شامل الشحن:* ${totalAmount} ج.م
+
+برجاء الرد على هذه الرسالة الآن بكلمة *( تأكيد )* وتحديد الوقت المناسب لحضرتك لضمان وصول المندوب إليك سريعاً. شكراً لتجاوبك معنا!`;
 }
 
 export function toWA(phone: string): string {

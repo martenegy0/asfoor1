@@ -215,7 +215,7 @@ function initSheets() {
     orders: [
       "tracking", "createdAt", "updatedAt", "orderDate", "supplier", "customer", 
       "phone", "phone2", "gov", "region", "address", "prodPrice", "shipPrice", 
-      "totalCOD", "shipCost", "courier", "status", "notes", "delivDate", "retDate", 
+      "totalCOD", "shipCost", "courier", "status", "prodType", "notes", "delivDate", "retDate", 
       "addedBy", "commission", "returnShippingType", "returnQueueStatus", "returnQueueAgent"
     ],
     expenses: ["id", "date", "amount", "desc", "category", "addedBy"],
@@ -458,6 +458,7 @@ function addOrder(sheets, d) {
     shipCost: sPrice,
     courier: "", // Empty during creation
     status: o.status || "جديد",
+    prodType: o.prodType || "",
     notes: o.notes || "",
     delivDate: "",
     retDate: "",
@@ -592,6 +593,7 @@ function addBulk(sheets, d) {
         shipCost: sPrice,
         courier: "",
         status: o.status || "جديد",
+        prodType: o.prodType || "",
         notes: o.notes || "",
         delivDate: "",
         retDate: "",

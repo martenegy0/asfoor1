@@ -457,7 +457,22 @@ export default function Orders({ token, role, username, orders, setOrders, couri
           if (!isRet) return false;
         }
 
-        if (activeFilter !== "all" && o.status !== activeFilter) return false;
+        // Logistic Status Categorization & Fallback mapping
+        if (activeFilter !== "all") {
+          const status = (o.status || "").toString().trim();
+          if (activeFilter === "جديد" && status !== "جديد") return false;
+          if (activeFilter === "مسند" && !["تم الإسناد", "مسند", "تم الاسناد"].includes(status)) return false;
+          if (activeFilter === "خارج للتسليم" && !["خارج مع المندوب", "خارج للتسليم", "خارج للتوصيل", "مع المندوب"].includes(status)) return false;
+          if (activeFilter === "تم التسليم" && !["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(status)) return false;
+          if (activeFilter === "العميل رد وجاري التسليم" && !["تم رد العميل وجاري التنسيق", "العميل رد وجاري التسليم", "تم رد العميل وجاري التنسيق"].includes(status) && !status.includes("رد وجاري")) return false;
+          if (activeFilter === "مرتجع بالمستودع" && !["مرتجع بالمستودع", "مرتجع", "مرتجع جديد", "مرتجع جاري تسليمه للمكتب"].includes(status)) return false;
+          if (activeFilter === "تم تسليم المرتجع للمورد" && !["تم تسليم المرتجع للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "جاري الرجوع للمورد"].includes(status)) return false;
+          
+          // Non-standard fallback filter matching
+          if (!["جديد", "مسند", "خارج للتسليم", "تم التسليم", "العميل رد وجاري التسليم", "مرتجع بالمستودع", "تم تسليم المرتجع للمورد"].includes(activeFilter)) {
+            if (status !== activeFilter) return false;
+          }
+        }
 
         // Dynamic Date Filter - Filter by orderDate (or fallback to createdAt) matching selectedDateYMD
         if (selectedDate !== "all") {
@@ -469,15 +484,20 @@ export default function Orders({ token, role, username, orders, setOrders, couri
           const q = search.toLowerCase().trim();
           return [
             o.tracking,
+            o.customer,
             o.supplier,
             o.courier,
-            o.customer,
             o.phone,
             o.gov,
             o.region,
             o.address,
             o.notes,
-            o.returnQueueStatus
+            o.returnQueueStatus,
+            o.customerId,
+            o.customerCode,
+            o.clientCode,
+            o.customer_id,
+            o.clientId
           ].some(field => field && field.toString().toLowerCase().includes(q));
         }
         return true;
@@ -720,6 +740,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       prodPrice: Number(editOrder.prodPrice),
       shipPrice: Number(editOrder.shipPrice),
       courier: editOrder.courier,
+      prodType: editOrder.prodType || "",
       notes: editOrder.notes,
       updatedAt: nowEgyptStr,
     };
@@ -1488,12 +1509,12 @@ export default function Orders({ token, role, username, orders, setOrders, couri
         {[
           { key: "all", label: "الكل" },
           { key: "جديد", label: "🆕 جديد" },
-          { key: "تم الإسناد", label: "📋 مُسند" },
-          { key: "خارج مع المندوب", label: "🚚 خارج مع الدليفري" },
+          { key: "مسند", label: "📋 مسند" },
+          { key: "خارج للتسليم", label: "🚚 خارج للتسليم" },
           { key: "تم التسليم", label: "✅ تم التسليم" },
-          { key: "مرتجع", label: "↩ مرتجع" },
-          { key: "مؤجل", label: "⏰ مؤجل" },
-          { key: "لا يوجد رد", label: "📵 لا يوجد رد" }
+          { key: "العميل رد وجاري التسليم", label: "📞 العميل رد وجاري التسليم" },
+          { key: "مرتجع بالمستودع", label: "📦 مرتجع بالمستودع" },
+          { key: "تم تسليم المرتجع للمورد", label: "↩ تم تسليم المرتجع للمورد" }
         ].map((f) => (
           <button
             key={f.key}
@@ -2645,6 +2666,17 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                   className="w-full bg-slate-950 text-slate-200 border border-white/8 px-3 py-2.5 rounded-lg text-xs font-mono text-right"
                 />
               </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="block text-[10px] text-slate-400 font-bold">اسم/نوع المنتج الفعلي (المحتويات)</label>
+              <input
+                type="text"
+                value={editOrder.prodType || ""}
+                onChange={(e) => setEditOrder({ ...editOrder, prodType: e.target.value })}
+                className="w-full bg-slate-950 text-slate-200 border border-white/8 px-3 py-2.5 rounded-lg text-xs text-right font-sans"
+                placeholder="مثال: حذاء كلاسيك جلد طبيعي أسود"
+              />
             </div>
 
             <div className="space-y-1">
