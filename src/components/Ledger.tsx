@@ -25,6 +25,7 @@ export default function Ledger({ token, role, user }: LedgerProps) {
   const [allSuppliers, setAllSuppliers] = useState<any[]>([]);
   const [payAmount, setPayAmount] = useState("");
   const [payDesc, setPayDesc] = useState("");
+  const [supplierTransType, setSupplierTransType] = useState<"payout" | "withdrawal">("payout");
   const [submittingLedger, setSubmittingLedger] = useState(false);
   const [ledgerCache, setLedgerCache] = useState<Record<string, { subscribes: any[], liveBalance: number, stats: any }>>({});
 
@@ -184,21 +185,24 @@ export default function Ledger({ token, role, user }: LedgerProps) {
     }
     setSubmittingLedger(true);
     try {
+      const isWithdrawal = supplierTransType === "withdrawal";
       const res = await apiCall("addSupplierPayment", token, {
         supplier: selectedSupplier,
         amount: Number(payAmount),
-        desc: payDesc.trim() || `صرف دفعة للمورد: ${selectedSupplier}`
+        desc: payDesc.trim() || (isWithdrawal ? `سحب مالي / تسوية عكسية من المورد: ${selectedSupplier}` : `صرف دفعة للمورد: ${selectedSupplier}`),
+        transactionType: supplierTransType
       });
       if (res.ok) {
         setPayAmount("");
         setPayDesc("");
+        setSupplierTransType("payout");
         loadSupplierLedger();
-        alert("✅ تم تسجيل السداد المالي وصرفه من الخزينة بنجاح");
+        alert(isWithdrawal ? "✅ تم تسجيل السحب وتسويته بالخزنة بنجاح" : "✅ تم تسجيل السداد المالي وصرفه من الخزينة بنجاح");
       } else {
         alert("⚠️ " + res.error);
       }
     } catch (err) {
-      alert("عطل في تسجيل الدفعة النقدية");
+      alert("عطل في تسجيل العملية المالية");
     } finally {
       setSubmittingLedger(false);
     }
@@ -493,38 +497,59 @@ export default function Ledger({ token, role, user }: LedgerProps) {
             <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 space-y-4">
               <h3 className="text-xs font-black text-slate-450 flex items-center gap-2">
                 <PlusCircle size={16} className="text-amber-500" />
-                <span>صرف دفعة مالية للمورد وسحبها من الخزنة</span>
+                <span>صرف دفعة مالية للمورد أو سحب تسوية عكسية وتسجيلها بالخزنة</span>
               </h3>
-              <form onSubmit={handleSupplierPayout} className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
-                <div className="space-y-1">
-                  <label className="block text-[10px] text-slate-400 font-bold">مبلغ السداد (ج.م)*</label>
-                  <input
-                    type="number"
-                    required
-                    value={payAmount}
-                    onChange={(e) => setPayAmount(e.target.value)}
-                    placeholder="1000"
-                    className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-lg px-3 py-2 text-xs"
-                  />
+              <div className="flex flex-col md:flex-row gap-3">
+                <div className="w-full md:w-1/4 space-y-1">
+                  <label className="block text-[10px] text-slate-405 font-bold">نوع المعاملة*</label>
+                  <select
+                    value={supplierTransType}
+                    onChange={(e) => setSupplierTransType(e.target.value as any)}
+                    className="w-full h-[38px] bg-slate-950 text-slate-200 border border-white/8 rounded-lg px-3 py-2 text-xs font-bold focus:border-amber-500 outline-none"
+                  >
+                    <option value="payout">صرف دفعة للمورد</option>
+                    <option value="withdrawal">سحب / تسوية عكسية</option>
+                  </select>
                 </div>
-                <div className="space-y-1">
-                  <label className="block text-[10px] text-slate-400 font-bold">تفاصيل البيان / المرجع</label>
-                  <input
-                    type="text"
-                    value={payDesc}
-                    onChange={(e) => setPayDesc(e.target.value)}
-                    placeholder="تحويل بنكي / كاش..."
-                    className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-lg px-3 py-2 text-xs"
-                  />
+                <div className="flex-1">
+                  <form onSubmit={handleSupplierPayout} className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+                    <div className="space-y-1">
+                      <label className="block text-[10px] text-slate-400 font-bold">
+                        {supplierTransType === "withdrawal" ? "مبلغ السحب (ج.م)*" : "مبلغ السداد (ج.م)*"}
+                      </label>
+                      <input
+                        type="number"
+                        required
+                        value={payAmount}
+                        onChange={(e) => setPayAmount(e.target.value)}
+                        placeholder="1000"
+                        className={`w-full h-[38px] bg-slate-950 border border-white/8 rounded-lg px-3 py-2 text-xs font-mono font-bold outline-none ${
+                          supplierTransType === "withdrawal" ? "text-red-450 border-red-500 focus:border-red-500" : "text-slate-200 focus:border-emerald-500"
+                        }`}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="block text-[10px] text-slate-400 font-bold">تفاصيل البيان / المرجع</label>
+                      <input
+                        type="text"
+                        value={payDesc}
+                        onChange={(e) => setPayDesc(e.target.value)}
+                        placeholder="تحويل بنكي / كاش..."
+                        className="w-full h-[38px] bg-slate-950 text-slate-200 border border-white/8 rounded-lg px-3 py-2 text-xs outline-none focus:border-amber-500"
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={submittingLedger}
+                      className={`font-black text-xs h-[38px] px-4 rounded-lg cursor-pointer transition-colors disabled:opacity-50 ${
+                        supplierTransType === "withdrawal" ? "bg-red-600 hover:bg-red-750 text-white" : "bg-emerald-600 hover:bg-emerald-700 text-slate-950"
+                      }`}
+                    >
+                      {supplierTransType === "withdrawal" ? "تسجيل سحب المورد" : "صرف سداد المورد"}
+                    </button>
+                  </form>
                 </div>
-                <button
-                  type="submit"
-                  disabled={submittingLedger}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-slate-950 font-black text-xs py-3.5 px-4 rounded-lg cursor-pointer transition-colors disabled:opacity-50"
-                >
-                  صرف سداد المورد
-                </button>
-              </form>
+              </div>
             </div>
           )}
 

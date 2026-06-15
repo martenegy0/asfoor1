@@ -38,6 +38,7 @@ export default function SuppliersManagement({ token, role }: SuppliersManagement
   const [settleDesc, setSettleDesc] = useState("");
   const [isSettling, setIsSettling] = useState(false);
   const [isSettleModalOpen, setIsSettleModalOpen] = useState(false);
+  const [settleTransType, setSettleTransType] = useState<"payout" | "withdrawal">("payout");
 
   useEffect(() => {
     fetchAccounts();
@@ -77,7 +78,8 @@ export default function SuppliersManagement({ token, role }: SuppliersManagement
       const res = await apiCall("addSupplierPayment", token, {
         supplier: activeSupplier.name,
         amount: amountNum,
-        desc: settleDesc.trim() || `تصفية حساب المورد: ${activeSupplier.name} بمبلغ ${amountNum} ج.م`
+        desc: settleDesc.trim() || (settleTransType === "withdrawal" ? `سحب مالي / تسوية عكسية من المورد: ${activeSupplier.name} بمبلغ ${amountNum} ج.م` : `تصفية حساب المورد: ${activeSupplier.name} بمبلغ ${amountNum} ج.م`),
+        transactionType: settleTransType
       });
 
       if (res.ok) {
@@ -85,6 +87,7 @@ export default function SuppliersManagement({ token, role }: SuppliersManagement
         setIsSettleModalOpen(false);
         setSettleAmount("");
         setSettleDesc("");
+        setSettleTransType("payout");
         setActiveSupplier(null);
         // Reload data
         await fetchAccounts();
@@ -98,9 +101,11 @@ export default function SuppliersManagement({ token, role }: SuppliersManagement
     }
   }
 
-  const filteredAccounts = accounts.filter(acc => 
-    acc.name ? acc.name.toLowerCase().includes(searchQuery.toLowerCase()) : false
-  );
+  const filteredAccounts = React.useMemo(() => {
+    return accounts.filter(acc => 
+      acc.name ? acc.name.toLowerCase().includes(searchQuery.toLowerCase()) : false
+    );
+  }, [accounts, searchQuery]);
 
   const isAdmin = role === "مدير" || role === "محاسب";
 
@@ -301,14 +306,46 @@ export default function SuppliersManagement({ token, role }: SuppliersManagement
               </div>
 
               <div>
-                <label className="block text-[11px] font-bold text-slate-400 mb-1.5">المبلغ المراد صرفه (Amount to Pay)</label>
+                <label className="block text-[11px] font-bold text-slate-400 mb-1.5">نوع المعاملة المالية*</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSettleTransType("payout")}
+                    className={`py-2 px-3 text-xs font-bold rounded-xl border text-center transition-all cursor-pointer ${
+                      settleTransType === "payout"
+                        ? "bg-amber-600/20 text-amber-450 border-amber-500 font-extrabold"
+                        : "bg-slate-950 text-slate-400 border-white/6 hover:bg-slate-900"
+                    }`}
+                  >
+                    صرف دفعة للمورد
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSettleTransType("withdrawal")}
+                    className={`py-2 px-3 text-xs font-bold rounded-xl border text-center transition-all cursor-pointer ${
+                      settleTransType === "withdrawal"
+                        ? "bg-red-600/20 text-red-450 border-red-500 font-extrabold"
+                        : "bg-slate-950 text-slate-400 border-white/6 hover:bg-slate-900"
+                    }`}
+                  >
+                    سحب / تسوية عكسية
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 mb-1.5">
+                  {settleTransType === "withdrawal" ? "المبلغ المراد سحبه (ج.م)*" : "المبلغ المراد صرفه (ج.م)*"}
+                </label>
                 <input
                   type="number"
                   required
                   value={settleAmount}
                   onChange={(e) => setSettleAmount(e.target.value)}
-                  className="w-full bg-slate-950 border border-white/6 rounded-xl px-4 py-2.5 text-xs text-amber-500 font-extrabold outline-none text-right placeholder:text-slate-600 focus:border-amber-500 font-mono"
-                  placeholder="حدد مبلغا لصرفه من رصيد المورد للمدفوعات"
+                  className={`w-full bg-slate-950 border border-white/6 rounded-xl px-4 py-2.5 text-xs font-extrabold outline-none text-right placeholder:text-slate-600 font-mono focus:border-amber-500 ${
+                    settleTransType === "withdrawal" ? "text-red-400 focus:border-red-500" : "text-amber-500 focus:border-amber-500"
+                  }`}
+                  placeholder={settleTransType === "withdrawal" ? "أدخل قيمة السحب أو الخصم العكسي" : "حدد مبلغا لصرفه من رصيد المورد للمدفوعات"}
                 />
               </div>
 
@@ -333,9 +370,13 @@ export default function SuppliersManagement({ token, role }: SuppliersManagement
                 <button
                   type="submit"
                   disabled={isSettling}
-                  className="flex-1 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 rounded-xl text-[11px] font-black text-center transition-all cursor-pointer disabled:opacity-50"
+                  className={`flex-1 py-2.5 text-slate-950 rounded-xl text-[11px] font-black text-center transition-all cursor-pointer disabled:opacity-50 ${
+                    settleTransType === "withdrawal"
+                      ? "bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-755 text-white"
+                      : "bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700"
+                  }`}
                 >
-                  {isSettling ? "جاري تسجيل الدفعة..." : "تأكيد وصرف النقديّة ✅"}
+                  {isSettling ? "جاري تسجیل المعاملة..." : settleTransType === "withdrawal" ? "تأكيد وسحب النقديّة ✅" : "تأكيد وصرف النقديّة ✅"}
                 </button>
               </div>
             </form>

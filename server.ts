@@ -475,9 +475,10 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
     const desc = (l.desc || "").toString().trim();
     const tracking = (l.tracking || "").toString().trim();
 
-    const isPayOrAdj = ["دفع نقدي", "دفعة مورد", "صرف مورد", "دفعة", "مسحوبات", "طرح", "تسوية"].includes(type) ||
+    const isPayOrAdj = ["دفع نقدي", "دفعة مورد", "صرف مورد", "دفعة", "مسحوبات", "طرح", "تسوية", "سحب"].includes(type) ||
                        type.includes("دفعة") ||
                        type.includes("صرف") ||
+                       type.includes("سحب") ||
                        tracking === "CASH-PAY";
 
     const isAutoOrReturn = type.includes("مرتجع") ||
@@ -518,17 +519,17 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
   const adjustmentsAndPayments = rawLedger.filter(isHumanLedgedPayout);
 
   const paymentsValue = adjustmentsAndPayments.reduce((sum: number, l: any) => {
-    return sum + Math.abs(Number(l.amount || 0));
+    return sum - Number(l.amount || 0);
   }, 0);
 
-  // 5. Calculate outstanding balance: Outstanding = DeliveredOrdersValue - ReturnsDeliveredValue - PaymentsValue
-  const outstanding = deliveredOrdersValue - returnsDeliveredValue - paymentsValue;
+  // 5. Calculate outstanding balance: Outstanding = TotalGoodsUploaded - ReturnsDeliveredValue - PaymentsValue
+  const outstanding = totalGoodsUploaded - returnsDeliveredValue - paymentsValue;
 
   // Build the ledger entries list
   const entries: any[] = [];
 
-  // A. Delivered orders as credit
-  for (const o of deliveredOrders) {
+  // A. All uploaded orders as credit
+  for (const o of supplierOrders) {
     const prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
     entries.push({
       date: o.orderDate || o.createdAt || "",
@@ -558,7 +559,7 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
       type: l.type || "تعديل حساب",
       tracking: l.tracking || "CASH-PAY",
       amount: Number(l.amount || 0),
-      desc: l.desc || `تسوية/دفعة مالية للمورد بمبلغ ${l.amount} ج.م`
+      desc: l.desc || `تسوية/دفعة مالیة للمورد بمبلغ ${l.amount} ج.م`
     });
   }
 
@@ -2831,27 +2832,28 @@ app.post("/api", async (req: Request, res: Response) => {
           return err(res, "ليس لديك صلاحية صرف دفعات للموردين");
         }
 
-        const { supplier, amount, desc } = d;
+        const { supplier, amount, desc, transactionType } = d;
         if (!supplier || !amount) return err(res, "بيانات مفقودة");
 
         const val = Number(amount);
-        const finalDesc = desc || `دفعة نقدية مسددة للمورد: ${supplier}`;
+        const isWithdrawal = transactionType === "withdrawal" || transactionType === "سحب";
+        const finalDesc = desc || (isWithdrawal ? `سحب مالي / تسوية عكسية من المورد: ${supplier}` : `دفعة نقدية مسددة للمورد: ${supplier}`);
 
-        // Subtract from Supplier Account Ledger (Deducts balance)
+        // Subtract/Add to Supplier Account Ledger (Deducts or Increases balance)
         db.supplierLedger.push({
           supplier,
           date: now(),
-          type: "دفع نقدي",
+          type: isWithdrawal ? "سحب من المورد" : "دفع نقدي",
           tracking: "CASH-PAY",
-          amount: -val,
+          amount: isWithdrawal ? val : -val,
           desc: finalDesc
         });
 
-        // Dedect from Cashbox too
+        // Deduct from Cashbox or Add into Cashbox
         db.cashbox.push({
           date: now(),
-          desc: `${finalDesc} (صرف مورد)`,
-          type: "سداد مورد",
+          desc: `${finalDesc} (${isWithdrawal ? "إيداع" : "صرف"} مورد)`,
+          type: isWithdrawal ? "إيداع" : "سداد مورد",
           amount: val,
           ref: "SUPPAY",
           addedBy: currentUser
@@ -2861,15 +2863,15 @@ app.post("/api", async (req: Request, res: Response) => {
         if (!db.auditLog) db.auditLog = [];
         db.auditLog.push({
           user: currentUser,
-          type: "سداد مورد / دفعة نقدية",
+          type: isWithdrawal ? "سحب مالي من مورد" : "سداد مورد / دفعة نقدية",
           dateTime: now(),
           oldVal: "—",
-          newVal: `صرف مبلغ: ${val} ج.م للمورد: ${supplier}`,
-          reason: desc || `دفعة نقدية منصرفة للمورد: ${supplier}`
+          newVal: isWithdrawal ? `سحب مبلغ: ${val} ج.م من المورد: ${supplier}` : `صرف مبلغ: ${val} ج.م للمورد: ${supplier}`,
+          reason: desc || (isWithdrawal ? `سحب مالي لتصحيح حساب المورد` : `دفعة نقدية منصرفة للمورد: ${supplier}`)
         });
 
         writeDB(db);
-        return ok(res, { msg: "تم تسجيل الدفعة النقدية بنجاح وتسويتها بالخزنة" });
+        return ok(res, { msg: isWithdrawal ? "تم تسجيل حركة السحب المالي العكسية بنجاح وتسويتها بالخزنة" : "تم تسجيل الدفعة النقدية بنجاح وتسويتها بالخزنة" });
       }
       // COURIER LEDGER SYSTEM & COMPENSTATION
       // ─────────────────────────────────────────────────────────────

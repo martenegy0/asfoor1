@@ -541,7 +541,7 @@ export default function OpsRoom({ token, role, username, orders, couriers, onRef
                                   {o.phone ? (
                                     <div className="flex items-center gap-1.5">
                                       <a 
-                                        href={`tel:${o.phone}`}
+                                        href={`tel:${o.phone.toString().startsWith('0') ? o.phone.toString() : '0' + o.phone.toString()}`}
                                         className="text-slate-400 hover:text-amber-500 shrink-0"
                                         title="اتصال هاتفي"
                                       >

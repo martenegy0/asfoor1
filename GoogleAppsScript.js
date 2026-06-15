@@ -1260,9 +1260,10 @@ function isHumanPayout(l) {
   var desc = (l.desc || "").toString().trim();
   var tracking = (l.tracking || "").toString().trim();
   
-  var isPayOrAdj = ["دفع نقدي", "دفعة مورد", "صرف مورد", "دفعة", "مسحوبات"].indexOf(type) !== -1 || 
+  var isPayOrAdj = ["دفع نقدي", "دفعة مورد", "صرف مورد", "دفعة", "مسحوبات", "سحب"].indexOf(type) !== -1 || 
                      type.indexOf("دفعة") !== -1 || 
                      type.indexOf("صرف") !== -1 || 
+                     type.indexOf("سحب") !== -1 || 
                      tracking === "CASH-PAY";
                      
   var isAutoOrReturn = type.indexOf("مرتجع") !== -1 || 
@@ -1320,8 +1321,8 @@ function getSupplierDashboard(sheets, d) {
   const deliveredOrders = supOrders.filter(o => o.status === "تم التسليم");
   const delivered = deliveredOrders.length;
   
-  // 1. COD of successfully delivered orders (without shipping)
-  const deliveredOrdersValue = deliveredOrders.reduce((sum, o) => {
+  // 1. Total uploaded goods (value of products only without shipping)
+  const totalGoodsUploaded = supOrders.reduce((sum, o) => {
     var prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
     return sum + prodPrice;
   }, 0);
@@ -1335,12 +1336,12 @@ function getSupplierDashboard(sheets, d) {
     return sum + prodPrice;
   }, 0);
 
-  // 3. Cash payments paid to supplier (Strict human payout classification)
+  // 3. Cash payments paid to supplier (Strict signed human payout classification)
   const sLedger = ledger.filter(l => l.supplier === supplier);
-  const totalPaid = sLedger.filter(isHumanPayout).reduce((sum, l) => sum + Math.abs(Number(l.amount || 0)), 0);
+  const totalPaid = sLedger.filter(isHumanPayout).reduce((sum, l) => sum - Number(l.amount || 0), 0);
 
-  // 4. Current outstanding balance based on formula
-  const remaining = deliveredOrdersValue - totalPaid - returnsDeliveredValue;
+  // 4. Current outstanding balance based on formula: Outstanding = TotalGoodsUploaded - totalPaid - returnsDeliveredValue
+  const remaining = totalGoodsUploaded - totalPaid - returnsDeliveredValue;
 
   return {
     ok: true,
@@ -1348,7 +1349,7 @@ function getSupplierDashboard(sheets, d) {
       total,
       delivered,
       returned,
-      totalCredited: deliveredOrdersValue,
+      totalCredited: totalGoodsUploaded,
       totalPaid,
       remaining
     }
@@ -1364,14 +1365,13 @@ function getSupplierAccounts(sheets) {
     const sLedger = ledger.filter(l => l.supplier === s.name);
     const sOrders = orders.filter(o => o.supplier === s.name);
 
-    // 1. Successful delivery value (without shipping)
-    const deliveredOrdersList = sOrders.filter(o => o.status === "تم التسليم");
-    const deliveredOrdersValue = deliveredOrdersList.reduce((sum, o) => {
+    // 1. Total Goods Uploaded (without shipping)
+    const totalGoodsUploaded = sOrders.reduce((sum, o) => {
       var prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
       return sum + prodPrice;
     }, 0);
 
-    // 2. Returns delivered back to supplier ("تم تسليم المرتجع للمورد" or equivalent) with dynamic status matching (financial deduction ONLY when handed over)
+    // 2. Returns delivered back to supplier ("تم تسليم المرتجع للمورد" or equivalent)
     const returnedOrders = sOrders.filter(o => isReturnedDeliveredToSupplier(o.status));
     const returnsCount = returnedOrders.length;
     const returnsDeliveredValue = returnedOrders.reduce((sum, o) => {
@@ -1379,20 +1379,20 @@ function getSupplierAccounts(sheets) {
       return sum + prodPrice;
     }, 0);
 
-    // 3. Cash payments paid to supplier (Strict human payout classification)
-    const paid = sLedger.filter(isHumanPayout).reduce((sum, l) => sum + Math.abs(Number(l.amount || 0)), 0);
+    // 3. Cash payments paid to supplier (Strict signed human payout classification)
+    const paid = sLedger.filter(isHumanPayout).reduce((sum, l) => sum - Number(l.amount || 0), 0);
 
-    // 4. Current outstanding balance
-    const balance = deliveredOrdersValue - paid - returnsDeliveredValue;
+    // 4. Current outstanding balance based on final formula: Outstanding = TotalGoodsUploaded - paid - returnsDeliveredValue
+    const balance = totalGoodsUploaded - paid - returnsDeliveredValue;
 
     const totalOrders = sOrders.length;
-    const deliveredOrders = deliveredOrdersList.length;
+    const deliveredOrders = sOrders.filter(o => o.status === "تم التسليم").length;
 
     return {
       name: s.name,
       phone: s.phone || "—",
-      totalRevenue: deliveredOrdersValue,
-      totalCOD: deliveredOrdersValue,
+      totalRevenue: totalGoodsUploaded,
+      totalCOD: totalGoodsUploaded,
       returnsDelivered: returnsDeliveredValue,
       returnsCount: returnsCount,
       paid: paid,
@@ -1407,42 +1407,43 @@ function getSupplierAccounts(sheets) {
 }
 
 function addSupplierPayment(sheets, d) {
-  const { supplier, amount, desc, currentUser } = d;
+  const { supplier, amount, desc, currentUser, transactionType } = d;
   if (!supplier || !amount || Number(amount) <= 0) return { ok: false, error: "قيمة الدفعة المالية المكتوبة غير صحيحة" };
 
   const val = Number(amount);
+  const isWithdrawal = transactionType === "withdrawal" || transactionType === "سحب";
 
-  // 1. قيد الخزانة (صرف الدفعة المادية من السند المركزي لتقليص النقدية)
+  // 1. قيد الخزانة (صرف الدفعة المادية من السند المركزي لتقليص النقدية أو إيداعها)
   appendToSheet(sheets.cashbox, ["date", "desc", "type", "amount", "ref", "addedBy"], {
     date: now(),
-    desc: desc || `دفعة نقدية منصرفة للمورد: ${supplier}`,
-    type: "صرف مورد",
+    desc: desc || (isWithdrawal ? `سحب مالي / تسوية عكسية من المورد: ${supplier}` : `دفعة نقدية منصرفة للمورد: ${supplier}`),
+    type: isWithdrawal ? "إيداع" : "صرف مورد",
     amount: val,
     ref: supplier,
     addedBy: currentUser || "إدارة الحسابات"
   });
 
-  // 2. قيد دفتر الأستاذ الخاص بالمورد لإعدام الدائنة
+  // 2. قيد دفتر الأستاذ الخاص بالمورد لإعدام الدائنة أو زيادتها
   appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
     supplier: supplier,
     date: now(),
-    type: "دفعة مورد",
+    type: isWithdrawal ? "سحب من المورد" : "دفعة مورد",
     tracking: "—",
-    amount: -val,
-    desc: desc || `استلام دفعة نقدية مسواة للمورد: ${supplier}`
+    amount: isWithdrawal ? val : -val,
+    desc: desc || (isWithdrawal ? `سحب مالي / تسوية عكسية من المورد: ${supplier}` : `استلام دفعة نقدية مسواة للمورد: ${supplier}`)
   });
 
   // 3. تدوين الحدث الأمني المهم في سجل التدقيق المالي
   appendToSheet(sheets.auditLog, ["user", "type", "dateTime", "oldVal", "newVal", "reason"], {
     user: currentUser || "حسابات",
-    type: "سداد مورد / دفعة نقدية",
+    type: isWithdrawal ? "سحب مالي من مورد" : "سداد مورد / دفعة نقدية",
     dateTime: now(),
     oldVal: "—",
-    newVal: `صرف مبلغ: ${val} ج.م للمورد: ${supplier}`,
-    reason: desc || `تخليص سداد وتصفية للمورد: ${supplier}`
+    newVal: isWithdrawal ? `سحب مبلغ: ${val} ج.م من المورد: ${supplier}` : `صرف مبلغ: ${val} ج.م للمورد: ${supplier}`,
+    reason: desc || (isWithdrawal ? `سحب مالي لتصحيح حساب المورد` : `تخليص سداد وتصفية للمورد: ${supplier}`)
   });
 
-  return { ok: true, msg: "تم تسجيل الدفعة النقدية بنجاح وتسويتها بالخزنة" };
+  return { ok: true, msg: isWithdrawal ? "تم تسجيل حركة السحب المالي العكسية بنجاح وتسويتها بالخزنة" : "تم تسجيل الدفعة النقدية بنجاح وتسويتها بالخزنة" };
 }
 
 // ───────────────────────────────────────────────

@@ -226,6 +226,16 @@ export default function Orders({ token, role, username, orders, setOrders, couri
   const [search, setSearch] = useState("");
   const [activeFilter, setActiveFilter] = useState("all");
   const [selectedDate, setSelectedDate] = useState<string>("all");
+  const [displayLimit, setDisplayLimit] = useState<number>(25);
+  const [courierConfirmModal, setCourierConfirmModal] = useState<{
+    tracking: string;
+    status: string;
+    title: string;
+  } | null>(null);
+
+  React.useEffect(() => {
+    setDisplayLimit(25);
+  }, [search, activeFilter, selectedDate]);
 
   const lastDays = React.useMemo(() => {
     const days = [];
@@ -430,29 +440,61 @@ export default function Orders({ token, role, username, orders, setOrders, couri
   ];
 
   // Filters mapping
-  const visibleOrders = roleFilteredOrders
-    .filter((o) => {
-      // Strict role-based filter safety enforcement
-      if (isAgent) {
-        if (!o.courier || o.courier.toString().trim().toLowerCase() !== username.trim().toLowerCase()) return false;
-        // Exclude delayed / unanswered hold-ups from the main "all" tab list
-        if (activeFilter === "all" && ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)) {
-          return false;
+  const visibleOrders = React.useMemo(() => {
+    return roleFilteredOrders
+      .filter((o) => {
+        // Strict role-based filter safety enforcement
+        if (isAgent) {
+          if (!o.courier || o.courier.toString().trim().toLowerCase() !== username.trim().toLowerCase()) return false;
+          // Exclude delayed / unanswered hold-ups from the main "all" tab list
+          if (activeFilter === "all" && ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)) {
+            return false;
+          }
+        } else if (isSupplier) {
+          if (!o.supplier || o.supplier.toString().trim().toLowerCase() !== username.trim().toLowerCase()) return false;
+        } else if (isReturnsOfficer) {
+          const isRet = ["مرتجع", "التسليم للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) || o.returnQueueStatus;
+          if (!isRet) return false;
         }
-      } else if (isSupplier) {
-        if (!o.supplier || o.supplier.toString().trim().toLowerCase() !== username.trim().toLowerCase()) return false;
-      } else if (isReturnsOfficer) {
-        const isRet = ["مرتجع", "التسليم للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) || o.returnQueueStatus;
-        if (!isRet) return false;
-      }
 
-      if (activeFilter !== "all" && o.status !== activeFilter) return false;
+        if (activeFilter !== "all" && o.status !== activeFilter) return false;
 
-      // Dynamic Date Filter - Filter by orderDate (or fallback to createdAt) matching selectedDateYMD
-      if (selectedDate !== "all") {
-        const orderDayStr = normalizeDateToYMD(o.orderDate || o.createdAt);
-        if (orderDayStr !== selectedDate) return false;
-      }
+        // Dynamic Date Filter - Filter by orderDate (or fallback to createdAt) matching selectedDateYMD
+        if (selectedDate !== "all") {
+          const orderDayStr = normalizeDateToYMD(o.orderDate || o.createdAt);
+          if (orderDayStr !== selectedDate) return false;
+        }
+
+        if (search.trim()) {
+          const q = search.toLowerCase().trim();
+          return [o.tracking, o.supplier, o.courier, o.customer, o.phone, o.gov, o.region, o.address, o.notes, o.returnQueueStatus]
+            .join(" ")
+            .toLowerCase()
+            .includes(q);
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        const valA = a.createdAt || "";
+        const valB = b.createdAt || "";
+        if (valA && valB) {
+          const cmp = valB.localeCompare(valA);
+          if (cmp !== 0) return cmp;
+        }
+        // Fallback
+        const timeA = valA ? new Date(valA.replace(" ", "T")).getTime() : 0;
+        const timeB = valB ? new Date(valB.replace(" ", "T")).getTime() : 0;
+        return timeB - timeA;
+      });
+  }, [roleFilteredOrders, isAgent, username, activeFilter, isSupplier, isReturnsOfficer, selectedDate, search]);
+
+  // Today's hold-ups / suspended orders ("معلقات اليوم") for agent/courier view
+  const suspendedOrders = React.useMemo(() => {
+    if (!isAgent) return [];
+    return roleFilteredOrders.filter((o) => {
+      if (!o.courier || o.courier.toString().trim().toLowerCase() !== username.trim().toLowerCase()) return false;
+      const isSuspended = ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status);
+      if (!isSuspended) return false;
 
       if (search.trim()) {
         const q = search.toLowerCase().trim();
@@ -462,35 +504,8 @@ export default function Orders({ token, role, username, orders, setOrders, couri
           .includes(q);
       }
       return true;
-    })
-    .sort((a, b) => {
-      const valA = a.createdAt || "";
-      const valB = b.createdAt || "";
-      if (valA && valB) {
-        const cmp = valB.localeCompare(valA);
-        if (cmp !== 0) return cmp;
-      }
-      // Fallback
-      const timeA = valA ? new Date(valA.replace(" ", "T")).getTime() : 0;
-      const timeB = valB ? new Date(valB.replace(" ", "T")).getTime() : 0;
-      return timeB - timeA;
     });
-
-  // Today's hold-ups / suspended orders ("معلقات اليوم") for agent/courier view
-  const suspendedOrders = isAgent ? roleFilteredOrders.filter((o) => {
-    if (!o.courier || o.courier.toString().trim().toLowerCase() !== username.trim().toLowerCase()) return false;
-    const isSuspended = ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status);
-    if (!isSuspended) return false;
-
-    if (search.trim()) {
-      const q = search.toLowerCase().trim();
-      return [o.tracking, o.supplier, o.courier, o.customer, o.phone, o.gov, o.region, o.address, o.notes, o.returnQueueStatus]
-        .join(" ")
-        .toLowerCase()
-        .includes(q);
-    }
-    return true;
-  }) : [];
+  }, [isAgent, roleFilteredOrders, username, search]);
 
   function toggleSelect(tracking: string) {
     const next = new Set(selected);
@@ -954,11 +969,32 @@ export default function Orders({ token, role, username, orders, setOrders, couri
 
   const renderOrderCard = (o: any) => {
     const isSel = selected.has(o.tracking);
+    const statusType = (o.status || "").toString();
+    let cardBorderStyle = "border-slate-700/80";
+    let cardBgClass = "bg-slate-900/95";
+    
+    if (statusType === "تم التسليم") {
+      cardBorderStyle = "border-r-4 border-r-emerald-500 border-y-slate-700/70 border-l-slate-700/70";
+      cardBgClass = "bg-emerald-950/10";
+    } else if (statusType.includes("مرتجع")) {
+      cardBorderStyle = "border-r-4 border-r-red-500 border-y-slate-700/70 border-l-slate-700/70";
+      cardBgClass = "bg-red-950/15";
+    } else if (
+      statusType.includes("تجهيز") || 
+      statusType.includes("شحن") || 
+      statusType === "جديد" || 
+      statusType === "تم الإسناد" ||
+      statusType === "خارج مع المندوب"
+    ) {
+      cardBorderStyle = "border-r-4 border-r-amber-500 border-y-slate-700/70 border-l-slate-700/70";
+      cardBgClass = "bg-amber-950/10";
+    }
+
     return (
       <div
         key={o.tracking}
-        className={`bg-slate-900 border rounded-2xl p-5 space-y-4 relative transition-all ${
-          isSel ? "border-amber-500 ring-2 ring-amber-500/10" : "border-white/6"
+        className={`border shadow-sm rounded-xl p-5 mb-4 relative transition-all ${cardBgClass} ${cardBorderStyle} ${
+          isSel ? "ring-2 ring-amber-500/10" : ""
         }`}
       >
         {/* Header components */}
@@ -1008,7 +1044,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
             </div>
           </div>
 
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 flex-wrap">
             {o.returnShippingType && (
               <span className="text-[8.5px] font-black bg-purple-950 text-purple-400 border border-purple-900/30 px-1.5 py-0.5 rounded">
                 شحن مرتجع: {o.returnShippingType === "paid" ? "مدفوع بالكامل" : "غير مدفوع"}
@@ -1021,7 +1057,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
         </div>
 
         {/* Info Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 text-xs text-slate-300">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 text-xs text-slate-300 mt-3">
           <div className="space-y-1.5 col-span-1">
             <div className="flex items-center gap-2 font-black text-slate-200">
               <User size={13} className="text-slate-500 shrink-0" />
@@ -1048,158 +1084,161 @@ export default function Orders({ token, role, username, orders, setOrders, couri
               <span>توجيه الخرائط GPS</span>
             </a>
           </div>
+        </div>
 
-          {/* Settle info */}
-          <div className="flex items-center justify-between gap-4 col-span-1 md:col-span-2 pt-2 border-t border-white/4">
-            <div className="text-slate-300 flex items-center gap-2">
-              <span className="text-sm font-mono shrink-0">💵</span>
-              <span>إجمالي التحصيل المستحق: <span className="text-sm font-black text-emerald-400 font-mono">{(o.totalCOD || o.prodPrice || 0).toLocaleString("ar")} ج.م</span></span>
-            </div>
-            <span className="text-[9px] text-slate-500 font-bold font-mono">
-              منتج: {o.prodPrice} · شحن: {o.shipPrice}
-            </span>
+        {/* Settle info */}
+        <div className="flex items-center justify-between gap-4 pt-2 border-t border-white/4 mt-3">
+          <div className="text-slate-300 flex items-center gap-2">
+            <span className="text-sm font-mono shrink-0">💵</span>
+            <span>إجمالي التحصيل المستحق: <span className="text-sm font-black text-emerald-400 font-mono">{(o.totalCOD || o.prodPrice || 0).toLocaleString("ar")} ج.م</span></span>
           </div>
+          <span className="text-[9px] text-slate-500 font-bold font-mono">
+            منتج: {o.prodPrice} · شحن: {o.shipPrice}
+          </span>
+        </div>
 
-          {/* Hide or show sensitive courier assignments */}
-          {!isSupplier && o.courier && (
-            <div className="flex items-center gap-2 text-slate-300 col-span-1 md:col-span-2 border-t border-white/4 pt-2">
-              <Truck size={14} className="text-slate-500 shrink-0" />
-              <span>المندوب: <span className="font-bold text-indigo-400">{o.courier}</span></span>
+        {/* Hide or show sensitive courier assignments */}
+        {!isSupplier && o.courier && (
+          <div className="flex items-center gap-2 text-slate-300 border-t border-white/4 pt-2 mt-2">
+            <Truck size={14} className="text-slate-500 shrink-0" />
+            <span>المندوب: <span className="font-bold text-indigo-400">{o.courier}</span></span>
+          </div>
+        )}
+
+        {o.notes && (
+          <div className="p-2.5 bg-slate-950/40 rounded-xl text-[11px] text-slate-400 border border-white/4 leading-relaxed mt-2">
+            💬 <span className="font-bold">ملاحظات:</span> {o.notes}
+          </div>
+        )}
+
+        {o.returnQueueStatus && (
+          <div className="p-3 bg-purple-950/10 border border-purple-900/30 rounded-xl text-[11px] text-purple-300 flex items-center justify-between mt-2">
+            <span className="font-semibold flex items-center gap-1.5">
+              <ArrowLeftRight size={13} className="shrink-0" />
+              قائمة المرتجع: <span className="font-black underline">{o.returnQueueStatus}</span>
+            </span>
+            <span>مسؤول المتابعة: <span className="font-bold underline">{o.returnQueueAgent || "لم يعين"}</span></span>
+          </div>
+        )}
+
+        {isOps && (
+          <div className="col-span-1 md:col-span-2 bg-[#0a1128] p-4 rounded-xl border border-indigo-500/30 text-right space-y-3" dir="rtl">
+            <div className="flex items-center gap-1.5 text-indigo-400">
+              <span className="text-sm">🎧</span>
+              <span className="text-xs font-black">لوحة متابعة موظف العمليات والاتصال:</span>
             </div>
-          )}
-
-          {o.notes && (
-            <div className="col-span-1 md:col-span-2 p-2.5 bg-slate-950/40 rounded-xl text-[11px] text-slate-400 border border-white/4 leading-relaxed">
-              💬 <span className="font-bold">ملاحظات:</span> {o.notes}
-            </div>
-          )}
-
-          {o.returnQueueStatus && (
-            <div className="col-span-1 md:col-span-2 p-3 bg-purple-950/10 border border-purple-900/30 rounded-xl text-[11px] text-purple-300 flex items-center justify-between">
-              <span className="font-semibold flex items-center gap-1.5">
-                <ArrowLeftRight size={13} className="shrink-0" />
-                قائمة المرتجع: <span className="font-black underline">{o.returnQueueStatus}</span>
-              </span>
-              <span>مسؤول المتابعة: <span className="font-bold underline">{o.returnQueueAgent || "لم يعين"}</span></span>
-            </div>
-          )}
-
-          {isOps && (
-            <div className="col-span-1 md:col-span-2 bg-[#0a1128] p-4 rounded-xl border border-indigo-500/30 text-right space-y-3" dir="rtl">
-              <div className="flex items-center gap-1.5 text-indigo-400">
-                <span className="text-sm">🎧</span>
-                <span className="text-xs font-black">لوحة متابعة موظف العمليات والاتصال:</span>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1">
+                <span className="text-[10px] text-slate-400 font-bold">تسجيل نتيجة المكالمة التفصيلية:</span>
+                <textarea
+                  id={`notes-input-${o.tracking}`}
+                  defaultValue={o.notes || ""}
+                  placeholder="شرح تواصل العميل، رغبته، أو تفاصيل المتابعة الحالية..."
+                  className="bg-slate-900 border border-white/8 text-xs text-slate-100 rounded-lg p-2 focus:border-indigo-500 font-medium h-16 resize-none w-full"
+                />
               </div>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div className="flex flex-col gap-1">
-                  <span className="text-[10px] text-slate-400 font-bold">تسجيل نتيجة المكالمة التفصيلية:</span>
-                  <textarea
-                    id={`notes-input-${o.tracking}`}
-                    defaultValue={o.notes || ""}
-                    placeholder="شرح تواصل العميل، رغبته، أو تفاصيل المتابعة الحالية..."
-                    className="bg-slate-900 border border-white/8 text-xs text-slate-100 rounded-lg p-2 focus:border-indigo-500 font-medium h-16 resize-none w-full"
+
+              <div className="flex flex-col gap-2 justify-between">
+                <div>
+                  <span className="text-[10px] text-slate-400 font-bold">تاريخ التوصيل الفعلي المتوقع:</span>
+                  <input
+                    id={`date-input-${o.tracking}`}
+                    type="date"
+                    defaultValue={o.delivDate ? o.delivDate.substring(0, 10) : ""}
+                    className="bg-slate-900 border border-white/8 text-xs text-slate-100 rounded-lg p-1.5 focus:border-indigo-500 font-semibold w-full mt-1"
                   />
                 </div>
 
-                <div className="flex flex-col gap-2 justify-between">
-                  <div>
-                    <span className="text-[10px] text-slate-400 font-bold">تاريخ التوصيل الفعلي المتوقع:</span>
-                    <input
-                      id={`date-input-${o.tracking}`}
-                      type="date"
-                      defaultValue={o.delivDate ? o.delivDate.substring(0, 10) : ""}
-                      className="bg-slate-900 border border-white/8 text-xs text-slate-100 rounded-lg p-1.5 focus:border-indigo-500 font-semibold w-full mt-1"
-                    />
-                  </div>
-
-                  <div className="flex flex-col gap-1 mt-1">
-                    <span className="text-[10px] text-indigo-400 font-bold">تعديل الحالة مع حفظ البيانات أعلاه:</span>
-                    <select
-                      disabled={pendingTrackings.has(o.tracking)}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        if (val) {
-                          const notesEl = document.getElementById(`notes-input-${o.tracking}`) as HTMLTextAreaElement | null;
-                          const dateEl = document.getElementById(`date-input-${o.tracking}`) as HTMLInputElement | null;
-                          const currentNotes = notesEl ? notesEl.value : (o.notes || "");
-                          const currentDate = dateEl ? dateEl.value : (o.delivDate || "");
-                          
-                          triggerStatusUpdate(o.tracking, val, "", currentNotes, currentDate);
-                          e.target.value = ""; // Reset value after trigger
-                        }
-                      }}
-                      className="bg-slate-900 border border-white/10 text-xs text-slate-100 rounded-lg p-1.5 focus:border-indigo-500 font-bold focus:ring-0 cursor-pointer w-full"
-                    >
-                      <option value="">-- اختر الحالة الجديدة --</option>
-                      <option value="تم رد العميل وجاري التنسيق">تم رد العميل وجاري التنسيق</option>
-                      <option value="مؤجل">مؤجل (تأجيل الطلب)</option>
-                      <option value="لا يوجد رد">لا يوجد رد (محاولة تواصل)</option>
-                      <option value="جديد">إرجاع الأوردر لحالة "جديد"</option>
-                    </select>
-                  </div>
+                <div className="flex flex-col gap-1 mt-1">
+                  <span className="text-[10px] text-indigo-400 font-bold">تعديل الحالة مع حفظ البيانات أعلاه:</span>
+                  <select
+                    disabled={pendingTrackings.has(o.tracking)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val) {
+                        const notesEl = document.getElementById(`notes-input-${o.tracking}`) as HTMLTextAreaElement | null;
+                        const dateEl = document.getElementById(`date-input-${o.tracking}`) as HTMLInputElement | null;
+                        const currentNotes = notesEl ? notesEl.value : (o.notes || "");
+                        const currentDate = dateEl ? dateEl.value : (o.delivDate || "");
+                        
+                        triggerStatusUpdate(o.tracking, val, "", currentNotes, currentDate);
+                        e.target.value = ""; // Reset value after trigger
+                      }
+                    }}
+                    className="bg-slate-900 border border-white/10 text-xs text-slate-100 rounded-lg p-1.5 focus:border-indigo-500 font-bold focus:ring-0 cursor-pointer w-full"
+                  >
+                    <option value="">-- اختر الحالة الجديدة --</option>
+                    <option value="تم رد العميل وجاري التنسيق">تم رد العميل وجاري التنسيق</option>
+                    <option value="مؤجل">مؤجل (تأجيل الطلب)</option>
+                    <option value="لا يوجد رد">لا يوجد رد (محاولة تواصل)</option>
+                    <option value="جديد">إرجاع الأوردر لحالة "جديد"</option>
+                  </select>
                 </div>
               </div>
+            </div>
 
-              {o.status === "لا يرد" && (
-                <div className="bg-slate-950/60 p-3 rounded-xl border border-amber-500/20 flex flex-col gap-2 mt-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-black text-amber-400">🚨 تم تصنيف الأوردر كـ "لا يرد"</span>
+            {o.status === "لا يرد" && (
+              <div className="bg-slate-950/60 p-3 rounded-xl border border-amber-500/20 flex flex-col gap-2 mt-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-black text-amber-400">🚨 تم تصنيف الأوردر كـ "لا يرد"</span>
+                  <button
+                    type="button"
+                    onClick={() => setOpsUpdatingCall(prev => ({ ...prev, [o.tracking]: !prev[o.tracking] }))}
+                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-slate-100 font-extrabold text-[10px] rounded-lg cursor-pointer"
+                  >
+                    {opsUpdatingCall[o.tracking] ? "إلغاء التحديث" : "📞 تحديث نتيجة الاتصال (رد العميل)"}
+                  </button>
+                </div>
+                {opsUpdatingCall[o.tracking] && (
+                  <div className="space-y-3 border-t border-white/6 pt-2 select-text text-right" dir="rtl">
+                    <div className="flex flex-col gap-1">
+                      <span className="text-[10px] text-slate-355 font-bold">ملاحظات رد العميل (إجباري) *</span>
+                      <textarea
+                        placeholder="اكتب ملاحظات رد وتواصل العميل هنا..."
+                        className="bg-slate-900 border border-indigo-500/40 text-xs text-slate-100 rounded-lg p-2 font-medium h-14 resize-none w-full"
+                        value={opsNotes[o.tracking] || ""}
+                        onChange={(e) => setOpsNotes(prev => ({ ...prev, [o.tracking]: e.target.value }))}
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <span className="text-[10px] text-slate-355 font-bold">تاريخ الاستلام المؤجل (إجباري) *</span>
+                      <input
+                        type="date"
+                        className="bg-slate-900 border border-indigo-500/40 text-xs text-slate-100 rounded-lg p-2 font-black w-full"
+                        value={opsDate[o.tracking] || ""}
+                        onChange={(e) => setOpsDate(prev => ({ ...prev, [o.tracking]: e.target.value }))}
+                      />
+                    </div>
                     <button
                       type="button"
-                      onClick={() => setOpsUpdatingCall(prev => ({ ...prev, [o.tracking]: !prev[o.tracking] }))}
-                      className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-slate-100 font-extrabold text-[10px] rounded-lg cursor-pointer"
+                      disabled={pendingTrackings.has(o.tracking)}
+                      onClick={() => {
+                        const userNotes = opsNotes[o.tracking] || "";
+                        const userDate = opsDate[o.tracking] || "";
+                        if (!userNotes.trim()) {
+                          alert("يرجى إدخال ملاحظات رد العميل أولاً (إجباري)");
+                          return;
+                        }
+                        if (!userDate.trim()) {
+                          alert("يرجى تحديد تاريخ الاستلام المؤجل أولاً (إجباري)");
+                          return;
+                        }
+                        triggerStatusUpdate(o.tracking, "تم رد العميل وجاري التنسيق", "", userNotes, userDate);
+                      }}
+                      className="w-full py-2 bg-gradient-to-r from-emerald-500 to-indigo-600 text-slate-100 font-extrabold text-[11px] rounded-lg cursor-pointer hover:opacity-90"
                     >
-                      {opsUpdatingCall[o.tracking] ? "إلغاء التحديث" : "📞 تحديث نتيجة الاتصال (رد العميل)"}
+                      تحديث الحالة إلى "تم رد العميل وجاري التنسيق" وكتابة التقارير
                     </button>
                   </div>
-                  {opsUpdatingCall[o.tracking] && (
-                    <div className="space-y-3 border-t border-white/6 pt-2 select-text text-right" dir="rtl">
-                      <div className="flex flex-col gap-1">
-                        <span className="text-[10px] text-slate-350 font-bold">ملاحظات رد العميل (إجباري) *</span>
-                        <textarea
-                          placeholder="اكتب ملاحظات رد وتواصل العميل هنا..."
-                          className="bg-slate-900 border border-indigo-500/40 text-xs text-slate-100 rounded-lg p-2 font-medium h-14 resize-none w-full"
-                          value={opsNotes[o.tracking] || ""}
-                          onChange={(e) => setOpsNotes(prev => ({ ...prev, [o.tracking]: e.target.value }))}
-                        />
-                      </div>
-                      <div className="flex flex-col gap-1">
-                        <span className="text-[10px] text-slate-350 font-bold">تاريخ الاستلام المؤجل (إجباري) *</span>
-                        <input
-                          type="date"
-                          className="bg-slate-900 border border-indigo-500/40 text-xs text-slate-100 rounded-lg p-2 font-black w-full"
-                          value={opsDate[o.tracking] || ""}
-                          onChange={(e) => setOpsDate(prev => ({ ...prev, [o.tracking]: e.target.value }))}
-                        />
-                      </div>
-                      <button
-                        type="button"
-                        disabled={pendingTrackings.has(o.tracking)}
-                        onClick={() => {
-                          const userNotes = opsNotes[o.tracking] || "";
-                          const userDate = opsDate[o.tracking] || "";
-                          if (!userNotes.trim()) {
-                            alert("يرجى إدخال ملاحظات رد العميل أولاً (إجباري)");
-                            return;
-                          }
-                          if (!userDate.trim()) {
-                            alert("يرجى تحديد تاريخ الاستلام المؤجل أولاً (إجباري)");
-                            return;
-                          }
-                          triggerStatusUpdate(o.tracking, "تم رد العميل وجاري التنسيق", "", userNotes, userDate);
-                        }}
-                        className="w-full py-2 bg-gradient-to-r from-emerald-500 to-indigo-600 text-slate-100 font-extrabold text-[11px] rounded-lg cursor-pointer hover:opacity-90"
-                      >
-                        تحديث الحالة إلى "تم رد العميل وجاري التنسيق" وكتابة التقارير
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+
+
 
         {/* Action Controls */}
         {o.status !== "تم التسليم" && !isSupplier && (
@@ -1207,7 +1246,12 @@ export default function Orders({ token, role, username, orders, setOrders, couri
             {isAgent && o.courier === username && (
               <>
                 <button
-                  onClick={() => triggerStatusUpdate(o.tracking, "تم التسليم")}
+                  type="button"
+                  onClick={() => setCourierConfirmModal({
+                    tracking: o.tracking,
+                    status: "تم التسليم",
+                    title: "تم التسليم والتحصيل"
+                  })}
                   disabled={pendingTrackings.has(o.tracking)}
                   className={`px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-slate-950 font-black text-[10px] rounded-lg cursor-pointer flex items-center gap-1 ${
                     pendingTrackings.has(o.tracking) ? "opacity-50 pointer-events-none" : ""
@@ -1217,7 +1261,12 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                   <span>✅ تم التسليم والتحصيل</span>
                 </button>
                 <button
-                  onClick={() => triggerStatusUpdate(o.tracking, "مرتجع")}
+                  type="button"
+                  onClick={() => setCourierConfirmModal({
+                    tracking: o.tracking,
+                    status: "مرتجع",
+                    title: "اختيار مرتجع"
+                  })}
                   disabled={pendingTrackings.has(o.tracking)}
                   className={`px-3 py-1.5 bg-red-605 bg-red-650 hover:bg-red-750 text-slate-200 font-black text-[10px] rounded-lg cursor-pointer flex items-center gap-1 ${
                     pendingTrackings.has(o.tracking) ? "opacity-50 pointer-events-none" : ""
@@ -1227,7 +1276,12 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                   <span>↩ اختيار مرتجع</span>
                 </button>
                 <button
-                  onClick={() => triggerStatusUpdate(o.tracking, "مؤجل")}
+                  type="button"
+                  onClick={() => setCourierConfirmModal({
+                    tracking: o.tracking,
+                    status: "مؤجل",
+                    title: "تم التأجيل"
+                  })}
                   disabled={pendingTrackings.has(o.tracking)}
                   className={`px-3 py-1.5 bg-slate-800 text-slate-300 font-bold text-[10px] rounded-lg cursor-pointer flex items-center gap-1 ${
                     pendingTrackings.has(o.tracking) ? "opacity-50 pointer-events-none" : ""
@@ -1237,7 +1291,12 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                   <span>⏰ تم التأجيل</span>
                 </button>
                 <button
-                  onClick={() => triggerStatusUpdate(o.tracking, "لا يوجد رد")}
+                  type="button"
+                  onClick={() => setCourierConfirmModal({
+                    tracking: o.tracking,
+                    status: "لا يوجد رد",
+                    title: "لا يرد"
+                  })}
                   disabled={pendingTrackings.has(o.tracking)}
                   className={`px-3 py-1.5 bg-slate-950 text-slate-400 font-bold text-[10px] rounded-lg cursor-pointer border border-white/4 flex items-center gap-1 ${
                     pendingTrackings.has(o.tracking) ? "opacity-50 pointer-events-none" : ""
@@ -1345,26 +1404,30 @@ export default function Orders({ token, role, username, orders, setOrders, couri
         )}
 
         {/* Clean isolated communication */}
-        {o.phone && (
-          <div className="grid grid-cols-2 gap-2 pt-3 border-t border-white/6 col-span-1 md:col-span-2">
-            <a
-              href={`tel:${o.phone}`}
-              className="flex items-center justify-center gap-1.5 py-2.5 hover:bg-blue-600/10 text-blue-400 bg-blue-950/20 border border-blue-900/30 rounded-xl text-xs font-black tracking-wide cursor-pointer transition-colors text-center"
-            >
-              <Phone size={13} className="shrink-0" />
-              <span>اتصال هاتفي</span>
-            </a>
-            <a
-              href={`https://wa.me/${toWA(o.phone)}`}
-              target="_blank"
-              rel="noreferrer"
-              className="flex items-center justify-center gap-1.5 py-2.5 hover:bg-emerald-600/10 text-emerald-400 bg-emerald-950/20 border border-emerald-950/30 rounded-xl text-xs font-black tracking-wide cursor-pointer transition-colors text-center font-sans"
-            >
-              <MessageSquare size={13} className="shrink-0" />
-              <span>اتصال واتساب</span>
-            </a>
-          </div>
-        )}
+        {o.phone && (() => {
+          const rawPhone = o.phone.toString().trim();
+          const formattedPhone = rawPhone.startsWith('0') ? rawPhone : '0' + rawPhone;
+          return (
+            <div className="grid grid-cols-2 gap-2 pt-3 border-t border-white/6 col-span-1 md:col-span-2">
+              <a
+                href={`tel:${formattedPhone}`}
+                className="flex items-center justify-center gap-1.5 py-2.5 hover:bg-blue-600/10 text-blue-400 bg-blue-950/20 border border-blue-900/30 rounded-xl text-xs font-black tracking-wide cursor-pointer transition-colors text-center"
+              >
+                <Phone size={13} className="shrink-0" />
+                <span>اتصال هاتفي</span>
+              </a>
+              <a
+                href={`https://wa.me/${toWA(o.phone)}`}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center justify-center gap-1.5 py-2.5 hover:bg-emerald-600/10 text-emerald-400 bg-emerald-950/20 border border-emerald-950/30 rounded-xl text-xs font-black tracking-wide cursor-pointer transition-colors text-center font-sans"
+              >
+                <MessageSquare size={13} className="shrink-0" />
+                <span>اتصال واتساب</span>
+              </a>
+            </div>
+          );
+        })()}
       </div>
     );
   };
@@ -1913,7 +1976,20 @@ export default function Orders({ token, role, username, orders, setOrders, couri
             <p>لا توجد شحنات مطابقة لخيارات التصفية الحالية</p>
           </div>
         ) : (
-          visibleOrders.map((o) => renderOrderCard(o))
+          <>
+            {visibleOrders.slice(0, displayLimit).map((o) => renderOrderCard(o))}
+            {visibleOrders.length > displayLimit && (
+              <div className="flex justify-center pt-4 pb-2">
+                <button
+                  type="button"
+                  onClick={() => setDisplayLimit((prev) => prev + 25)}
+                  className="px-6 py-2.5 bg-slate-900 border border-white/10 hover:border-amber-500 text-slate-300 hover:text-amber-500 font-bold text-xs rounded-xl transition-all cursor-pointer shadow-md flex items-center gap-2"
+                >
+                  🚀 عرض المزيد من الشحنات ({visibleOrders.length - displayLimit} متبقية)
+                </button>
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -2323,26 +2399,30 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                 )}
 
                 {/* Clean, isolated mobile connection row at the bottom of each order */}
-                {o.phone && (
-                  <div className="grid grid-cols-2 gap-2 pt-3 border-t border-white/6">
-                    <a
-                      href={`tel:${o.phone}`}
-                      className="flex items-center justify-center gap-1.5 py-2.5 hover:bg-blue-600/10 text-blue-400 bg-blue-950/20 border border-blue-900/30 rounded-xl text-xs font-black tracking-wide cursor-pointer transition-colors text-center"
-                    >
-                      <Phone size={13} />
-                      <span>اتصال هاتفي</span>
-                    </a>
-                    <a
-                      href={`https://wa.me/${toWA(o.phone)}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="flex items-center justify-center gap-1.5 py-2.5 hover:bg-emerald-600/10 text-emerald-400 bg-emerald-950/20 border border-emerald-950/30 rounded-xl text-xs font-black tracking-wide cursor-pointer transition-colors text-center font-sans"
-                    >
-                      <MessageSquare size={13} />
-                      <span>اتصال واتساب</span>
-                    </a>
-                  </div>
-                )}
+                {o.phone && (() => {
+                  const rawPhone = o.phone.toString().trim();
+                  const formattedPhone = rawPhone.startsWith('0') ? rawPhone : '0' + rawPhone;
+                  return (
+                    <div className="grid grid-cols-2 gap-2 pt-3 border-t border-white/6">
+                      <a
+                        href={`tel:${formattedPhone}`}
+                        className="flex items-center justify-center gap-1.5 py-2.5 hover:bg-blue-600/10 text-blue-400 bg-blue-950/20 border border-blue-900/30 rounded-xl text-xs font-black tracking-wide cursor-pointer transition-colors text-center"
+                      >
+                        <Phone size={13} />
+                        <span>اتصال هاتفي</span>
+                      </a>
+                      <a
+                        href={`https://wa.me/${toWA(o.phone)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex items-center justify-center gap-1.5 py-2.5 hover:bg-emerald-600/10 text-emerald-400 bg-emerald-950/20 border border-emerald-950/30 rounded-xl text-xs font-black tracking-wide cursor-pointer transition-colors text-center font-sans"
+                      >
+                        <MessageSquare size={13} />
+                        <span>اتصال واتساب</span>
+                      </a>
+                    </div>
+                  );
+                })()}
               </div>
             );
           })}
@@ -2585,6 +2665,41 @@ export default function Orders({ token, role, username, orders, setOrders, couri
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* --- MODAL 4: COURIER CORRECTION / ACCIDENTAL CLICK PREVENTION MODAL --- */}
+      {courierConfirmModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end md:items-center justify-center p-4" dir="rtl">
+          <div className="bg-slate-900 border border-white/8 p-6 rounded-t-2xl md:rounded-2xl w-full max-w-[420px] text-right space-y-4 shadow-2xl">
+            <h3 className="text-sm font-black text-amber-500 border-b border-white/6 pb-2 flex items-center gap-2">
+              <span>⚠️ تأكيد تغيير حالة الأوردر</span>
+            </h3>
+            <p className="text-xs text-slate-300 leading-relaxed font-semibold">
+              هل أنت متأكد من تغيير حالة الشحنة <span className="text-amber-500 font-bold underline font-mono">{courierConfirmModal.tracking}</span> إلى <span className="text-emerald-400 font-bold">[{courierConfirmModal.title}]</span>؟
+            </p>
+            
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const { tracking, status } = courierConfirmModal;
+                  setCourierConfirmModal(null);
+                  triggerStatusUpdate(tracking, status);
+                }}
+                className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-slate-950 font-black text-xs rounded-xl cursor-pointer active:scale-98 transition-transform"
+              >
+                نعم، متأكد
+              </button>
+              <button
+                type="button"
+                onClick={() => setCourierConfirmModal(null)}
+                className="px-5 py-3 bg-slate-950 text-slate-400 hover:text-slate-200 rounded-xl text-xs font-bold border border-white/6 cursor-pointer"
+              >
+                إلغاء التغيير
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
