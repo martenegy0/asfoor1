@@ -429,16 +429,7 @@ function writeDB(data: any): void {
 
 function isReturnedDeliveredToSupplier(status: string): boolean {
   const s = (status || "").toString().trim();
-  const patterns = [
-    "تم تسليم المرتجع للمورد",
-    "مرتجع تم تسليمه للمورد",
-    "التسليم للمورد",
-    "تم تسليم المرتجع للمورد وتصفية حسابه",
-    "تسليم المرتجع للمورد",
-    "تسليمه للمورد",
-    "تصفية حسابه"
-  ];
-  return patterns.some((p) => s.includes(p));
+  return s === "تم تسليم المرتجع للمورد" || s === "تم تسليم المرتجع للمورد وتصفية حسابه" || s === "مرتجع تم تسليمه للمورد";
 }
 
 function isSomeReturn(status: string): boolean {

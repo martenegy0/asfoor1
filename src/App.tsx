@@ -884,6 +884,7 @@ export default function App() {
             orders={orders}
             setOrders={setOrders}
             onRefresh={() => refreshAllData()}
+            setActiveTab={setActiveTab}
           />
         )}
 
@@ -1291,7 +1292,7 @@ export default function App() {
           </div>
         )}
         {activeTab === "suppliers" && showSuppliersPageTab && (
-          <SuppliersManagement token={token} role={role} />
+          <SuppliersManagement token={token} role={role} orders={orders} />
         )}
       </main>
 

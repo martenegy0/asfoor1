@@ -19,7 +19,7 @@ import {
   ClipboardCheck,
   Package
 } from "lucide-react";
-import { getTodayDateStr, normalizeDateToYMD, toWA } from "../utils";
+import { getTodayDateStr, normalizeDateToYMD, toWA, toWAUrl } from "../utils";
 import { motion, AnimatePresence } from "motion/react";
 import { Order } from "../types";
 
@@ -325,15 +325,24 @@ export default function OpsRoom({ token, role, username, orders, couriers, onRef
                   {/* Actions row */}
                   <div className="mt-5 pt-3 border-t border-white/6 flex gap-2">
                     {c.phone && (
-                      <a 
-                        href={`https://wa.me/${toWA(c.phone)}`}
-                        target="_blank" 
-                        rel="noreferrer"
-                        className="p-2 border border-emerald-900/40 hover:border-emerald-500 bg-emerald-950/20 text-emerald-400 rounded-xl cursor-pointer active:scale-95 transition-all text-xs flex items-center justify-center"
-                        title="مراسلة المندوب واتساب"
-                      >
-                        <MessageSquare className="w-4 h-4" />
-                      </a>
+                      <>
+                        <a 
+                          href={`tel:${c.phone.toString().startsWith('0') ? c.phone.toString() : '0' + c.phone.toString()}`}
+                          className="p-2 border border-blue-900/40 hover:border-blue-500 bg-blue-950/20 text-blue-400 rounded-xl cursor-pointer active:scale-95 transition-all text-xs flex items-center justify-center"
+                          title="اتصال هاتفي بالمندوب"
+                        >
+                          <PhoneCall className="w-4 h-4" />
+                        </a>
+                        <a 
+                          href={toWAUrl(c.phone)}
+                          target="_blank" 
+                          rel="noreferrer"
+                          className="p-2 border border-emerald-900/40 hover:border-emerald-500 bg-emerald-950/20 text-emerald-400 rounded-xl cursor-pointer active:scale-95 transition-all text-xs flex items-center justify-center"
+                          title="مراسلة المندوب واتساب"
+                        >
+                          <MessageSquare className="w-4 h-4" />
+                        </a>
+                      </>
                     )}
                     <button 
                       onClick={() => {
@@ -548,7 +557,7 @@ export default function OpsRoom({ token, role, username, orders, couriers, onRef
                                         <PhoneCall className="w-3 h-3 text-slate-400" />
                                       </a>
                                       <a 
-                                        href={`https://wa.me/${toWA(o.phone)}`}
+                                        href={toWAUrl(o.phone)}
                                         target="_blank" 
                                         rel="noreferrer"
                                         className="text-emerald-500 hover:text-emerald-400 shrink-0"

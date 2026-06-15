@@ -8,6 +8,7 @@ import { apiCall } from "../utils";
 interface SuppliersManagementProps {
   token: string;
   role: string;
+  orders?: any[];
 }
 
 interface SupplierAccount {
@@ -23,7 +24,7 @@ interface SupplierAccount {
   rate: number;
 }
 
-export default function SuppliersManagement({ token, role }: SuppliersManagementProps) {
+export default function SuppliersManagement({ token, role, orders = [] }: SuppliersManagementProps) {
   const [accounts, setAccounts] = useState<SupplierAccount[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
@@ -39,6 +40,56 @@ export default function SuppliersManagement({ token, role }: SuppliersManagement
   const [isSettling, setIsSettling] = useState(false);
   const [isSettleModalOpen, setIsSettleModalOpen] = useState(false);
   const [settleTransType, setSettleTransType] = useState<"payout" | "withdrawal">("payout");
+
+  // --- Supplier Fast Query States & Memoized Calculator ---
+  const uniqueSuppliers = React.useMemo(() => {
+    const set = new Set<string>();
+    accounts.forEach(a => { if (a.name) set.add(a.name); });
+    (orders || []).forEach(o => { if (o?.supplier) set.add(o.supplier.toString().trim()); });
+    return Array.from(set).filter(Boolean).sort();
+  }, [accounts, orders]);
+
+  const [querySupplier, setQuerySupplier] = useState("");
+  const [queryDate, setQueryDate] = useState(() => {
+    try {
+      const d = new Date();
+      d.setHours(d.getHours() + 3); // Cairo offset fallback
+      return d.toISOString().substring(0, 10);
+    } catch (e) {
+      return new Date().toISOString().split("T")[0];
+    }
+  });
+
+  const queryResult = React.useMemo(() => {
+    if (!querySupplier) return null;
+    
+    const supplierOrders = (orders || []).filter(o => {
+      const sup = (o.supplier || "").toString().trim();
+      if (sup !== querySupplier.trim()) return false;
+      const oDate = (o.orderDate || o.createdAt || "").toString().substring(0, 10);
+      return oDate === queryDate;
+    });
+
+    const isReturnedDelivered = (status: string) => {
+      const s = (status || "").toString().trim();
+      return s === "تم تسليم المرتجع للمورد" || s === "تم تسليم المرتجع للمورد وتصفية حسابه" || s === "مرتجع تم تسليمه للمورد" || s === "مرتجع والعميل دفع الشحن" || s === "مرتجع مدفوع الشحن";
+    };
+
+    const total = supplierOrders.length;
+    const delivered = supplierOrders.filter(o => o.status === "تم التسليم").length;
+    const returnedToOffice = supplierOrders.filter(o => {
+      const s = (o.status || "").toString().trim();
+      return (s === "مرتجع" || s === "التسليم للمورد") && !isReturnedDelivered(s);
+    }).length;
+    const returnedDelivered = supplierOrders.filter(o => isReturnedDelivered(o.status)).length;
+
+    return {
+      total,
+      delivered,
+      returnedToOffice,
+      returnedDelivered
+    };
+  }, [querySupplier, queryDate, orders]);
 
   useEffect(() => {
     fetchAccounts();
@@ -147,6 +198,69 @@ export default function SuppliersManagement({ token, role }: SuppliersManagement
           <span>{successMsg}</span>
         </div>
       )}
+
+      {/* 🔍 شاشة استعلام المورد السريع */}
+      <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 space-y-4">
+        <div className="flex items-center gap-2 border-b border-white/5 pb-3">
+          <Sparkles className="text-amber-500" size={16} />
+          <h3 className="text-xs font-black text-slate-200">🔍 الاستعلام السريع والمؤشرات اليومية للمورد</h3>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-1 flex flex-col justify-end">
+            <label className="text-[10px] font-black text-slate-400 block pb-1">اختر اسم المورد</label>
+            <select
+              value={querySupplier}
+              onChange={(e) => setQuerySupplier(e.target.value)}
+              className="w-full bg-slate-950 border border-white/8 rounded-xl px-3 py-2 text-xs font-bold text-slate-100 outline-none focus:border-amber-500/50"
+            >
+              <option value="">-- اضغط لتحديد المورد --</option>
+              {uniqueSuppliers.map((name) => (
+                <option key={name} value={name}>{name}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-[10px] font-black text-slate-400 block pb-1">تاريخ اليوم المالي للاستعلام</label>
+            <input
+              type="date"
+              value={queryDate}
+              onChange={(e) => setQueryDate(e.target.value)}
+              className="w-full bg-slate-950 border border-white/8 rounded-xl px-3 py-2 text-xs font-bold font-mono text-slate-100 outline-none focus:border-amber-500/50 text-right"
+            />
+          </div>
+        </div>
+
+        {querySupplier ? (
+          queryResult ? (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-2">
+              <div className="bg-slate-950/65 border border-white/5 rounded-xl p-3 text-center space-y-1">
+                <span className="text-[10px] text-slate-400 block font-bold">الأوردرات الواردة</span>
+                <span className="text-lg font-black text-slate-100 font-mono">{queryResult.total}</span>
+              </div>
+              <div className="bg-emerald-950/20 border border-emerald-900/30 rounded-xl p-3 text-center space-y-1">
+                <span className="text-[10px] text-emerald-400 block font-bold">تم تسليمها للعميل</span>
+                <span className="text-lg font-black text-emerald-400 font-mono">{queryResult.delivered}</span>
+              </div>
+              <div className="bg-amber-950/20 border border-amber-900/30 rounded-xl p-3 text-center space-y-1">
+                <span className="text-[10px] text-amber-400 block font-bold">مرتجع في فرع المكتب</span>
+                <span className="text-lg font-black text-amber-400 font-mono">{queryResult.returnedToOffice}</span>
+              </div>
+              <div className="bg-blue-950/20 border border-blue-900/30 rounded-xl p-3 text-center space-y-1">
+                <span className="text-[10px] text-blue-400 block font-bold">مرتجع سُلّم للمورد</span>
+                <span className="text-lg font-black text-blue-400 font-mono">{queryResult.returnedDelivered}</span>
+              </div>
+            </div>
+          ) : (
+            <div className="text-center py-4 text-xs text-slate-500 font-bold">جاري جلب واحتساب حركات المورد المختار...</div>
+          )
+        ) : (
+          <div className="text-center py-4 text-[10px] text-slate-500 font-black bg-slate-950/30 rounded-xl border border-dashed border-white/5">
+            💡 يرجى اختيار اسم التاجر/المورد وتحديد التاريخ لعرض تقرير الأداء المركزي الفوري
+          </div>
+        )}
+      </div>
 
       {/* Quick Search */}
       <div className="bg-slate-900/40 p-1 rounded-xl flex items-center border border-white/4">

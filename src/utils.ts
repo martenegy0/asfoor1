@@ -15,6 +15,14 @@ export function toWA(phone: string): string {
   return "20" + p.substring(1);
 }
 
+export function toWAUrl(phone: string | number, message: string = ""): string {
+  const p = fixPhoneJS(phone);
+  if (!p) return "#";
+  const number = p;
+  const encodedMsg = encodeURIComponent(message);
+  return `https://web.whatsapp.com/send?phone=2${number}&text=${encodedMsg}`;
+}
+
 export function validatePhone(ph: string): { valid: boolean; msg: string } {
   const p = fixPhoneJS(ph);
   if (!p) return { valid: false, msg: "رقم الهاتف فارغ" };

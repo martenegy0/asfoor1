@@ -94,36 +94,18 @@ export default function Ledger({ token, role, user }: LedgerProps) {
         supplier: targetSup
       });
       if (res.ok) {
-        const rawEntries = res.entries || res.ledger || [];
-        
-        // Calculate running balance from oldest to newest (chronological order)
-        let tempBalance = 0;
-        const chronological = [...rawEntries].reverse();
-        const entriesWithBalance = chronological.map((item: any) => {
-          tempBalance += Number(item.amount || 0);
-          return { ...item, balanceAfter: tempBalance };
-        });
-        
-        const finalEntries = [...entriesWithBalance].reverse();
-        const actualBalance = res.balance !== undefined ? res.balance : tempBalance;
+        const finalEntries = res.entries || [];
+        const actualBalance = res.balance !== undefined ? res.balance : 0;
         const stats = res.stats || {
-          totalOrdersCount: rawEntries.filter((e: any) => e.type === "حقوق بضاعة أوردر").length,
-          totalGoodsUploaded: Math.abs(rawEntries.filter((e: any) => e.type === "حقوق بضاعة أوردر").reduce((sum: number, x: any) => sum + Number(x.amount || 0), 0)),
+          totalOrdersCount: 0,
+          totalGoodsUploaded: 0,
           deliveredOrdersCount: 0,
-          deliveredOrdersValue: actualBalance, // fallback mapping
-          returnsDeliveredCount: rawEntries.filter((e: any) => e.type === "مرتجع مخصوم").length,
-          returnsDeliveredValue: Math.abs(rawEntries.filter((e: any) => e.type === "مرتجع مخصوم").reduce((sum: number, x: any) => sum + Number(x.amount || 0), 0)),
-          paymentsValue: Math.abs(rawEntries.filter((e: any) => {
-            const isHuman = ["دفع نقدي", "دفعة مورد", "صرف مورد", "دفعة", "مسحوبات", "تسوية", "سحب"].some(p => (e.type || "").includes(p)) || e.tracking === "CASH-PAY";
-            const containsSettleOrWithdraw = (e.type || "").includes("سحب") || (e.type || "").includes("عكسية") || (e.type || "").includes("طرح") || (e.type || "").includes("خصم");
-            return isHuman && !containsSettleOrWithdraw;
-          }).reduce((sum: number, x: any) => sum + Number(x.amount || 0), 0)),
-          reverseAdjustmentsValue: Math.abs(rawEntries.filter((e: any) => {
-            const isHuman = ["دفع نقدي", "دفعة مورد", "صرف مورد", "تعديل حساب", "سحب"].some(p => (e.type || "").includes(p)) || e.tracking === "CASH-PAY";
-            const containsSettleOrWithdraw = (e.type || "").includes("سحب") || (e.type || "").includes("عكسية") || (e.type || "").includes("طرح") || (e.type || "").includes("خصم");
-            return isHuman && containsSettleOrWithdraw;
-          }).reduce((sum: number, x: any) => sum + Number(x.amount || 0), 0)),
-          outstanding: actualBalance,
+          deliveredOrdersValue: 0,
+          returnsDeliveredCount: 0,
+          returnsDeliveredValue: 0,
+          paymentsValue: 0,
+          reverseAdjustmentsValue: 0,
+          outstanding: 0,
           rate: 0
         };
 
