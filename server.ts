@@ -466,7 +466,19 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
     };
   }
 
-  const supplierOrders = (db.orders || []).filter((o: any) => o.supplier === supplierName);
+  const rawOrders = (db.orders || []).filter((o: any) => o.supplier === supplierName);
+  
+  // Dedup rawOrders by tracking ID (Unique Order ID) keeping the latest instance/update
+  const supplierOrdersMap = new Map<string, any>();
+  for (const o of rawOrders) {
+    const track = (o.tracking || "").toString().trim();
+    if (track) {
+      supplierOrdersMap.set(track, o);
+    } else {
+      supplierOrdersMap.set(`NO-TRACK-${Math.random()}`, o);
+    }
+  }
+  const supplierOrders = Array.from(supplierOrdersMap.values());
   
   // Clean raw ledger: force payouts and withdrawals to be negative (debited deductions)
   const rawLedger = (db.supplierLedger || []).filter((l: any) => l.supplier === supplierName).map((l: any) => {
@@ -628,6 +640,7 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
       returnsDeliveredCount,
       returnsDeliveredValue,
       paymentsValue,
+      reverseAdjustmentsValue,
       outstanding,
       rate
     }
@@ -839,6 +852,22 @@ function getCacheKey(payload: any): string {
   return JSON.stringify(keyObj);
 }
 
+async function fetchWithTimeout(url: string, options: any = {}, timeoutMs = 8000): Promise<any> {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+    clearTimeout(id);
+    return response;
+  } catch (err) {
+    clearTimeout(id);
+    throw err;
+  }
+}
+
 async function executeProxyRequest(gscriptUrl: string, payload: any): Promise<any> {
   const isWrite = [
     "addOrder", "addBulk", "updateStatus", "updateOrder", "deleteOrder", "bulkUpdate", "updateOrdersStatusBulk",
@@ -851,7 +880,7 @@ async function executeProxyRequest(gscriptUrl: string, payload: any): Promise<an
     READ_CACHE.clear();
     ACTIVE_FETCHES.clear();
     
-    const response = await fetch(gscriptUrl, {
+    const response = await fetchWithTimeout(gscriptUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
@@ -871,7 +900,7 @@ async function executeProxyRequest(gscriptUrl: string, payload: any): Promise<an
     if (nowMs - cached.timestamp > STALE_TTL && !ACTIVE_FETCHES.has(cacheKey)) {
       const bgPromise = (async () => {
         try {
-          const response = await fetch(gscriptUrl, {
+          const response = await fetchWithTimeout(gscriptUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload)
@@ -898,7 +927,7 @@ async function executeProxyRequest(gscriptUrl: string, payload: any): Promise<an
 
   const fetchPromise = (async () => {
     try {
-      const response = await fetch(gscriptUrl, {
+      const response = await fetchWithTimeout(gscriptUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
@@ -938,7 +967,7 @@ app.post("/api", async (req: Request, res: Response) => {
         if (!name || !pass) return err(res, "اكتب الاسم وكلمة المرور");
         
         try {
-          const response = await fetch(gscriptUrl, {
+          const response = await fetchWithTimeout(gscriptUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ action: "getUsers", token: "14014" })
@@ -960,14 +989,10 @@ app.post("/api", async (req: Request, res: Response) => {
             const token = createSession(user.name, user.role, user.perms || "كاملة");
             return ok(res, { user: user.name, role: user.role, token, perms: user.perms || "كاملة" });
           } else {
-            // Permit administrator bypass even if Sheet load fails
-            const token = createSession(name.trim(), "مدير", "كاملة");
-            return ok(res, { user: name.trim(), role: "مدير", token, perms: "كاملة" });
+            console.warn("Google Sheets getUsers returned non-ok. Falling back to local authentication.");
           }
         } catch (authErr: any) {
-          console.error("Google Sheets Auth Proxy error (permitting bypass):", authErr);
-          const token = createSession(name.trim(), "مدير", "كاملة");
-          return ok(res, { user: name.trim(), role: "مدير", token, perms: "كاملة" });
+          console.warn("Google Sheets Auth Proxy error. Falling back to local authentication:", authErr);
         }
       }
 
@@ -1601,8 +1626,7 @@ app.post("/api", async (req: Request, res: Response) => {
 
         return res.json(resData);
       } catch (proxyError: any) {
-        console.error("Error proxying to Google Sheets Script URL:", proxyError);
-        return err(res, `خطأ في الاتصال بسكريبت جوجل شيت: ${proxyError.message || proxyError}`);
+        console.warn("Google Sheets proxy failed or timed out. Falling back to local database routing:", proxyError?.message || proxyError);
       }
     }
 

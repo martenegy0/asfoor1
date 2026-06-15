@@ -1315,7 +1315,19 @@ function getSupplierDashboard(sheets, d) {
   const orders = getTableData(sheets.orders);
   const ledger = getTableData(sheets.supplierLedger);
 
-  const supOrders = orders.filter(o => o.supplier === supplier);
+  const rawSupOrders = orders.filter(o => o.supplier === supplier);
+  
+  // Dedup rawSupOrders by tracking ID
+  const uniqueSupOrdersMap = {};
+  rawSupOrders.forEach(o => {
+    var track = (o.tracking || "").toString().trim();
+    if (track) {
+      uniqueSupOrdersMap[track] = o;
+    } else {
+      uniqueSupOrdersMap["NO-TRACK-" + Math.random()] = o;
+    }
+  });
+  const supOrders = Object.keys(uniqueSupOrdersMap).map(k => uniqueSupOrdersMap[k]);
   const total = supOrders.length;
   
   const deliveredOrders = supOrders.filter(o => o.status === "تم التسليم");
@@ -1363,7 +1375,19 @@ function getSupplierAccounts(sheets) {
 
   const list = suppliers.map(s => {
     const sLedger = ledger.filter(l => l.supplier === s.name);
-    const sOrders = orders.filter(o => o.supplier === s.name);
+    const rawSupOrders = orders.filter(o => o.supplier === s.name);
+
+    // Dedup rawSupOrders by tracking ID
+    const uniqueSupOrdersMap = {};
+    rawSupOrders.forEach(o => {
+      var track = (o.tracking || "").toString().trim();
+      if (track) {
+        uniqueSupOrdersMap[track] = o;
+      } else {
+        uniqueSupOrdersMap["NO-TRACK-" + Math.random()] = o;
+      }
+    });
+    const sOrders = Object.keys(uniqueSupOrdersMap).map(k => uniqueSupOrdersMap[k]);
 
     // 1. Total Goods Uploaded (without shipping)
     const totalGoodsUploaded = sOrders.reduce((sum, o) => {
