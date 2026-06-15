@@ -1408,9 +1408,10 @@ function getSupplierAccounts(sheets) {
 
 function addSupplierPayment(sheets, d) {
   const { supplier, amount, desc, currentUser, transactionType } = d;
-  if (!supplier || !amount || Number(amount) <= 0) return { ok: false, error: "قيمة الدفعة المالية المكتوبة غير صحيحة" };
+  if (!supplier || !amount || Number(amount) === 0) return { ok: false, error: "قيمة الدفعة المالية المكتوبة غير صحيحة" };
 
-  const val = Number(amount);
+  // Handle absolute values, manual deductions are stored as negative in ledger
+  const val = Math.abs(Number(amount));
   const isWithdrawal = transactionType === "withdrawal" || transactionType === "سحب";
 
   // 1. قيد الخزانة (صرف الدفعة المادية من السند المركزي لتقليص النقدية أو إيداعها)
@@ -1423,13 +1424,13 @@ function addSupplierPayment(sheets, d) {
     addedBy: currentUser || "إدارة الحسابات"
   });
 
-  // 2. قيد دفتر الأستاذ الخاص بالمورد لإعدام الدائنة أو زيادتها
+  // 2. قيد دفتر الأستاذ الخاص بالمورد لإعدام الدائنة أو زيادتها (خصم دائم لدائن المورد)
   appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
     supplier: supplier,
     date: now(),
     type: isWithdrawal ? "سحب من المورد" : "دفعة مورد",
     tracking: "—",
-    amount: isWithdrawal ? val : -val,
+    amount: -val,
     desc: desc || (isWithdrawal ? `سحب مالي / تسوية عكسية من المورد: ${supplier}` : `استلام دفعة نقدية مسواة للمورد: ${supplier}`)
   });
 

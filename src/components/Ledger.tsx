@@ -108,12 +108,21 @@ export default function Ledger({ token, role, user }: LedgerProps) {
         const actualBalance = res.balance !== undefined ? res.balance : tempBalance;
         const stats = res.stats || {
           totalOrdersCount: rawEntries.filter((e: any) => e.type === "حقوق بضاعة أوردر").length,
-          totalGoodsUploaded: tempBalance,
+          totalGoodsUploaded: Math.abs(rawEntries.filter((e: any) => e.type === "حقوق بضاعة أوردر").reduce((sum: number, x: any) => sum + Number(x.amount || 0), 0)),
           deliveredOrdersCount: 0,
           deliveredOrdersValue: actualBalance, // fallback mapping
           returnsDeliveredCount: rawEntries.filter((e: any) => e.type === "مرتجع مخصوم").length,
           returnsDeliveredValue: Math.abs(rawEntries.filter((e: any) => e.type === "مرتجع مخصوم").reduce((sum: number, x: any) => sum + Number(x.amount || 0), 0)),
-          paymentsValue: Math.abs(rawEntries.filter((e: any) => ["دفع نقدي", "دفعة مورد", "صرف مورد"].includes(e.type) || e.tracking === "CASH-PAY").reduce((sum: number, x: any) => sum + Number(x.amount || 0), 0)),
+          paymentsValue: Math.abs(rawEntries.filter((e: any) => {
+            const isHuman = ["دفع نقدي", "دفعة مورد", "صرف مورد", "دفعة", "مسحوبات", "تسوية", "سحب"].some(p => (e.type || "").includes(p)) || e.tracking === "CASH-PAY";
+            const containsSettleOrWithdraw = (e.type || "").includes("سحب") || (e.type || "").includes("عكسية") || (e.type || "").includes("طرح") || (e.type || "").includes("خصم");
+            return isHuman && !containsSettleOrWithdraw;
+          }).reduce((sum: number, x: any) => sum + Number(x.amount || 0), 0)),
+          reverseAdjustmentsValue: Math.abs(rawEntries.filter((e: any) => {
+            const isHuman = ["دفع نقدي", "دفعة مورد", "صرف مورد", "تعديل حساب", "سحب"].some(p => (e.type || "").includes(p)) || e.tracking === "CASH-PAY";
+            const containsSettleOrWithdraw = (e.type || "").includes("سحب") || (e.type || "").includes("عكسية") || (e.type || "").includes("طرح") || (e.type || "").includes("خصم");
+            return isHuman && containsSettleOrWithdraw;
+          }).reduce((sum: number, x: any) => sum + Number(x.amount || 0), 0)),
           outstanding: actualBalance,
           rate: 0
         };
@@ -397,10 +406,10 @@ export default function Ledger({ token, role, user }: LedgerProps) {
           {supplierStats ? (
             <div className="space-y-6" id="supplier-mirror-grid">
               {/* Main Top Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
                 {/* 1. إجمالي الطلبات المرفوعة */}
                 <div className="bg-slate-900 border border-white/6 rounded-2xl p-4 space-y-2 text-right hover:border-amber-500/20 transition-all">
-                  <span className="text-[10px] font-black text-slate-400 block tracking-wider uppercase">📦  إجمالي الطلبات المرفوعة</span>
+                  <span className="text-[10px] font-black text-slate-400 block tracking-wider uppercase">📦  إجمالي المنتجات المرفوعة</span>
                   <div className="text-xl font-mono font-black text-slate-100">
                     {Number(supplierStats.totalGoodsUploaded || 0).toLocaleString("ar")} <span className="text-xs">ج.م</span>
                   </div>
@@ -422,28 +431,39 @@ export default function Ledger({ token, role, user }: LedgerProps) {
 
                 {/* 3. المرتجع المخصوم بالكامل */}
                 <div className="bg-slate-900 border border-white/6 rounded-2xl p-4 space-y-2 text-right hover:border-red-500/20 transition-all">
-                  <span className="text-[10px] font-black text-slate-400 block tracking-wider uppercase">🔴  المرتجع المخصوم بالكامل</span>
+                  <span className="text-[10px] font-black text-slate-400 block tracking-wider uppercase">🔴  المرتجع المعتمد المستلم</span>
                   <div className="text-xl font-mono font-black text-red-400">
                     {Number(supplierStats.returnsDeliveredValue || 0).toLocaleString("ar")} <span className="text-xs">ج.م</span>
                   </div>
                   <div className="text-[9.5px] text-red-500 font-bold">
-                     عدد: {supplierStats.returnsDeliveredCount || 0} أوردر مستلم للمورد
+                     عدد: {supplierStats.returnsDeliveredCount || 0} أوردر مرتجع
                   </div>
                 </div>
 
                 {/* 4. كلي الدفعات المصروفة */}
                 <div className="bg-slate-900 border border-white/6 rounded-2xl p-4 space-y-2 text-right hover:border-cyan-500/20 transition-all">
-                  <span className="text-[10px] font-black text-slate-400 block tracking-wider uppercase">💵  كلي الدفعات المصروفة</span>
+                  <span className="text-[10px] font-black text-slate-400 block tracking-wider uppercase">💵  إجمالي الدفعات النقدية</span>
                   <div className="text-xl font-mono font-black text-cyan-400">
                     {Number(supplierStats.paymentsValue || 0).toLocaleString("ar")} <span className="text-xs">ج.م</span>
                   </div>
                   <div className="text-[9.5px] text-cyan-500 font-bold">
-                     إجمالي المسحوبات النقدية كاش
+                     المسحوبات النقدية المباشرة
+                  </div>
+                </div>
+
+                {/* 5. التسويات العكسية والصفرية */}
+                <div className="bg-slate-900 border border-white/6 rounded-2xl p-4 space-y-2 text-right hover:border-red-400/20 transition-all">
+                  <span className="text-[10px] font-black text-purple-400 block tracking-wider uppercase">🔄  التسويات العكسية والسحب</span>
+                  <div className="text-xl font-mono font-black text-red-300">
+                    {Number(supplierStats.reverseAdjustmentsValue || 0).toLocaleString("ar")} <span className="text-xs">ج.م</span>
+                  </div>
+                  <div className="text-[9.5px] text-red-400 font-bold">
+                     تعديلات وخصومات إدارية
                   </div>
                 </div>
               </div>
 
-              {/* 5. الحقل الرئيسي البارز [المبلغ المستحق الحالي للمورد] */}
+              {/* 5. الحقل الرئيسي البارز [المبلغ المستحق النهائي للمورد] */}
               <div className="bg-gradient-to-l from-slate-900 via-slate-950 to-slate-900 border-2 border-emerald-500/25 rounded-2xl p-6 text-center space-y-3 relative overflow-hidden shadow-xl">
                 <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/5 rounded-full blur-2xl"></div>
                 <div className="absolute top-2 left-2 text-emerald-500/10">
@@ -451,7 +471,7 @@ export default function Ledger({ token, role, user }: LedgerProps) {
                 </div>
                 
                 <span className="px-3 py-1 bg-emerald-950/40 border border-emerald-900/40 text-emerald-400 text-[10px] font-black rounded-lg uppercase tracking-widest inline-block">
-                  🏆 المبلغ المستحق الحالي للمورد (الرصيد الصافي القابل للصرف)
+                  🏆 المبلغ المستحق النهائي للمورد (الصافي القابل للصرف)
                 </span>
 
                 <div className="text-4xl font-mono font-black text-emerald-400 tracking-tight animate-pulse">
@@ -461,13 +481,15 @@ export default function Ledger({ token, role, user }: LedgerProps) {
 
                 {/* Formula display */}
                 <div className="bg-slate-950/80 border border-white/4 rounded-xl py-3 px-4 max-w-2xl mx-auto text-xs text-slate-300 leading-relaxed font-bold">
-                  <span className="text-amber-400">معادلة الحساب المعتمدة للمطابقة التامة:</span>
+                  <span className="text-amber-400">المعادلة البرمجية الإجبارية لتصفية الحساب:</span>
                   <div className="mt-1 flex flex-wrap items-center justify-center gap-2 text-[11px] font-mono">
-                    <span className="text-slate-100">المسلمات بنجاح ({Number(supplierStats.deliveredOrdersValue || 0).toLocaleString("ar")})</span>
+                    <span className="text-slate-100">إجمالي المنتجات المرفوعة ({Number(supplierStats.totalGoodsUploaded || 0).toLocaleString("ar")})</span>
                     <span className="text-slate-400 font-sans"> - </span>
-                    <span className="text-red-400">المرتجع المخصوم ({Number(supplierStats.returnsDeliveredValue || 0).toLocaleString("ar")})</span>
+                    <span className="text-red-400">المرتجع المعتمد المستلم ({Number(supplierStats.returnsDeliveredValue || 0).toLocaleString("ar")})</span>
                     <span className="text-slate-400 font-sans"> - </span>
-                    <span className="text-cyan-400">الدفعات المصروفة ({Number(supplierStats.paymentsValue || 0).toLocaleString("ar")})</span>
+                    <span className="text-cyan-400">إجمالي الدفعات النقدية ({Number(supplierStats.paymentsValue || 0).toLocaleString("ar")})</span>
+                    <span className="text-slate-400 font-sans"> - </span>
+                    <span className="text-red-300">التسويات العكسية الصادرة ({Number(supplierStats.reverseAdjustmentsValue || 0).toLocaleString("ar")})</span>
                     <span className="text-slate-400 font-sans"> = </span>
                     <span className="text-emerald-400 font-black">{Number(supplierStats.outstanding || 0).toLocaleString("ar")} ج.م</span>
                   </div>

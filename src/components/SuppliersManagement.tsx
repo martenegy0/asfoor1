@@ -207,7 +207,7 @@ export default function SuppliersManagement({ token, role }: SuppliersManagement
                       <span className="text-emerald-400 font-extrabold font-mono">
                         {acc.totalCOD.toLocaleString()} ج.م
                       </span>
-                      <span className="text-slate-500">: إجمالي مديونية المورد الثابتة</span>
+                      <span className="text-slate-500">: إجمالي مديونية المورد الثابتة (بضاعة)</span>
                     </div>
 
                     <div className="flex justify-between text-[11px]">
@@ -222,6 +222,13 @@ export default function SuppliersManagement({ token, role }: SuppliersManagement
                         {Math.abs(acc.payments).toLocaleString()} ج.م
                       </span>
                       <span className="text-slate-500">: كلي الدفعات المصروفة</span>
+                    </div>
+
+                    <div className="flex justify-between text-[11px]">
+                      <span className="text-red-300 font-extrabold font-mono">
+                        {Math.abs(acc.adjustments || 0).toLocaleString()} ج.م
+                      </span>
+                      <span className="text-slate-500">: التسويات العكسية الصادرة</span>
                     </div>
 
                     <div className="flex justify-between text-xs font-black border-t border-white/6 pt-3 mt-3">
@@ -280,7 +287,7 @@ export default function SuppliersManagement({ token, role }: SuppliersManagement
                   <span className="font-extrabold font-mono text-emerald-400">
                     {activeSupplier.totalCOD.toLocaleString()} ج.م
                   </span>
-                  <span>إجمالي مديونية المورد الثابتة</span>
+                  <span>إجمالي مديونية المورد الثابتة (بضاعة)</span>
                 </div>
 
                 <div className="flex justify-between items-center text-slate-300">
@@ -295,6 +302,13 @@ export default function SuppliersManagement({ token, role }: SuppliersManagement
                     {Math.abs(activeSupplier.payments || 0).toLocaleString()} ج.م
                   </span>
                   <span>الدفعات المصروفة سابقاً</span>
+                </div>
+
+                <div className="flex justify-between items-center text-slate-300">
+                  <span className="font-extrabold font-mono text-red-300">
+                    {Math.abs(activeSupplier.adjustments || 0).toLocaleString()} ج.م
+                  </span>
+                  <span>التسويات العكسية الصادرة</span>
                 </div>
 
                 <div className="border-t border-white/6 pt-2 pb-1 flex justify-between items-center font-black">

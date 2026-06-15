@@ -459,6 +459,7 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
         returnsDeliveredCount: 0,
         returnsDeliveredValue: 0,
         paymentsValue: 0,
+        reverseAdjustmentsValue: 0,
         outstanding: 0,
         rate: 0
       }
@@ -466,7 +467,22 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
   }
 
   const supplierOrders = (db.orders || []).filter((o: any) => o.supplier === supplierName);
-  const rawLedger = (db.supplierLedger || []).filter((l: any) => l.supplier === supplierName);
+  
+  // Clean raw ledger: force payouts and withdrawals to be negative (debited deductions)
+  const rawLedger = (db.supplierLedger || []).filter((l: any) => l.supplier === supplierName).map((l: any) => {
+    const type = (l.type || "").toString().trim();
+    const isWithdrawal = type.includes("سحب") || type.includes("عكسية") || type.includes("طرح") || type.includes("خصم");
+    const isPayout = ["دفع نقدي", "دفعة مورد", "صرف مورد", "دفعة", "مسحوبات", "تسوية"].some(p => type.includes(p)) || l.tracking === "CASH-PAY";
+    const val = Number(l.amount || 0);
+
+    if (isWithdrawal || isPayout) {
+      return {
+        ...l,
+        amount: -Math.abs(val)
+      };
+    }
+    return l;
+  });
 
   // Helper function to check for genuine human payouts/adjustments
   const isHumanLedgedPayout = (l: any) => {
@@ -515,15 +531,30 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
     return sum + prodPrice;
   }, 0);
 
-  // 4. Payments made to supplier from ledger (Strict human payout classification)
+  // 4. Payments and Adjustments made to supplier from ledger (Strict human payout classification)
   const adjustmentsAndPayments = rawLedger.filter(isHumanLedgedPayout);
 
-  const paymentsValue = adjustmentsAndPayments.reduce((sum: number, l: any) => {
+  // Separate Cash Payments from Reverse Adjustments
+  const cashPayments = adjustmentsAndPayments.filter((l: any) => {
+    const type = (l.type || "").toString().trim();
+    return !type.includes("سحب") && !type.includes("عكسية") && !type.includes("طرح") && !type.includes("خصم");
+  });
+
+  const reverseAdjustments = adjustmentsAndPayments.filter((l: any) => {
+    const type = (l.type || "").toString().trim();
+    return type.includes("سحب") || type.includes("عكسية") || type.includes("طرح") || type.includes("خصم");
+  });
+
+  const paymentsValue = cashPayments.reduce((sum: number, l: any) => {
     return sum - Number(l.amount || 0);
   }, 0);
 
-  // 5. Calculate outstanding balance: Outstanding = TotalGoodsUploaded - ReturnsDeliveredValue - PaymentsValue
-  const outstanding = totalGoodsUploaded - returnsDeliveredValue - paymentsValue;
+  const reverseAdjustmentsValue = reverseAdjustments.reduce((sum: number, l: any) => {
+    return sum - Number(l.amount || 0);
+  }, 0);
+
+  // 5. Calculate outstanding balance: Outstanding = TotalGoodsUploaded - ReturnsDeliveredValue - PaymentsValue - ReverseAdjustmentsValue
+  const outstanding = totalGoodsUploaded - returnsDeliveredValue - paymentsValue - reverseAdjustmentsValue;
 
   // Build the ledger entries list
   const entries: any[] = [];
@@ -531,12 +562,13 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
   // A. All uploaded orders as credit
   for (const o of supplierOrders) {
     const prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
+    const prodPriceNum = Number(prodPrice);
     entries.push({
       date: o.orderDate || o.createdAt || "",
       type: "حقوق بضاعة أوردر",
       tracking: o.tracking,
-      amount: prodPrice,
-      desc: `حقوق توريد أوردر رقم #${o.tracking} (صافي بضاعة: ${prodPrice} ج.م - حالة الأوردر: ${o.status})`
+      amount: prodPriceNum,
+      desc: `حقوق توريد أوردر رقم #${o.tracking} (صافي بضاعة: ${prodPriceNum} ج.م - حالة الأوردر: ${o.status})`
     });
   }
 
@@ -1362,9 +1394,9 @@ app.post("/api", async (req: Request, res: Response) => {
               const unified = getSupplierUnifiedLedger(mockDb, sup);
               return {
                 name: sup,
-                totalCOD: unified.stats.deliveredOrdersValue,
+                totalCOD: unified.stats.totalGoodsUploaded,
                 returnsDelivered: unified.stats.returnsDeliveredValue,
-                adjustments: 0,
+                adjustments: unified.stats.reverseAdjustmentsValue,
                 payments: unified.stats.paymentsValue,
                 totalOrders: unified.stats.totalOrdersCount,
                 deliveredOrders: unified.stats.deliveredOrdersCount,
@@ -2811,9 +2843,9 @@ app.post("/api", async (req: Request, res: Response) => {
           const unified = getSupplierUnifiedLedger(db, sup);
           return {
             name: sup,
-            totalCOD: unified.stats.deliveredOrdersValue,
+            totalCOD: unified.stats.totalGoodsUploaded,
             returnsDelivered: unified.stats.returnsDeliveredValue,
-            adjustments: 0,
+            adjustments: unified.stats.reverseAdjustmentsValue,
             payments: unified.stats.paymentsValue,
             totalOrders: unified.stats.totalOrdersCount,
             deliveredOrders: unified.stats.deliveredOrdersCount,
@@ -2835,17 +2867,18 @@ app.post("/api", async (req: Request, res: Response) => {
         const { supplier, amount, desc, transactionType } = d;
         if (!supplier || !amount) return err(res, "بيانات مفقودة");
 
-        const val = Number(amount);
+        // Take absolute value first in case they passed a negative number, as we always want to store manual deductions as negative in ledger
+        const val = Math.abs(Number(amount));
         const isWithdrawal = transactionType === "withdrawal" || transactionType === "سحب";
         const finalDesc = desc || (isWithdrawal ? `سحب مالي / تسوية عكسية من المورد: ${supplier}` : `دفعة نقدية مسددة للمورد: ${supplier}`);
 
-        // Subtract/Add to Supplier Account Ledger (Deducts or Increases balance)
+        // Deducts balance of Supplier (Debits account balance with a negative entry)
         db.supplierLedger.push({
           supplier,
           date: now(),
           type: isWithdrawal ? "سحب من المورد" : "دفع نقدي",
           tracking: "CASH-PAY",
-          amount: isWithdrawal ? val : -val,
+          amount: -val,
           desc: finalDesc
         });
 
