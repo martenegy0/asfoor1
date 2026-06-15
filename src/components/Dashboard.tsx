@@ -88,18 +88,24 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
       const supplierStats: { [name: string]: { total: number; delivered: number; returned: number } } = {};
 
       for (const o of finalOrders) {
-        if (o.isClosed) {
-          continue;
-        }
-
-        dStats.total++;
-
+        // --- Calculate metrics that must NEVER be zeroed out by daily closing ---
         const createdAtDate = o.createdAt || o.orderDate || "";
         const isCreatedToday = createdAtDate.startsWith(todayStr);
 
         if (isCreatedToday) {
           dStats.todayTotal++; 
         }
+
+        if (o.status === "بالمستودع") {
+          dStats.remainingStock++;
+          dStats.remainingStockValue += (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
+        }
+
+        if (o.isClosed) {
+          continue;
+        }
+
+        dStats.total++;
 
         const statusStr = (o.status || "").toString().trim();
         const deliveredPatterns = [
@@ -120,11 +126,6 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
         const isAssigned = o.courier && o.courier !== "";
         if (isAssigned && !isClosed) {
           dStats.assignedPending++;
-        }
-
-        if (o.status === "بالمستودع") {
-          dStats.remainingStock++;
-          dStats.remainingStockValue += (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
         }
 
         if (o.status === "تم التسليم") {
@@ -361,143 +362,164 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
           </button>
         </div>
       )}
-      {/* Dynamic Summary Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-        {/* Total Orders */}
-        <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 text-center relative overflow-hidden">
-          <div className="absolute top-2 left-2 text-amber-500/15">
-            <Layers size={48} />
+      {/* 🟢 لوحة تشغيل اليومية الحالية (متاحة لجميع الأقسام) */}
+      <div className="space-y-3">
+        <h3 className="text-xs font-black text-slate-300 flex items-center gap-1.5 uppercase tracking-wider">
+          <span>⚙️ لوحة تحكم تشغيل اليومية الحالية (لجميع الأقسام)</span>
+        </h3>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {/* Today's Added Orders */}
+          <div className="bg-slate-900 border border-white/6 rounded-2xl p-6 text-center relative overflow-hidden">
+            <div className="absolute top-2 left-2 text-amber-500/10">
+              <Calendar size={44} />
+            </div>
+            <div className="text-3xl font-black text-amber-400 font-mono">{s.todayTotal}</div>
+            <div className="text-[11px] font-black text-slate-400 mt-1 uppercase tracking-wider">تشغيل اليوم (الأوردرات المضافة اليومية)</div>
+            <p className="text-[10px] text-slate-500 font-bold mt-1">عدد الطلبات التي سُجلت بالملفات اليوم</p>
           </div>
-          <div className="text-3xl font-black text-amber-500">{s.total}</div>
-          <div className="text-[11px] font-bold text-slate-500 mt-1 uppercase tracking-wider">إجمالي الطلبات المستلمة</div>
-        </div>
 
-        {/* Remaining Warehouse Stock Card */}
-        <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 text-center relative overflow-hidden flex flex-col justify-between min-h-[140px]">
-          <div className="absolute top-2 left-2 text-orange-500/10">
-            <Package size={44} />
-          </div>
-          <div>
-            <div className="text-3xl font-black text-orange-500 font-mono">{s.remainingStock} <span className="text-xs font-bold text-slate-400">طلب</span></div>
-            <div className="text-[11px] font-black text-slate-100 mt-1 uppercase tracking-wider">المخزون المتبقي بالمستودع</div>
-          </div>
-          <div className="border-t border-white/5 pt-2 mt-2 space-y-0.5">
-            <div className="text-xs font-black text-emerald-400 font-mono">{(s.remainingStockValue || 0).toLocaleString("ar")} ج.م</div>
-            <div className="text-[9px] font-extrabold text-slate-400">القيمة المالية للبضاعة المتأخرة بالكامل</div>
-          </div>
-        </div>
-
-        {/* Assigned Pending Card */}
-        <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 text-center relative overflow-hidden" id="assigned-pending-metric-card">
-          <div className="absolute top-2 left-2 text-blue-500/15">
-            <Truck size={48} className="rotate-12" />
-          </div>
-          <div className="text-3xl font-black text-blue-400">{assignedPending}</div>
-          <div className="text-[11px] font-bold text-slate-500 mt-1 uppercase tracking-wider">شحنات قيد التوصيل مع المناديب</div>
-          <div className="text-[10px] text-slate-400 font-bold mt-1 inline-block px-1.5 py-0.5 rounded bg-blue-950/20">
-             قيد التسليم والمسندة
-          </div>
-        </div>
-
-        {/* Delivered Orders */}
-        <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 text-center relative overflow-hidden">
-          <div className="absolute top-2 left-2 text-emerald-500/10">
-            <CheckCircle2 size={48} />
-          </div>
-          <div className="text-3xl font-black text-emerald-400">{s.delivered}</div>
-          <div className="text-[11px] font-bold text-slate-500 mt-1 uppercase tracking-wider">تم التسليم والتحصيل</div>
-          <div className="text-[10px] text-slate-400 font-bold mt-1 inline-block px-1.5 py-0.5 rounded bg-emerald-950/20">
-             نسبة {s.rate}% نجاح
-          </div>
-        </div>
-
-        {/* Returned Orders */}
-        <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 text-center relative overflow-hidden">
-          <div className="absolute top-2 left-2 text-red-500/10">
-            <AlertTriangle size={48} />
-          </div>
-          <div className="text-3xl font-black text-red-400">{s.returned}</div>
-          <div className="text-[11px] font-bold text-slate-500 mt-1 uppercase tracking-wider">عهدة المرتجعات بالمكتب</div>
-        </div>
-
-        {/* Returned Delivered to Supplier Card */}
-        <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 text-center relative overflow-hidden">
-          <div className="absolute top-2 left-2 text-indigo-500/10">
-            <CheckCircle2 size={48} />
-          </div>
-          <div className="text-3xl font-black text-indigo-400">{s.returnedDeliveredToSupplier || 0}</div>
-          <div className="text-[11px] font-bold text-slate-505 mt-1 uppercase tracking-wider">مرتجع تم تسليمه للمورد</div>
-          <div className="text-[10px] text-indigo-455 font-bold mt-1 inline-block px-1.5 py-0.5 rounded bg-indigo-950/20">
-             إجمالي: {(s.returnedDeliveredToSupplierValue || 0).toLocaleString("ar")} ج.م
-          </div>
-        </div>
-      </div>
-
-      {/* Major Financial Indicators */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {/* Total COD */}
-        <div className="md:col-span-1 bg-slate-900 border border-white/6 rounded-2xl p-6 text-center space-y-1 relative overflow-hidden">
-          <div className="absolute top-2 left-2 text-emerald-500/10">
-            <Wallet size={48} />
-          </div>
-          <div className="text-sm font-bold text-slate-500">مجموع التحصيل المتراكم</div>
-          <div className="text-3xl font-black text-emerald-400">
-            {(s.totalCOD || 0).toLocaleString("ar")} <span className="text-xs">ج.م</span>
-          </div>
-          <div className="text-[10px] text-slate-400 font-bold">بما في ذلك سعر الشحن والمنتجات المسلّمة</div>
-        </div>
-
-        {/* Today's Stats & Cash (Seventh Point Fix!) */}
-        <div className="bg-slate-900 border border-white/6 rounded-2xl p-6 text-center space-y-1 relative overflow-hidden">
-          <div className="absolute top-2 left-2 text-amber-500/10">
-            <Calendar size={48} />
-          </div>
-          <div className="text-sm font-bold text-slate-400">طلبات اليوم مضافة</div>
-          <div className="text-3xl font-black text-amber-400">{s.todayTotal}</div>
-          <div className="text-[10px] text-slate-400 font-bold">المحسوبة من تاريخ الإنشاء الفعلي اليوم</div>
-        </div>
-
-        {/* Today's Actual Settlement Cash (Seventh Point Fix!) */}
-        <div className="bg-slate-900 border border-white/6 rounded-2xl p-6 text-center space-y-1 relative overflow-hidden">
-          <div className="absolute top-2 left-2 text-amber-500/10">
-            <TrendingUp size={48} />
-          </div>
-          <div className="text-sm font-bold text-slate-450">تحصيل اليوم الفعلي</div>
-          <div className="text-3xl font-black text-amber-500">
-            {(s.todayCOD || 0).toLocaleString("ar")} <span className="text-xs">ج.م</span>
-          </div>
-          <div className="text-[10px] text-slate-400 font-bold">جميع المبالغ المحصّلة فعلياً اليوم</div>
-        </div>
-      </div>
-
-      {/* High Performers Recognition */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <span className="text-3xl ring-4 ring-purple-900/20 p-2.5 rounded-xl bg-purple-950/10">🛵</span>
+          {/* Remaining Warehouse Stock Card */}
+          <div className="bg-slate-900 border border-white/6 rounded-2xl p-6 text-center relative overflow-hidden flex flex-col justify-between min-h-[140px]">
+            <div className="absolute top-2 left-2 text-orange-500/10">
+              <Package size={44} />
+            </div>
             <div>
-              <div className="text-xs text-slate-500 font-bold">أفضل مندوب تسليم</div>
-              <div className="text-sm font-black text-purple-400 mt-0.5">{bestCourier}</div>
+              <div className="text-3xl font-black text-orange-500 font-mono">{s.remainingStock} <span className="text-xs font-bold text-slate-400">طلب</span></div>
+              <div className="text-[11px] font-black text-slate-100 mt-1 uppercase tracking-wider">المخزون المتبقي بالمستودع</div>
+            </div>
+            <div className="border-t border-white/5 pt-2 mt-2 space-y-0.5">
+              <div className="text-xs font-black text-emerald-400 font-mono">{(s.remainingStockValue || 0).toLocaleString("ar")} ج.م</div>
+              <div className="text-[9px] font-extrabold text-slate-400">القيمة الفورية للبضائع المتواجدة بالمخزن</div>
             </div>
           </div>
-          <div className="text-[10px] bg-purple-950/25 text-purple-300 font-bold px-2 py-1 rounded-lg">
-            الأكثر كفاءة بالتسليم
-          </div>
-        </div>
 
-        <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <span className="text-3xl ring-4 ring-amber-900/20 p-2.5 rounded-xl bg-amber-950/10">📦</span>
-            <div>
-              <div className="text-xs text-slate-500 font-bold">أفضل مورد للشركة</div>
-              <div className="text-sm font-black text-amber-400 mt-0.5">{bestSupplier}</div>
+          {/* Assigned Pending Card */}
+          <div className="bg-slate-900 border border-white/6 rounded-2xl p-6 text-center relative overflow-hidden" id="assigned-pending-metric-card">
+            <div className="absolute top-2 left-2 text-blue-500/15">
+              <Truck size={44} className="rotate-12" />
             </div>
-          </div>
-          <div className="text-[10px] bg-amber-950/25 text-amber-300 font-bold px-2 py-1 rounded-lg">
-            الأكبر في حجم المبيعات
+            <div className="text-3xl font-black text-blue-400 font-mono">{assignedPending}</div>
+            <div className="text-[11px] font-black text-slate-400 mt-1 uppercase tracking-wider font-sans">شحنات قيد التوصيل بالشارع حالياً</div>
+            <p className="text-[10px] text-slate-500 font-bold mt-1">المكلفة مع المناديب ولم تُقفل بعد</p>
           </div>
         </div>
       </div>
+
+      {/* 🔒 لوحة الإدارة المركزية والأرشيف التراكمي المالي (مخفية ومؤمنة تماماً للمالك والمدراء فقط) */}
+      {isManagerOrAccountant ? (
+        <div className="space-y-4 pt-4 border-t border-white/5">
+          <div className="flex items-center gap-2 border-r-2 border-amber-500 pr-2">
+            <h3 className="text-xs font-black text-amber-500 tracking-wider">
+              🔒 لوحة الإدارة المركزية وحسابات التراكمية (صلاحيات المالك والمحاسبة فقط)
+            </h3>
+          </div>
+
+          {/* Cumulative Metrics Grid */}
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+            {/* Total System Orders */}
+            <div className="bg-slate-900 border border-amber-500/10 rounded-2xl p-5 text-center relative overflow-hidden">
+              <div className="absolute top-2 left-2 text-amber-500/10">
+                <Layers size={40} />
+              </div>
+              <div className="text-2xl font-black text-amber-500 font-mono">{s.total}</div>
+              <div className="text-[10px] font-black text-slate-400 mt-1 uppercase tracking-wider">إجمالي الطلبات المستلمة</div>
+            </div>
+
+            {/* Delivered Orders */}
+            <div className="bg-slate-900 border border-amber-500/10 rounded-2xl p-5 text-center relative overflow-hidden">
+              <div className="absolute top-2 left-2 text-emerald-500/10">
+                <CheckCircle2 size={40} />
+              </div>
+              <div className="text-2xl font-black text-emerald-400 font-mono">{s.delivered}</div>
+              <div className="text-[10px] font-black text-slate-400 mt-1 uppercase tracking-wider">تم التسليم والتحصيل</div>
+              <div className="text-[9px] text-slate-500 font-bold mt-1 inline-block px-1 py-0.2 rounded bg-emerald-950/20">
+                 نسبة {s.rate}% نجاح
+              </div>
+            </div>
+
+            {/* Returned Orders */}
+            <div className="bg-slate-900 border border-amber-500/10 rounded-2xl p-5 text-center relative overflow-hidden">
+              <div className="absolute top-2 left-2 text-red-500/10">
+                <AlertTriangle size={40} />
+              </div>
+              <div className="text-2xl font-black text-red-400 font-mono">{s.returned}</div>
+              <div className="text-[10px] font-black text-slate-400 mt-1 uppercase tracking-wider">عهدة مرتجعات المكتب</div>
+            </div>
+
+            {/* Returned Delivered to Supplier Card */}
+            <div className="bg-slate-900 border border-amber-500/10 rounded-2xl p-5 text-center relative overflow-hidden">
+              <div className="absolute top-2 left-2 text-indigo-500/10">
+                <CheckCircle2 size={40} />
+              </div>
+              <div className="text-2xl font-black text-indigo-400 font-mono">{s.returnedDeliveredToSupplier || 0}</div>
+              <div className="text-[10px] font-black text-slate-400 mt-1 uppercase tracking-wider">مرتجع مسلم للمورد</div>
+              <div className="text-[9px] text-indigo-500 font-bold mt-1">
+                 {(s.returnedDeliveredToSupplierValue || 0).toLocaleString("ar")} ج.م
+              </div>
+            </div>
+
+            {/* Total Cumulative Cashbox In COD */}
+            <div className="bg-slate-900 border border-amber-500/10 rounded-2xl p-5 text-center relative overflow-hidden">
+              <div className="absolute top-2 left-2 text-emerald-500/10">
+                <Wallet size={40} />
+              </div>
+              <div className="text-2xl font-black text-emerald-400 font-mono">
+                {(s.totalCOD || 0).toLocaleString("ar")}
+              </div>
+              <div className="text-[10px] font-black text-slate-400 mt-1 uppercase tracking-wider">التحصيل التراكمي</div>
+              <div className="text-[8px] text-slate-500 font-bold mt-1">شامل التحميلات والمنتجات المسلّمة</div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Today's Actual Cashbox Net Revenue */}
+            <div className="bg-slate-900 border border-emerald-500/15 rounded-2xl p-6 text-center space-y-1 relative overflow-hidden">
+              <div className="absolute top-2 left-2 text-emerald-500/10">
+                <TrendingUp size={44} />
+              </div>
+              <div className="text-xs font-black text-slate-400">صافي تحصيل خزنة اليوم الدفتري الفعلي</div>
+              <div className="text-3xl font-black text-emerald-400 font-mono">
+                {(s.todayCOD || 0).toLocaleString("ar")} <span className="text-sm">ج.م</span>
+              </div>
+              <p className="text-[10px] text-slate-500 font-bold">كل المبالغ المحصلة المودعة عهداً اليوم</p>
+            </div>
+
+            {/* High Performers Courier */}
+            <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="text-2xl ring-4 ring-purple-900/10 p-2.5 rounded-xl bg-purple-950/20">🛵</span>
+                <div>
+                  <div className="text-[10px] text-slate-550 font-bold">أفضل مندوب تسليم</div>
+                  <div className="text-sm font-black text-purple-400 mt-0.5">{bestCourier}</div>
+                </div>
+              </div>
+              <div className="text-[9px] bg-purple-950/25 text-purple-300 font-bold px-2 py-1 rounded-lg">
+                الأكثر تسليماً
+              </div>
+            </div>
+
+            {/* High Performers Supplier */}
+            <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="text-2xl ring-4 ring-amber-900/10 p-2.5 rounded-xl bg-amber-950/20">📦</span>
+                <div>
+                  <div className="text-[10px] text-slate-550 font-bold">أفضل مورد للشركة</div>
+                  <div className="text-sm font-black text-amber-400 mt-0.5">{bestSupplier}</div>
+                </div>
+              </div>
+              <div className="text-[9px] bg-amber-950/25 text-amber-300 font-bold px-2 py-1 rounded-lg">
+                الأكثر مبيعات
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="p-4 bg-orange-950/10 border border-orange-900/15 rounded-xl text-center">
+          <p className="text-[10px] font-black text-orange-450 text-orange-400">
+            🔒 تم حجب وإخفاء التحصيلات التراكمية التاريخية ومؤشرات الإدارة والمالية الكلية تلقائياً لدواعي الأمان. الأرقام تظهر للمالك والمدراء فقط.
+          </p>
+        </div>
+      )}
 
       {/* Leaderboards Tables */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 pt-2">

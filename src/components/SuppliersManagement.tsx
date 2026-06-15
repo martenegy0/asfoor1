@@ -44,10 +44,13 @@ export default function SuppliersManagement({ token, role, orders = [] }: Suppli
   // --- Supplier Fast Query States & Memoized Calculator ---
   const uniqueSuppliers = React.useMemo(() => {
     const set = new Set<string>();
-    accounts.forEach(a => { if (a.name) set.add(a.name); });
-    (orders || []).forEach(o => { if (o?.supplier) set.add(o.supplier.toString().trim()); });
+    accounts.forEach(a => { 
+      if (a.name) {
+        set.add(a.name.toString().trim()); 
+      }
+    });
     return Array.from(set).filter(Boolean).sort();
-  }, [accounts, orders]);
+  }, [accounts]);
 
   const [querySupplier, setQuerySupplier] = useState("");
   const [queryDate, setQueryDate] = useState(() => {
