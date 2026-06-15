@@ -1077,13 +1077,21 @@ function updateOrdersStatusBulk(sheets, d) {
 
       const oldStatus = statusIdx !== -1 ? data[r][statusIdx].toString().trim() : "";
 
-      // Courier Assignment
-      if (item.courier !== undefined && courierIdx !== -1 && (isAdmin || cleanRole === "محاسب")) {
-        const newCourier = item.courier;
-        if (newCourier === "reset_warehouse" || newCourier === "") {
-          data[r][courierIdx] = "";
-          if (commissionIdx !== -1) data[r][commissionIdx] = 0;
-          if (statusIdx !== -1 && oldStatus !== "جديد") {
+       // Courier Assignment
+       if (item.courier !== undefined && courierIdx !== -1 && (isAdmin || cleanRole === "محاسب")) {
+         const newCourier = item.courier;
+         if (newCourier === "reset_warehouse" || newCourier === "") {
+           const lastCourierIdx = headers.indexOf("lastCourier");
+           if (lastCourierIdx !== -1) {
+             data[r][lastCourierIdx] = data[r][courierIdx];
+           }
+           const lastCommissionIdx = headers.indexOf("lastCommission");
+           if (lastCommissionIdx !== -1 && commissionIdx !== -1) {
+             data[r][lastCommissionIdx] = data[r][commissionIdx];
+           }
+           // Do not clear courier ID to preserve historical custody visibility
+           // Do not reset courier commission to preserve historical settlement details
+           if (statusIdx !== -1 && oldStatus !== "جديد") {
             data[r][statusIdx] = "جديد";
           }
         } else if (newCourier !== rowCourierName) {
@@ -1161,7 +1169,7 @@ function updateOrdersStatusBulk(sheets, d) {
         appendToSheet(sheets.statusHistory, ["tracking", "oldStatus", "newStatus", "updatedBy", "dateTime"], {
           tracking: tr,
           oldStatus: oldStatus,
-          newStatus: targetStatus,
+          newStatus: targetStatus || (statusIdx !== -1 ? data[r][statusIdx].toString().trim() : "جديد"),
           updatedBy: currentUser,
           dateTime: now()
         });
@@ -1342,8 +1350,21 @@ function getSupplierDashboard(sheets, d) {
   const sLedger = ledger.filter(l => l.supplier === supplier);
   const totalPaid = sLedger.filter(isHumanPayout).reduce((sum, l) => sum - Number(l.amount || 0), 0);
 
-  // 4. Current outstanding balance based on formula: Outstanding = TotalGoodsUploaded - totalPaid - returnsDeliveredValue
-  const remaining = totalGoodsUploaded - totalPaid - returnsDeliveredValue;
+  // 4. Current outstanding balance based on formula: Outstanding = (Calculated Delivered/Partial Product Value) - (Total Paid)
+  const deliveredAndPartialOrders = supOrders.filter(function(o) { return o.status === "تم التسليم" || o.status === "تسليم جزئي"; });
+  const deliveredProductValue = deliveredAndPartialOrders.reduce(function(sum, o) {
+    var price = 0;
+    if (o.status === "تسليم جزئي") {
+      var partialCOD = Number(o.partialCODAmount || 0);
+      var shipPrice = Number(o.shipPrice || 0);
+      price = Math.max(0, partialCOD - shipPrice);
+    } else {
+      price = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
+    }
+    return sum + price;
+  }, 0);
+
+  const remaining = deliveredProductValue - totalPaid;
 
   return {
     ok: true,
@@ -1396,8 +1417,21 @@ function getSupplierAccounts(sheets) {
     // 3. Cash payments paid to supplier (Strict signed human payout classification)
     const paid = sLedger.filter(isHumanPayout).reduce((sum, l) => sum - Number(l.amount || 0), 0);
 
-    // 4. Current outstanding balance based on final formula: Outstanding = TotalGoodsUploaded - paid - returnsDeliveredValue
-    const balance = totalGoodsUploaded - paid - returnsDeliveredValue;
+    // 4. Current outstanding balance based on final formula: Outstanding = (Calculated Delivered/Partial Product Value) - (Total Paid)
+    const deliveredAndPartialOrders = sOrders.filter(function(o) { return o.status === "تم التسليم" || o.status === "تسليم جزئي"; });
+    const deliveredProductValue = deliveredAndPartialOrders.reduce(function(sum, o) {
+      var price = 0;
+      if (o.status === "تسليم جزئي") {
+        var partialCOD = Number(o.partialCODAmount || 0);
+        var shipPrice = Number(o.shipPrice || 0);
+        price = Math.max(0, partialCOD - shipPrice);
+      } else {
+        price = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
+      }
+      return sum + price;
+    }, 0);
+
+    const balance = deliveredProductValue - paid;
 
     const totalOrders = sOrders.length;
     const deliveredOrders = sOrders.filter(o => o.status === "تم التسليم").length;

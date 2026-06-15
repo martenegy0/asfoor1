@@ -47,18 +47,26 @@ export function formatPhoneForWA(phone: string | number): string {
 
 export function getOrderWAMessage(o: any): string {
   if (!o) return "";
+  const name = o.customer || "العميل الكريم";
+  const tracking = o.tracking || "—";
   const productName = (o.prodType && o.prodType.toString().trim()) || (o.product && o.product.toString().trim()) || "بضاعة متنوعة";
-  const totalAmount = o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
+  const pPrice = Number(o.prodPrice || 0);
+  const sPrice = Number(o.shipPrice || 0);
+  const totalAmount = o.totalCOD || (pPrice + sPrice);
 
-  return `🚨 *تأكيد استلام شحنة من عصفور* 🚨
+  return `🚨 *تفاصيل شحنتك من Asfoor Store* 🚨
 
-مساء الخير يا فندم، مع حضرتك مندوب شركة *Asfoor Store* للشحن والتوصيل.
-معايا لحضرتك أوردر جاهز للتسليم اليوم، تفاصيله كالتالي:
+أهلاً بك يا فندم، ${name} 🌹
+معك مندوب شركة شحن *Asfoor Store*. يسعدنا إبلاغك بأن شحنتك جاهزة وبانتظار تحديد موعد التسليم اليوم.
 
-📦 *محتويات الشحنة:* ${productName}
-💵 *المبلغ المطلوب شامل الشحن:* ${totalAmount} ج.م
+📦 تفاصيل الشحنة:
+- **رقم التتبع (الباركود):** ${tracking}
+- **اسم المنتج:** ${productName}
+- **سعر المنتج:** ${pPrice} ج.م
+- **تكلفة التوصيل:** ${sPrice} ج.م
+- **الإجمالي المطلوب تحصيله:** *${totalAmount} ج.م*
 
-برجاء الرد على هذه الرسالة الآن بكلمة *( تأكيد )* وتحديد الوقت المناسب لحضرتك لضمان وصول المندوب إليك سريعاً. شكراً لتجاوبك معنا!`;
+يرجى الرد على هذه الرسالة الآن بـ *( تأكيد )* وتأكيد موافقتك لتكليف المندوب بالتوجه إليك فوراً لتوصيل الطلب. شكراً لثقتك بنا!`;
 }
 
 export function toWA(phone: string): string {

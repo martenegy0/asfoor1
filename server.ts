@@ -556,8 +556,21 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
     return sum - Number(l.amount || 0);
   }, 0);
 
-  // 5. Calculate outstanding balance: Outstanding = TotalGoodsUploaded - ReturnsDeliveredValue - PaymentsValue - ReverseAdjustmentsValue
-  const outstanding = totalGoodsUploaded - returnsDeliveredValue - paymentsValue - reverseAdjustmentsValue;
+  // 5. Calculate outstanding balance: Outstanding = (Calculated Delivered/Partial Product Value) - (Total Paid)
+  const deliveredAndPartialOrders = supplierOrders.filter((o: any) => o.status === "تم التسليم" || o.status === "تسليم جزئي");
+  const deliveredProductValue = deliveredAndPartialOrders.reduce((sum: number, o: any) => {
+    let price = 0;
+    if (o.status === "تسليم جزئي") {
+      const partialCOD = Number(o.partialCODAmount || 0);
+      const shipPrice = Number(o.shipPrice || 0);
+      price = Math.max(0, partialCOD - shipPrice);
+    } else {
+      price = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
+    }
+    return sum + price;
+  }, 0);
+
+  const outstanding = deliveredProductValue - paymentsValue - reverseAdjustmentsValue;
 
   // Build the ledger entries list
   const entries: any[] = [];
@@ -843,7 +856,7 @@ function getCacheKey(payload: any): string {
   return JSON.stringify(keyObj);
 }
 
-async function fetchWithTimeout(url: string, options: any = {}, timeoutMs = 8000): Promise<any> {
+async function fetchWithTimeout(url: string, options: any = {}, timeoutMs = 30000): Promise<any> {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -2377,8 +2390,9 @@ app.post("/api", async (req: Request, res: Response) => {
 
           if (courier !== undefined && ["مدير", "مشرف"].includes(currentRole)) {
             if (courier === "reset_warehouse" || courier === "") {
-              order.courier = "";
-              order.commission = 0;
+              order.lastCourier = order.courier;
+              order.lastCommission = order.commission;
+              // Don't zero out courier or commission to maintain historical logs and commissions
               if (order.status !== "جديد") {
                 const prevStatus = order.status;
                 order.status = "جديد";
@@ -2522,12 +2536,13 @@ app.post("/api", async (req: Request, res: Response) => {
             order.delivDate = itemDate;
           }
 
-          // Apply courier re-assignment if permitted
+           // Apply courier re-assignment if permitted
           if (item.courier !== undefined && ["مدير", "مشرف"].includes(currentRole)) {
             const courier = item.courier;
             if (courier === "reset_warehouse" || courier === "") {
-              order.courier = "";
-              order.commission = 0;
+              order.lastCourier = order.courier;
+              order.lastCommission = order.commission;
+              // Don't zero out courier or commission to maintain historical logs and commissions
               if (order.status !== "جديد") {
                 const prevStatus = order.status;
                 order.status = "جديد";

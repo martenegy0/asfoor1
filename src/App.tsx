@@ -27,6 +27,21 @@ export default function App() {
   // --- Treasury / Cashbox lists and states (Admin & Accountant only!) ---
   const [cashboxEntries, setCashboxEntries] = useState<any[]>([]);
   const [cashboxBalance, setCashboxBalance] = useState(0);
+
+  const runningStreetCash = React.useMemo(() => {
+    return (orders || [])
+      .filter((o) => {
+        const s = (o.status || "").toString().trim();
+        const isInStreet = ["مسند", "تم الإسناد", "تم الاسناد", "خارج مع المندوب", "خارج للتسليم", "خارج للتوصيل", "مع المندوب"].includes(s);
+        return isInStreet && !o.isClosed;
+      })
+      .reduce((sum, o) => {
+        const pPrice = Number(o.prodPrice || 0);
+        const sPrice = Number(o.shipPrice || 0);
+        const amount = o.totalCOD || (pPrice + sPrice);
+        return sum + Number(amount || 0);
+      }, 0);
+  }, [orders]);
   const [cashModalOpen, setCashModalOpen] = useState(false);
   const [cashType, setCashType] = useState<"وارد" | "صادر" | "تحصيل مندوب" | "سداد مورد">("وارد");
   const [cashAmount, setCashAmount] = useState("");
@@ -916,21 +931,41 @@ export default function App() {
         {/* --- CASHBOX INTEGRATION (Only visible to accountant & admin per rules) --- */}
         {activeTab === "cash" && showFinanceTabs && (
           <div className="p-4 space-y-6 text-right">
-            {/* Cash Live Balance display */}
-            <div className="bg-gradient-to-br from-slate-900 to-slate-950 border border-white/6 p-6 rounded-2xl text-center space-y-1 relative overflow-hidden">
-              <div className="absolute top-2 left-2 text-emerald-500/10">
-                <Wallet size={64} />
+            {/* Dual Grid block representing Cashbox + Backlog Street Custody */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-right">
+              {/* Cash Live Balance display */}
+              <div className="bg-gradient-to-br from-slate-900 to-slate-950 border border-white/6 p-6 rounded-2xl text-center space-y-1 relative overflow-hidden">
+                <div className="absolute top-2 left-2 text-emerald-500/10">
+                  <Wallet size={64} />
+                </div>
+                <div className="text-xs font-black text-slate-400 uppercase tracking-widest block text-center">
+                  رصيد الخزنة الحالي المتوفر (ج.م)
+                </div>
+                <div className="text-3xl font-black text-emerald-400 block text-center">
+                  {(cashboxBalance || 0).toLocaleString("ar")}{" "}
+                  <span className="text-xs font-medium">ج.م</span>
+                </div>
+                <p className="text-[10px] text-slate-500 leading-relaxed font-bold block text-center">
+                   يشمل التحصيل اليومي المسدد من المندوبين مطروحاً منه مدفوعات الموردين والمصاريف.
+                </p>
               </div>
-              <div className="text-xs font-black text-slate-400 uppercase tracking-widest">
-                رصيد الخزنة الحالي المتوفر (ج.م)
+
+              {/* Crucial Backlog Widget: "الباقي للتشغيل" */}
+              <div className="bg-gradient-to-br from-slate-900 to-slate-950 border border-amber-500/30 p-6 rounded-2xl text-center space-y-1 relative overflow-hidden">
+                <div className="absolute top-2 left-2 text-amber-500/10">
+                  <Truck size={64} />
+                </div>
+                <div className="text-xs font-black text-slate-400 uppercase tracking-widest block text-center">
+                  كاش الشارع العالق "الباقي للتشغيل" 🚚
+                </div>
+                <div className="text-3xl font-black text-amber-500 block text-center">
+                  {(runningStreetCash || 0).toLocaleString("ar")}{" "}
+                  <span className="text-xs font-medium">ج.م</span>
+                </div>
+                <p className="text-[10px] text-slate-500 leading-relaxed font-bold block text-center">
+                   إجمالي قيمة الأوردرات الموزعة مع المندوبين (مسند أو خارج للتسليم) الجاري توصيلها حالياً بالميدان.
+                </p>
               </div>
-              <div className="text-4xl font-black text-emerald-400">
-                {(cashboxBalance || 0).toLocaleString("ar")}{" "}
-                <span className="text-sm font-medium">ج.م</span>
-              </div>
-              <p className="text-[10px] text-slate-500 leading-relaxed font-bold">
-                 يشمل التحصيل اليومي المسدد من المندوبين مطروحاً منه مدفوعات الموردين والمصاريف.
-              </p>
             </div>
 
             {/* Admin triggers buttons to insert transaction */}

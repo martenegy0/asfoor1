@@ -446,15 +446,16 @@ export default function Orders({ token, role, username, orders, setOrders, couri
         // Strict role-based filter safety enforcement
         if (isAgent) {
           if (!o.courier || o.courier.toString().trim().toLowerCase() !== username.trim().toLowerCase()) return false;
-          // Exclude delayed / unanswered hold-ups from the main "all" tab list
-          if (activeFilter === "all" && ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)) {
-            return false;
-          }
         } else if (isSupplier) {
           if (!o.supplier || o.supplier.toString().trim().toLowerCase() !== username.trim().toLowerCase()) return false;
         } else if (isReturnsOfficer) {
-          const isRet = ["مرتجع", "التسليم للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) || o.returnQueueStatus;
+          const isRet = ["مرتجع", "التسليم للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع بالمستودع"].includes(o.status) || o.returnQueueStatus;
           if (!isRet) return false;
+        }
+
+        // Exclude delayed / unanswered hold-ups from the main "all" (الكل) tab list globally
+        if (activeFilter === "all" && ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)) {
+          return false;
         }
 
         // Logistic Status Categorization & Fallback mapping
@@ -463,13 +464,15 @@ export default function Orders({ token, role, username, orders, setOrders, couri
           if (activeFilter === "جديد" && status !== "جديد") return false;
           if (activeFilter === "مسند" && !["تم الإسناد", "مسند", "تم الاسناد"].includes(status)) return false;
           if (activeFilter === "خارج للتسليم" && !["خارج مع المندوب", "خارج للتسليم", "خارج للتوصيل", "مع المندوب"].includes(status)) return false;
-          if (activeFilter === "تم التسليم" && !["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(status)) return false;
+          if (activeFilter === "تم التسليم" && !["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي"].includes(status)) return false;
           if (activeFilter === "العميل رد وجاري التسليم" && !["تم رد العميل وجاري التنسيق", "العميل رد وجاري التسليم", "تم رد العميل وجاري التنسيق"].includes(status) && !status.includes("رد وجاري")) return false;
           if (activeFilter === "مرتجع بالمستودع" && !["مرتجع بالمستودع", "مرتجع", "مرتجع جديد", "مرتجع جاري تسليمه للمكتب"].includes(status)) return false;
           if (activeFilter === "تم تسليم المرتجع للمورد" && !["تم تسليم المرتجع للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "جاري الرجوع للمورد"].includes(status)) return false;
+          if (activeFilter === "مؤجل" && status !== "مؤجل") return false;
+          if (activeFilter === "لا يوجد رد" && !["لا يوجد رد", "العميل لم يقم بالرد"].includes(status)) return false;
           
           // Non-standard fallback filter matching
-          if (!["جديد", "مسند", "خارج للتسليم", "تم التسليم", "العميل رد وجاري التسليم", "مرتجع بالمستودع", "تم تسليم المرتجع للمورد"].includes(activeFilter)) {
+          if (!["جديد", "مسند", "خارج للتسليم", "تم التسليم", "العميل رد وجاري التسليم", "مرتجع بالمستودع", "تم تسليم المرتجع للمورد", "مؤجل", "لا يوجد رد"].includes(activeFilter)) {
             if (status !== activeFilter) return false;
           }
         }
@@ -835,8 +838,6 @@ export default function Orders({ token, role, username, orders, setOrders, couri
     if (bulkStatus) updatedFields.status = bulkStatus;
     if (bulkCourier) {
       if (bulkCourier === "reset_warehouse") {
-        updatedFields.courier = "";
-        updatedFields.commission = 0;
         updatedFields.status = "جديد";
       } else {
         updatedFields.courier = bulkCourier;
@@ -924,8 +925,6 @@ export default function Orders({ token, role, username, orders, setOrders, couri
     }
     if (floatingCourier) {
       if (floatingCourier === "reset_warehouse") {
-        updatedFields.courier = "";
-        updatedFields.commission = 0;
         updatedFields.status = "جديد";
       } else {
         updatedFields.courier = floatingCourier;
@@ -1514,7 +1513,9 @@ export default function Orders({ token, role, username, orders, setOrders, couri
           { key: "تم التسليم", label: "✅ تم التسليم" },
           { key: "العميل رد وجاري التسليم", label: "📞 العميل رد وجاري التسليم" },
           { key: "مرتجع بالمستودع", label: "📦 مرتجع بالمستودع" },
-          { key: "تم تسليم المرتجع للمورد", label: "↩ تم تسليم المرتجع للمورد" }
+          { key: "تم تسليم المرتجع للمورد", label: "↩ تم تسليم المرتجع للمورد" },
+          { key: "مؤجل", label: "⏳ مؤجل" },
+          { key: "لا يوجد رد", label: "📵 لا يوجد رد" }
         ].map((f) => (
           <button
             key={f.key}
@@ -1938,11 +1939,14 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                     <option value="تم الإسناد">تم الإسناد</option>
                     <option value="خارج مع المندوب">خارج مع المندوب</option>
                     <option value="تم التسليم">تم التسليم (ناجح كاش)</option>
+                    <option value="تسليم جزئي">تسليم جزئي</option>
+                    <option value="العميل رد وجاري التسليم">العميل رد وجاري التسليم</option>
+                    <option value="مرتجع بالمستودع">مرتجع بالمستودع</option>
+                    <option value="تم تسليم المرتجع للمورد">تم تسليم المرتجع للمورد</option>
                     <option value="مرتجع">مرتجع (من طرف العميل)</option>
                     <option value="مؤجل">مؤجل (متابعة لاحقة)</option>
                     <option value="لا يوجد رد">لا يوجد رد</option>
                     <option value="التسليم للمورد">التسليم للمورد</option>
-                    <option value="تم تسليم المرتجع للمورد">تم تسليم المرتجع للمورد</option>
                   </>
                 )}
               </select>
