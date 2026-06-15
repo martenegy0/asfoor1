@@ -98,14 +98,26 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
           dStats.todayTotal++; 
         }
 
-        const isClosed = ["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status);
+        const statusStr = (o.status || "").toString().trim();
+        const deliveredPatterns = [
+          "تم تسليم المرتجع للمورد",
+          "مرتجع تم تسليمه للمورد",
+          "التسليم للمورد",
+          "تم تسليم المرتجع للمورد وتصفية حسابه",
+          "تسليم المرتجع للمورد",
+          "تسليمه للمورد",
+          "تصفية حسابه"
+        ];
+        const isDeliveredToSupplier = deliveredPatterns.some((p) => statusStr.includes(p));
+
+        const returnPatterns = ["مرتجع", "مرفوض", "فشل", "مسترجع", "التسليم للمورد", "تصفية"];
+        const isSomeReturn = returnPatterns.some((p) => statusStr.includes(p)) || isDeliveredToSupplier;
+
+        const isClosed = ["تم التسليم"].includes(o.status) || isDeliveredToSupplier;
         const isAssigned = o.courier && o.courier !== "";
         if (isAssigned && !isClosed) {
           dStats.assignedPending++;
         }
-
-        const isSomeReturn = ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "مرتجع والعميل دفع الشحن", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status) || (o.status || "").includes("مرتجع");
-        const isDeliveredToSupplier = ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status);
 
         if (o.status === "تم التسليم") {
           dStats.delivered++;

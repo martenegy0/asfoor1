@@ -427,6 +427,26 @@ function writeDB(data: any): void {
   }
 }
 
+function isReturnedDeliveredToSupplier(status: string): boolean {
+  const s = (status || "").toString().trim();
+  const patterns = [
+    "تم تسليم المرتجع للمورد",
+    "مرتجع تم تسليمه للمورد",
+    "التسليم للمورد",
+    "تم تسليم المرتجع للمورد وتصفية حسابه",
+    "تسليم المرتجع للمورد",
+    "تسليمه للمورد",
+    "تصفية حسابه"
+  ];
+  return patterns.some((p) => s.includes(p));
+}
+
+function isSomeReturn(status: string): boolean {
+  const s = (status || "").toString().trim();
+  const patterns = ["مرتجع", "مرفوض", "فشل", "مسترجع", "التسليم للمورد", "تصفية"];
+  return patterns.some((p) => s.includes(p));
+}
+
 function getSupplierUnifiedLedger(db: any, supplierName: string) {
   if (!db) {
     return {
@@ -484,15 +504,9 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
     return sum + prodPrice;
   }, 0);
 
-  // 3. Returns delivered back to supplier (Dynamic Status Matching)
+  // 3. Returns delivered back to supplier (Dynamic Status Matching - only deduct financially when officially delivered to supplier)
   const returnedOrders = supplierOrders.filter((o: any) => {
-    const status = (o.status || "").toString().trim();
-    return status.includes("مرتجع") || 
-           status.includes("مرفوض") || 
-           status.includes("فشل") || 
-           status.includes("مسترجع") || 
-           status.includes("التسليم للمورد") ||
-           status.includes("تصفية");
+    return isReturnedDeliveredToSupplier(o.status);
   });
   const returnsDeliveredCount = returnedOrders.length;
   const returnsDeliveredValue = returnedOrders.reduce((sum: number, o: any) => {
@@ -597,7 +611,7 @@ function getSanitizedSupplierLedger(db: any): any[] {
       if (!isPaymentOrAdjustment) {
         const order = db.orders.find((o: any) => o.tracking === item.tracking);
         if (order) {
-          const isReturnedToSupplier = ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "التسليم للمورد"].includes(order.status);
+          const isReturnedToSupplier = isReturnedDeliveredToSupplier(order.status);
           if (isReturnedToSupplier) {
             return {
               ...item,
@@ -1404,14 +1418,14 @@ app.post("/api", async (req: Request, res: Response) => {
               stats.todayTotal++; // Today's Orders created today
             }
 
-            const isClosed = ["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status);
+            const isDeliveredToSupplier = isReturnedDeliveredToSupplier(o.status);
+            const isClosed = ["تم التسليم"].includes(o.status) || isDeliveredToSupplier;
             const isAssigned = o.courier && o.courier !== "";
             if (isAssigned && !isClosed) {
               stats.assignedPending++;
             }
 
-            const isSomeReturn = ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "مرتجع والعميل دفع الشحن", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status) || (o.status || "").includes("مرتجع") || (o.status || "").includes("مرتجع في المخزن");
-            const isDeliveredToSupplier = ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status);
+            const isReturn = isSomeReturn(o.status);
 
             if (o.status === "تم التسليم") {
               stats.delivered++;
@@ -1421,7 +1435,7 @@ app.post("/api", async (req: Request, res: Response) => {
               if (o.delivDate && isDateToday(o.delivDate)) {
                 stats.todayCOD += Number(o.totalCOD || 0);
               }
-            } else if (isSomeReturn) {
+            } else if (isReturn) {
               if (isDeliveredToSupplier) {
                 stats.returnedDeliveredToSupplier++;
                 stats.returnedDeliveredToSupplierValue += Number(o.prodPrice !== undefined ? o.prodPrice : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0)));

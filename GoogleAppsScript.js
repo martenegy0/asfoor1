@@ -1275,6 +1275,30 @@ function isHumanPayout(l) {
   return isPayOrAdj && !isAutoOrReturn;
 }
 
+function isReturnedDeliveredToSupplier(status) {
+  var s = (status || "").toString().trim();
+  var patterns = [
+    "تم تسليم المرتجع للمورد",
+    "مرتجع تم تسليمه للمورد",
+    "التسليم للمورد",
+    "تم تسليم المرتجع للمورد وتصفية حسابه",
+    "تسليم المرتجع للمورد",
+    "تسليمه للمورد",
+    "تصفية حسابه"
+  ];
+  return patterns.some(function(p) {
+    return s.indexOf(p) !== -1;
+  });
+}
+
+function isSomeReturn(status) {
+  var s = (status || "").toString().trim();
+  var patterns = ["مرتجع", "مرفوض", "فشل", "مسترجع", "التسليم للمورد", "تصفية"];
+  return patterns.some(function(p) {
+    return s.indexOf(p) !== -1;
+  });
+}
+
 function getSupplierLedger(sheets, d) {
   const { supplier } = d;
   const ledger = getTableData(sheets.supplierLedger);
@@ -1302,16 +1326,8 @@ function getSupplierDashboard(sheets, d) {
     return sum + prodPrice;
   }, 0);
 
-  const returnedDGoods = supOrders.filter(o => {
-    var status = (o.status || "").toString().trim();
-    return status.indexOf("مرتجع") !== -1 || 
-           status.indexOf("مرفوض") !== -1 || 
-           status.indexOf("فشل") !== -1 || 
-           status.indexOf("مسترجع") !== -1 || 
-           status.indexOf("التسليم للمورد") !== -1 ||
-           status.indexOf("تصفية") !== -1;
-  });
-  const returned = returnedDGoods.length;
+  const returnedDGoods = supOrders.filter(o => isReturnedDeliveredToSupplier(o.status));
+  const returned = supOrders.filter(o => isSomeReturn(o.status) && !isReturnedDeliveredToSupplier(o.status)).length;
   
   // 2. Returns delivered back to supplier ("تم تسليم المرتجع للمورد" or equivalent)
   const returnsDeliveredValue = returnedDGoods.reduce((sum, o) => {
@@ -1355,16 +1371,8 @@ function getSupplierAccounts(sheets) {
       return sum + prodPrice;
     }, 0);
 
-    // 2. Returns delivered back to supplier ("تم تسليم المرتجع للمورد" or equivalent) with dynamic status matching
-    const returnedOrders = sOrders.filter(o => {
-      var status = (o.status || "").toString().trim();
-      return status.indexOf("مرتجع") !== -1 || 
-             status.indexOf("مرفوض") !== -1 || 
-             status.indexOf("فشل") !== -1 || 
-             status.indexOf("مسترجع") !== -1 || 
-             status.indexOf("التسليم للمورد") !== -1 ||
-             status.indexOf("تصفية") !== -1;
-    });
+    // 2. Returns delivered back to supplier ("تم تسليم المرتجع للمورد" or equivalent) with dynamic status matching (financial deduction ONLY when handed over)
+    const returnedOrders = sOrders.filter(o => isReturnedDeliveredToSupplier(o.status));
     const returnsCount = returnedOrders.length;
     const returnsDeliveredValue = returnedOrders.reduce((sum, o) => {
       var prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
