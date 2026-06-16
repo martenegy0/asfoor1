@@ -438,6 +438,24 @@ function isSomeReturn(status: string): boolean {
   return patterns.some((p) => s.includes(p));
 }
 
+const normalizeArabic = (str: string): string => {
+  if (!str) return "";
+  return str
+    .toString()
+    .trim()
+    .toLowerCase()
+    .replace(/[أإآإأ]/g, "ا")
+    .replace(/[يى]/g, "ي")
+    .replace(/ة\b/g, "ه")
+    .replace(/\s+/g, " ")
+    .trim();
+};
+
+const sameSup = (na: string, nb: string): boolean => {
+  if (!na || !nb) return false;
+  return normalizeArabic(na) === normalizeArabic(nb);
+};
+
 function getSupplierUnifiedLedger(db: any, supplierName: string) {
   if (!db) {
     return {
@@ -456,11 +474,6 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
       }
     };
   }
-
-  const sameSup = (na: string, nb: string) => {
-    if (!na || !nb) return false;
-    return na.toString().trim().toLowerCase() === nb.toString().trim().toLowerCase();
-  };
 
   const rawOrders = (db.orders || []).filter((o: any) => sameSup(o.supplier, supplierName));
   
@@ -1604,7 +1617,7 @@ app.post("/api", async (req: Request, res: Response) => {
                 return activeOrUpdatedToday;
               });
             } else if (isSupplier) {
-              ordersList = ordersList.filter((o: any) => o.supplier && o.supplier.toString().trim().toLowerCase() === currentUser.trim().toLowerCase());
+              ordersList = ordersList.filter((o: any) => o.supplier && sameSup(o.supplier, currentUser));
             }
             resData.orders = ordersList;
           }
@@ -1612,7 +1625,7 @@ app.post("/api", async (req: Request, res: Response) => {
           if (d.action === "getSupplierLedger" && Array.isArray(resData.ledger)) {
             const isSupplier = (currentRole || "").toString().trim() === "مورد" || (currentRole || "").toString().trim().includes("مورد");
             const targetSupplier = isSupplier ? currentUser : (d.supplier || "");
-            resData.ledger = resData.ledger.filter((l: any) => l.supplier && l.supplier.toString().trim().toLowerCase() === targetSupplier.trim().toLowerCase());
+            resData.ledger = resData.ledger.filter((l: any) => l.supplier && sameSup(l.supplier, targetSupplier));
           }
         }
 
@@ -3678,7 +3691,7 @@ app.post("/api", async (req: Request, res: Response) => {
         }
 
         if (courier) list = list.filter((o: any) => o.courier === courier);
-        if (supplier) list = list.filter((o: any) => o.supplier && o.supplier.toString().trim().toLowerCase() === supplier.toString().trim().toLowerCase());
+        if (supplier) list = list.filter((o: any) => o.supplier && sameSup(o.supplier, supplier));
 
         return ok(res, { orders: list, count: list.length });
       }

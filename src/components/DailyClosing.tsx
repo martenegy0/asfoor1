@@ -321,7 +321,7 @@ export default function DailyClosing({ token, role, user, orders }: DailyClosing
         setCalculatedDraft({
           date: targetDate,
           deliveredCount: delivered,
-          returnedCount: returned,
+          returnedCount: returned - returnedDeliveredToSupplierCount,
           returnedValue: returnedValue,
           totalCOD: cod,
           shippingCost: shipping,
@@ -333,7 +333,8 @@ export default function DailyClosing({ token, role, user, orders }: DailyClosing
           cashboxOut,
           cashboxNet,
           returnedDeliveredToSupplierCount,
-          returnedDeliveredToSupplierValue
+          returnedDeliveredToSupplierValue,
+          totalReturnsCollected: returned
         } as any);
       } else {
         setErrorMsg("تعذر تحميل قائمة الأوردرات لحساب التقفيل اللحظي");
@@ -582,18 +583,22 @@ export default function DailyClosing({ token, role, user, orders }: DailyClosing
                 </div>
 
                 <div className="bg-slate-900/60 p-3 rounded-xl border border-white/4">
-                  <div className="text-[10px] text-slate-500 font-black">📦 المرتجع المستلم من المندوبين</div>
+                  <div className="text-[10px] text-slate-500 font-black">📦 المرتجع الصافي بعهدة الفرع</div>
                   <div className="text-lg font-black text-red-400 mt-1">
                     {calculatedDraft.returnedCount} <span className="text-[10px] font-medium text-slate-400">أوردر</span>
                   </div>
                   <div className="text-[10px] text-slate-400 font-bold mt-1.5 space-y-1">
+                    <div className="flex justify-between items-center text-slate-400">
+                      <span>📥 المستلم من المندوبين:</span>
+                      <span className="font-mono bg-slate-950 px-1 rounded">{(calculatedDraft as any).totalReturnsCollected || (calculatedDraft.returnedCount + ((calculatedDraft as any).returnedDeliveredToSupplierCount || 0))}</span>
+                    </div>
                     <div className="flex justify-between items-center text-rose-350">
                       <span>📤 تم تسليمه للموردين:</span>
-                      <span className="font-mono bg-rose-955 px-1 rounded">{(calculatedDraft as any).returnedDeliveredToSupplierCount || 0}</span>
+                      <span className="font-mono bg-rose-950/40 text-rose-400 px-1 rounded">{(calculatedDraft as any).returnedDeliveredToSupplierCount || 0}</span>
                     </div>
-                    <div className="flex justify-between items-center text-orange-400">
-                      <span>🏢 متبقي بعهدة المكتب:</span>
-                      <span className="font-mono bg-orange-955 px-1 rounded">{calculatedDraft.returnedCount - ((calculatedDraft as any).returnedDeliveredToSupplierCount || 0)}</span>
+                    <div className="flex justify-between items-center text-orange-400 pt-0.5 border-t border-white/5">
+                      <span>🏢 متبقي في حوزتنا:</span>
+                      <span className="font-mono bg-orange-950/40 text-orange-400 px-1 rounded">{calculatedDraft.returnedCount}</span>
                     </div>
                   </div>
                   <div className="text-[10px] text-slate-400 font-bold mt-2 pt-1 border-t border-white/4 font-mono">

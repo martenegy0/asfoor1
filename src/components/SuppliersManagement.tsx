@@ -11,6 +11,7 @@ interface SuppliersManagementProps {
   token: string;
   role: string;
   orders?: any[];
+  user?: string;
 }
 
 interface SupplierAccount {
@@ -35,7 +36,7 @@ interface LedgerEntry {
   balanceAfter: number;
 }
 
-export default function SuppliersManagement({ token, role, orders = [] }: SuppliersManagementProps) {
+export default function SuppliersManagement({ token, role, orders = [], user = "" }: SuppliersManagementProps) {
   // Navigation tabs (page internal)
   const isSupplierRole = role === "مورد" || role === "موردين";
   const [activeSubTab, setActiveSubTab] = useState<"directory" | "statement" | "query">(
@@ -131,13 +132,12 @@ export default function SuppliersManagement({ token, role, orders = [] }: Suppli
 
   // Auto-set supplier for statements if role is "مورد"
   useEffect(() => {
-    if (isSupplierRole && uniqueSuppliersList.length > 0) {
-      // Find or set to first available or the username
-      // In high scale context, username is what matters
-      setSelectedLedgerSupplier(uniqueSuppliersList[0] || "");
-      setQuerySupplier(uniqueSuppliersList[0] || "");
+    if (isSupplierRole) {
+      const lockName = user || uniqueSuppliersList[0] || "";
+      setSelectedLedgerSupplier(lockName);
+      setQuerySupplier(lockName);
     }
-  }, [uniqueSuppliersList, isSupplierRole]);
+  }, [uniqueSuppliersList, isSupplierRole, user]);
 
   // Load detailed account statement when selected supplier shifts
   useEffect(() => {
@@ -242,10 +242,17 @@ export default function SuppliersManagement({ token, role, orders = [] }: Suppli
 
   // Filtering ledger entries locally for powerful statement audits
   const filteredLedgerEntries = useMemo(() => {
+    const normalizeEntryDate = (dateStr: string) => {
+      if (!dateStr) return "";
+      const clean = dateStr.toString().replace(/\//g, "-").trim();
+      return clean.substring(0, 10);
+    };
+
     return ledgerEntries.filter(entry => {
       // Date constraints
-      if (filterStartDate && entry.date && entry.date.substring(0, 10) < filterStartDate) return false;
-      if (filterEndDate && entry.date && entry.date.substring(0, 10) > filterEndDate) return false;
+      const entryYMD = normalizeEntryDate(entry.date);
+      if (filterStartDate && entryYMD && entryYMD < filterStartDate) return false;
+      if (filterEndDate && entryYMD && entryYMD > filterEndDate) return false;
 
       // Type Constraints
       if (filterType !== "all") {

@@ -1317,7 +1317,20 @@ function isSomeReturn(status) {
 
 function isSameSupplier(nameA, nameB) {
   if (!nameA || !nameB) return false;
-  return nameA.toString().trim().toLowerCase() === nameB.toString().trim().toLowerCase();
+  
+  function normAr(str) {
+    if (!str) return "";
+    return str.toString()
+      .trim()
+      .toLowerCase()
+      .replace(/[أإآإأ]/g, "ا")
+      .replace(/[يى]/g, "ي")
+      .replace(/ة\b/g, "ه")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+  
+  return normAr(nameA) === normAr(nameB);
 }
 
 function getSupplierLedger(sheets, d) {

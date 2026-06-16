@@ -1327,7 +1327,7 @@ export default function App() {
           </div>
         )}
         {activeTab === "suppliers" && showSuppliersPageTab && (
-          <SuppliersManagement token={token} role={role} orders={orders} />
+          <SuppliersManagement token={token} role={role} orders={orders} user={username} />
         )}
       </main>
 
