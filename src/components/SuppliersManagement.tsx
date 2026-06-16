@@ -106,7 +106,18 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
 
     const isReturnedDelivered = (status: string) => {
       const s = (status || "").toString().trim();
-      return s === "تم تسليم المرتجع للمورد" || s === "تم تسليم المرتجع للمورد وتصفية حسابه" || s === "مرتجع تم تسليمه للمورد" || s === "مرتجع والعميل دفع الشحن" || s === "مرتجع مدفوع الشحن";
+      const patterns = [
+        "تم تسليم المرتجع للمورد",
+        "مرتجع تم تسليمه للمورد",
+        "التسليم للمورد",
+        "تم تسليم المرتجع للمورد وتصفية حسابه",
+        "تسليم المرتجع للمورد",
+        "تسليمه للمورد",
+        "تصفية حسابه",
+        "مرتجع والعميل دفع الشحن",
+        "مرتجع مدفوع الشحن"
+      ];
+      return patterns.some((p) => s.includes(p));
     };
 
     const total = supplierOrders.length;
@@ -244,8 +255,39 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
   const filteredLedgerEntries = useMemo(() => {
     const normalizeEntryDate = (dateStr: string) => {
       if (!dateStr) return "";
-      const clean = dateStr.toString().replace(/\//g, "-").trim();
-      return clean.substring(0, 10);
+      try {
+        const clean = dateStr.toString().trim();
+        // 1. If it's already YYYY-MM-DD or YYYY/MM/DD
+        if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(clean)) {
+          const parts = clean.substring(0, 10).split(/[-/]/);
+          const y = parts[0];
+          const m = parts[1].padStart(2, '0');
+          const d = parts[2].padStart(2, '0');
+          return `${y}-${m}-${d}`;
+        }
+        
+        // 2. If it's DD/MM/YYYY or DD-MM-YYYY or D/M/YYYY
+        if (/^\d{1,2}[-/]\d{1,2}[-/]\d{4}/.test(clean)) {
+          const parts = clean.substring(0, 10).split(/[-/]/);
+          const d = parts[0].padStart(2, '0');
+          const m = parts[1].padStart(2, '0');
+          const y = parts[2];
+          return `${y}-${m}-${d}`;
+        }
+
+        // 3. Fallback to standard javascript date parsing
+        const parsed = new Date(clean);
+        if (!isNaN(parsed.getTime())) {
+          const y = parsed.getFullYear();
+          const m = String(parsed.getMonth() + 1).padStart(2, '0');
+          const d = String(parsed.getDate()).padStart(2, '0');
+          return `${y}-${m}-${d}`;
+        }
+      } catch (err) {
+        // Quiet fallthrough
+      }
+      const cleanSlash = dateStr.toString().replace(/\//g, "-").trim();
+      return cleanSlash.substring(0, 10);
     };
 
     return ledgerEntries.filter(entry => {
