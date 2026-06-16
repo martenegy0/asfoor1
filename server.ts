@@ -457,7 +457,12 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
     };
   }
 
-  const rawOrders = (db.orders || []).filter((o: any) => o.supplier === supplierName);
+  const sameSup = (na: string, nb: string) => {
+    if (!na || !nb) return false;
+    return na.toString().trim().toLowerCase() === nb.toString().trim().toLowerCase();
+  };
+
+  const rawOrders = (db.orders || []).filter((o: any) => sameSup(o.supplier, supplierName));
   
   // Dedup rawOrders by tracking ID (Unique Order ID) keeping the latest instance/update
   const supplierOrdersMap = new Map<string, any>();
@@ -472,7 +477,7 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
   const supplierOrders = Array.from(supplierOrdersMap.values());
   
   // Clean raw ledger: force payouts and withdrawals to be negative (debited deductions)
-  const rawLedger = (db.supplierLedger || []).filter((l: any) => l.supplier === supplierName).map((l: any) => {
+  const rawLedger = (db.supplierLedger || []).filter((l: any) => sameSup(l.supplier, supplierName)).map((l: any) => {
     const type = (l.type || "").toString().trim();
     const isWithdrawal = type.includes("سحب") || type.includes("عكسية") || type.includes("طرح") || type.includes("خصم");
     const isPayout = ["دفع نقدي", "دفعة مورد", "صرف مورد", "دفعة", "مسحوبات", "تسوية"].some(p => type.includes(p)) || l.tracking === "CASH-PAY";
@@ -1783,6 +1788,23 @@ app.post("/api", async (req: Request, res: Response) => {
            returnQueueAgent: ""
          };
  
+         // Automatically register supplier in db.suppliers if not present
+         const orderSupplier = (newOrder.supplier || "").toString().trim();
+         if (orderSupplier) {
+           if (!db.suppliers) db.suppliers = [];
+           const matchedSup = db.suppliers.find(
+             (s: any) => s.name && s.name.trim().toLowerCase() === orderSupplier.toLowerCase()
+           );
+           if (!matchedSup) {
+             db.suppliers.push({
+               name: orderSupplier,
+               phone: "—",
+               price: shipPrice,
+               notes: "تم تسجيله تلقائياً عن طريق إضافة أوردر يدوي"
+             });
+           }
+         }
+
          db.orders.push(newOrder);
  
          // Record Supplier Ledger (COD values tracking)
@@ -3656,7 +3678,7 @@ app.post("/api", async (req: Request, res: Response) => {
         }
 
         if (courier) list = list.filter((o: any) => o.courier === courier);
-        if (supplier) list = list.filter((o: any) => o.supplier === supplier);
+        if (supplier) list = list.filter((o: any) => o.supplier && o.supplier.toString().trim().toLowerCase() === supplier.toString().trim().toLowerCase());
 
         return ok(res, { orders: list, count: list.length });
       }

@@ -1253,7 +1253,7 @@ function getDashboardStats(sheets) {
       remainingStock: orders.filter(o => !["تم التسليم", "خارج مع المندوب", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)).length
     },
     couriers: couriers.map(c => ({ name: c.name, total: orders.filter(o => o.courier === c.name).length })),
-    suppliers: suppliers.map(s => ({ name: s.name, total: orders.filter(o => o.supplier === s.name).length })),
+    suppliers: suppliers.map(s => ({ name: s.name, total: orders.filter(o => isSameSupplier(o.supplier, s.name)).length })),
     bestCourier: couriers[0] ? couriers[0].name : "—",
     bestSupplier: suppliers[0] ? suppliers[0].name : "—"
   };
@@ -1315,13 +1315,18 @@ function isSomeReturn(status) {
   });
 }
 
+function isSameSupplier(nameA, nameB) {
+  if (!nameA || !nameB) return false;
+  return nameA.toString().trim().toLowerCase() === nameB.toString().trim().toLowerCase();
+}
+
 function getSupplierLedger(sheets, d) {
   const { supplier } = d;
   const ledger = getTableData(sheets.supplierLedger);
   if (!supplier) {
     return { ok: true, ledger: ledger };
   }
-  const filtered = ledger.filter(l => l.supplier === supplier);
+  const filtered = ledger.filter(l => isSameSupplier(l.supplier, supplier));
   return { ok: true, ledger: filtered.reverse() };
 }
 
@@ -1330,7 +1335,7 @@ function getSupplierDashboard(sheets, d) {
   const orders = getTableData(sheets.orders);
   const ledger = getTableData(sheets.supplierLedger);
 
-  const rawSupOrders = orders.filter(o => o.supplier === supplier);
+  const rawSupOrders = orders.filter(o => isSameSupplier(o.supplier, supplier));
   
   // Dedup rawSupOrders by tracking ID
   const uniqueSupOrdersMap = {};
@@ -1362,7 +1367,7 @@ function getSupplierDashboard(sheets, d) {
   }, 0);
 
   // 3. Cash payments paid to supplier (Strict signed human payout classification)
-  const sLedger = ledger.filter(l => l.supplier === supplier);
+  const sLedger = ledger.filter(l => isSameSupplier(l.supplier, supplier));
   const totalPaid = sLedger.filter(isHumanPayout).reduce((sum, l) => sum - Number(l.amount || 0), 0);
 
   // 4. Current outstanding balance based on formula: Outstanding = TotalGoodsUploaded - Returned - Paid
@@ -1405,8 +1410,8 @@ function getSupplierAccounts(sheets) {
     const sObj = suppliers.find(function(s) {
       return s.name && s.name.toString().trim().toLowerCase() === supplierName.toLowerCase();
     });
-    const sLedger = ledger.filter(function(l) { return l.supplier === supplierName; });
-    const rawSupOrders = orders.filter(function(o) { return o.supplier === supplierName; });
+    const sLedger = ledger.filter(function(l) { return isSameSupplier(l.supplier, supplierName); });
+    const rawSupOrders = orders.filter(function(o) { return isSameSupplier(o.supplier, supplierName); });
 
     // Dedup rawSupOrders by tracking ID
     const uniqueSupOrdersMap = {};

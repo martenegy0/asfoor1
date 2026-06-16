@@ -137,8 +137,20 @@ export default function DailyClosing({ token, role, user, orders }: DailyClosing
         }
       }
 
-      if (ordersList.length >= 0) {
+       if (ordersList.length >= 0) {
         const targetDate = selectedClosingDate.trim();
+
+        // Deduplicate the ordersList by tracking ID to avoid duplication counting
+        const uniqueOrdersMap: { [key: string]: any } = {};
+        ordersList.forEach((o: any) => {
+          const track = (o.tracking || "").toString().trim();
+          if (track) {
+            uniqueOrdersMap[track] = o;
+          } else {
+            uniqueOrdersMap["no-track-" + Math.random()] = o;
+          }
+        });
+        const dedupedOrders = Object.values(uniqueOrdersMap);
 
         // Safe lowercase status filter matching
         const normalizeToYMD = (val: any) => {
@@ -156,18 +168,30 @@ export default function DailyClosing({ token, role, user, orders }: DailyClosing
         };
 
         const isDeliveredOnDate = (o: any) => {
-          if (o.status !== "تم التسليم") return false;
+          if (o.status !== "تم التسليم" && o.status !== "تسليم جزئي") return false;
           return normalizeToYMD(o.delivDate) === targetDate;
         };
 
         const isReturnedOnDate = (o: any) => {
-          const isRetStatus = ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status);
+          const isRetStatus = [
+            "مرتجع", 
+            "التسليم للمورد", 
+            "تم تسليم المرتجع للمورد", 
+            "مرتجع تم تسليمه للمورد", 
+            "تم تسليم المرتجع للمورد وتصفية حسابه",
+            "مرتجع والعميل دفع الشحن",
+            "مرتجع مدفوع الشحن"
+          ].includes(o.status) || (o.status || "").includes("مرتجع");
           if (!isRetStatus) return false;
-          return normalizeToYMD(o.retDate) === targetDate;
+          return normalizeToYMD(o.retDate || o.delivDate) === targetDate;
         };
 
         const isCreatedOnDate = (o: any) => {
           return normalizeToYMD(o.orderDate || o.createdAt) === targetDate;
+        };
+
+        const isDeliveredToSupplier = (o: any) => {
+          return ["تم تسليم المرتجع للمورد", "التسليم للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status);
         };
 
         let delivered = 0;
@@ -178,6 +202,8 @@ export default function DailyClosing({ token, role, user, orders }: DailyClosing
         let pendingCount = 0;
         let pendingCOD = 0;
         let courierCommissions = 0;
+        let returnedDeliveredToSupplierCount = 0;
+        let returnedDeliveredToSupplierValue = 0;
 
         // Dynamic check of Cashbox database entries for live checking
         let cashboxIn = 0;
@@ -205,10 +231,20 @@ export default function DailyClosing({ token, role, user, orders }: DailyClosing
         }
         const cashboxNet = cashboxIn - cashboxOut;
 
-        ordersList.forEach((o: any) => {
+        dedupedOrders.forEach((o: any) => {
           // Calculate outstanding (pending) orders created on this target date
           if (isCreatedOnDate(o)) {
-            const isClosed = ["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status);
+            const isClosed = [
+              "تم التسليم", 
+              "تسليم جزئي",
+              "مرتجع", 
+              "التسليم للمورد", 
+              "تم تسليم المرتجع للمورد", 
+              "مرتجع تم تسليمه للمورد", 
+              "تم تسليم المرتجع للمورد وتصفية حسابه",
+              "مرتجع والعميل دفع الشحن",
+              "مرتجع مدفوع الشحن"
+            ].includes(o.status) || (o.status || "").includes("مرتجع");
             if (!isClosed) {
               pendingCount++;
               pendingCOD += Number(o.totalCOD || 0);
@@ -220,33 +256,63 @@ export default function DailyClosing({ token, role, user, orders }: DailyClosing
             if (isDeliveredOnDate(o)) {
               delivered++;
               cod += Number(o.totalCOD || 0);
-              shipping += Number(o.shipCost || o.shipPrice || 0);
-              courierCommissions += Number(o.commission || 25);
+              shipping += Number(o.shipPrice || o.shipCost || 0);
+              courierCommissions += Number(o.commission || 20); // Courier success commission defaults to 20
             }
             if (isReturnedOnDate(o)) {
-              returned++;
+              returned++; // total collected returns
               returnedValue += Number(o.prodPrice || 0);
-              // For returns where customer paid the shipping, add the shipping revenue
-              if (o.returnShippingType === "paid") {
-                shipping += Number(o.shipCost || o.shipPrice || 0);
+
+              const isPaidReturn = o.returnShippingType === "paid" || o.status === "مرتجع والعميل دفع الشحن" || o.status === "مرتجع مدفوع الشحن";
+              if (isPaidReturn) {
+                const returnShipCost = Number(o.shipPrice || o.shipCost || 0);
+                shipping += returnShipCost;
+                cod += returnShipCost; // ADD customer paid return shipping cash to representative's handover COD!
+                courierCommissions += Number(o.commission || 20); // paid return gets success commission of 20
+              } else {
+                courierCommissions += Number(o.commission || 10); // regular returned defaults to 10
               }
-              courierCommissions += Number(o.commission || 0);
+
+              // Check if they were already delivered back to the supplier
+              if (isDeliveredToSupplier(o)) {
+                returnedDeliveredToSupplierCount++;
+                returnedDeliveredToSupplierValue += Number(o.prodPrice || 0);
+              }
             }
           } else {
             // Basis 2: Cumulative Order date booking (when the order was registered)
             if (isCreatedOnDate(o)) {
-              if (o.status === "تم التسليم") {
+              if (o.status === "تم التسليم" || o.status === "تسليم جزئي") {
                 delivered++;
                 cod += Number(o.totalCOD || 0);
-                shipping += Number(o.shipCost || o.shipPrice || 0);
-                courierCommissions += Number(o.commission || 25);
-              } else if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status) || (o.status || "").includes("مرتجع")) {
+                shipping += Number(o.shipPrice || o.shipCost || 0);
+                courierCommissions += Number(o.commission || 20);
+              } else if ([
+                "مرتجع", 
+                "التسليم للمورد", 
+                "تم تسليم المرتجع للمورد", 
+                "مرتجع تم تسليمه للمورد", 
+                "تم تسليم المرتجع للمورد وتصفية حسابه",
+                "مرتجع والعميل دفع الشحن",
+                "مرتجع مدفوع الشحن"
+              ].includes(o.status) || (o.status || "").includes("مرتجع")) {
                 returned++;
                 returnedValue += Number(o.prodPrice || 0);
-                if (o.returnShippingType === "paid") {
-                  shipping += Number(o.shipCost || o.shipPrice || 0);
+
+                const isPaidReturn = o.returnShippingType === "paid" || o.status === "مرتجع والعميل دفع الشحن" || o.status === "مرتجع مدفوع الشحن";
+                if (isPaidReturn) {
+                  const returnShipCost = Number(o.shipPrice || o.shipCost || 0);
+                  shipping += returnShipCost;
+                  cod += returnShipCost; // ADD customer paid return shipping cash to representative's handover COD!
+                  courierCommissions += Number(o.commission || 20);
+                } else {
+                  courierCommissions += Number(o.commission || 10);
                 }
-                courierCommissions += Number(o.commission || 0);
+
+                if (isDeliveredToSupplier(o)) {
+                  returnedDeliveredToSupplierCount++;
+                  returnedDeliveredToSupplierValue += Number(o.prodPrice || 0);
+                }
               }
             }
           }
@@ -265,8 +331,10 @@ export default function DailyClosing({ token, role, user, orders }: DailyClosing
           courierCommissions,
           cashboxIn,
           cashboxOut,
-          cashboxNet
-        });
+          cashboxNet,
+          returnedDeliveredToSupplierCount,
+          returnedDeliveredToSupplierValue
+        } as any);
       } else {
         setErrorMsg("تعذر تحميل قائمة الأوردرات لحساب التقفيل اللحظي");
       }
@@ -514,11 +582,21 @@ export default function DailyClosing({ token, role, user, orders }: DailyClosing
                 </div>
 
                 <div className="bg-slate-900/60 p-3 rounded-xl border border-white/4">
-                  <div className="text-[10px] text-slate-500 font-black">📦 المرتجع المستلم للمكتب</div>
+                  <div className="text-[10px] text-slate-500 font-black">📦 المرتجع المستلم من المندوبين</div>
                   <div className="text-lg font-black text-red-400 mt-1">
                     {calculatedDraft.returnedCount} <span className="text-[10px] font-medium text-slate-400">أوردر</span>
                   </div>
-                  <div className="text-[10px] text-slate-400 font-bold mt-1 font-mono">
+                  <div className="text-[10px] text-slate-400 font-bold mt-1.5 space-y-1">
+                    <div className="flex justify-between items-center text-rose-350">
+                      <span>📤 تم تسليمه للموردين:</span>
+                      <span className="font-mono bg-rose-955 px-1 rounded">{(calculatedDraft as any).returnedDeliveredToSupplierCount || 0}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-orange-400">
+                      <span>🏢 متبقي بعهدة المكتب:</span>
+                      <span className="font-mono bg-orange-955 px-1 rounded">{calculatedDraft.returnedCount - ((calculatedDraft as any).returnedDeliveredToSupplierCount || 0)}</span>
+                    </div>
+                  </div>
+                  <div className="text-[10px] text-slate-400 font-bold mt-2 pt-1 border-t border-white/4 font-mono">
                     قيمة البضاعة: {(calculatedDraft.returnedValue || 0).toLocaleString("ar")} ج.م
                   </div>
                 </div>
