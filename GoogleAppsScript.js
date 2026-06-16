@@ -469,6 +469,23 @@ function addOrder(sheets, d) {
     returnQueueAgent: ""
   };
 
+  // Automatic registration of new supplier if they are not in sheets.suppliers
+  const orderSupplier = (newOrder.supplier || "").toString().trim();
+  if (orderSupplier) {
+    const registeredSuppliers = getTableData(sheets.suppliers);
+    const matchedSup = registeredSuppliers.find(function(s) {
+      return s.name && s.name.trim().toLowerCase() === orderSupplier.toLowerCase();
+    });
+    if (!matchedSup) {
+      appendToSheet(sheets.suppliers, ["name", "phone", "price", "notes"], {
+        name: orderSupplier,
+        phone: "—",
+        price: 60,
+        notes: "تم تسجيله تلقائياً عن طريق إضافة أوردر يدوي"
+      });
+    }
+  }
+
   const headers = sheets.orders.getRange(1, 1, 1, sheets.orders.getLastColumn()).getValues()[0].map(h => h.trim());
   appendToSheet(sheets.orders, headers, newOrder);
 
@@ -1369,13 +1386,31 @@ function getSupplierAccounts(sheets) {
   const orders = getTableData(sheets.orders);
   const ledger = getTableData(sheets.supplierLedger);
 
-  const list = suppliers.map(s => {
-    const sLedger = ledger.filter(l => l.supplier === s.name);
-    const rawSupOrders = orders.filter(o => o.supplier === s.name);
+  // Extract all unique names from both suppliers list and orders list
+  const registeredNames = suppliers.map(function(s) { return s.name; }).filter(Boolean);
+  const orderNames = orders.map(function(o) { return o.supplier; }).filter(Boolean);
+  const allSupplierNames = [];
+  const seenSuppliers = {};
+
+  // Combine both arrays, preserving case, unique
+  registeredNames.concat(orderNames).forEach(function(name) {
+    const cleanName = name.toString().trim();
+    if (cleanName && !seenSuppliers[cleanName.toLowerCase()]) {
+      seenSuppliers[cleanName.toLowerCase()] = true;
+      allSupplierNames.push(cleanName);
+    }
+  });
+
+  const list = allSupplierNames.map(function(supplierName) {
+    const sObj = suppliers.find(function(s) {
+      return s.name && s.name.toString().trim().toLowerCase() === supplierName.toLowerCase();
+    });
+    const sLedger = ledger.filter(function(l) { return l.supplier === supplierName; });
+    const rawSupOrders = orders.filter(function(o) { return o.supplier === supplierName; });
 
     // Dedup rawSupOrders by tracking ID
     const uniqueSupOrdersMap = {};
-    rawSupOrders.forEach(o => {
+    rawSupOrders.forEach(function(o) {
       var track = (o.tracking || "").toString().trim();
       if (track) {
         uniqueSupOrdersMap[track] = o;
@@ -1383,32 +1418,32 @@ function getSupplierAccounts(sheets) {
         uniqueSupOrdersMap["NO-TRACK-" + Math.random()] = o;
       }
     });
-    const sOrders = Object.keys(uniqueSupOrdersMap).map(k => uniqueSupOrdersMap[k]);
+    const sOrders = Object.keys(uniqueSupOrdersMap).map(function(k) { return uniqueSupOrdersMap[k]; });
 
     // 1. Total Goods Uploaded (without shipping)
-    const totalGoodsUploaded = sOrders.reduce((sum, o) => {
+    const totalGoodsUploaded = sOrders.reduce(function(sum, o) {
       return sum + (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
     }, 0);
 
-    // 2. Returns delivered back to supplier ("تم تسليم المرتجع للمورد" or equivalent)
-    const returnedOrders = sOrders.filter(o => isReturnedDeliveredToSupplier(o.status));
+    // 2. Returns delivered back to supplier
+    const returnedOrders = sOrders.filter(function(o) { return isReturnedDeliveredToSupplier(o.status); });
     const returnsCount = returnedOrders.length;
-    const returnsDeliveredValue = returnedOrders.reduce((sum, o) => {
+    const returnsDeliveredValue = returnedOrders.reduce(function(sum, o) {
       return sum + (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
     }, 0);
 
-    // 3. Cash payments paid to supplier (Strict signed human payout classification)
-    const paid = sLedger.filter(isHumanPayout).reduce((sum, l) => sum - Number(l.amount || 0), 0);
+    // 3. Cash payments paid to supplier
+    const paid = sLedger.filter(isHumanPayout).reduce(function(sum, l) { return sum - Number(l.amount || 0); }, 0);
 
     // 4. Current outstanding balance based on final formula: Outstanding = TotalGoodsUploaded - Returned - Paid
     const balance = totalGoodsUploaded - returnsDeliveredValue - paid;
 
     const totalOrders = sOrders.length;
-    const deliveredOrders = sOrders.filter(o => o.status === "تم التسليم").length;
+    const deliveredOrders = sOrders.filter(function(o) { return o.status === "تم التسليم"; }).length;
 
     return {
-      name: s.name,
-      phone: s.phone || "—",
+      name: supplierName,
+      phone: sObj ? (sObj.phone || "—") : "—",
       totalRevenue: totalGoodsUploaded,
       totalCOD: totalGoodsUploaded,
       returnsDelivered: returnsDeliveredValue,
