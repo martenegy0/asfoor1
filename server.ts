@@ -1391,7 +1391,16 @@ app.post("/api", async (req: Request, res: Response) => {
               return err(res, "ليس لديك صلاحية سحب كشوفات الموردين المالية");
             }
 
-            const allSuppliers = Array.from(new Set(mockDb.orders.map((o: any) => o.supplier).filter(Boolean)));
+            const resSuppliers = await executeProxyRequest(gscriptUrl, {
+              action: "getSuppliers",
+              token: "14014",
+              currentUser,
+              currentRole
+            });
+            const registeredNames = (resSuppliers.suppliers || []).map((s: any) => s.name).filter(Boolean);
+            const orderNames = (mockDb.orders || []).map((o: any) => o.supplier).filter(Boolean);
+            const allSuppliers = Array.from(new Set([...registeredNames, ...orderNames]));
+
             const accountsList = allSuppliers.map((supName: any) => {
               const sup = String(supName);
               const unified = getSupplierUnifiedLedger(mockDb, sup);
@@ -2859,7 +2868,10 @@ app.post("/api", async (req: Request, res: Response) => {
           return err(res, "ليس لديك صلاحية سحب كشوفات الموردين المالية");
         }
 
-        const allSuppliers = Array.from(new Set(db.orders.map((o: any) => o.supplier).filter(Boolean)));
+        const registeredNames = (db.suppliers || []).map((s: any) => s.name).filter(Boolean);
+        const orderNames = (db.orders || []).map((o: any) => o.supplier).filter(Boolean);
+        const allSuppliers = Array.from(new Set([...registeredNames, ...orderNames]));
+
         const accountsList = allSuppliers.map((supName: any) => {
           const sup = String(supName);
           const unified = getSupplierUnifiedLedger(db, sup);

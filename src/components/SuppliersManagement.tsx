@@ -464,7 +464,7 @@ export default function SuppliersManagement({ token, role, orders = [] }: Suppli
                       {/* Name Header and rate bar */}
                       <div className="flex justify-between items-start border-b border-white/6 pb-3">
                         <span className="text-[10px] font-black text-emerald-400 bg-emerald-950/30 border border-emerald-900/30 px-2.5 py-1 rounded-lg">
-                          🟢 تسليم {acc.rate}%
+                          🟢 تسليم {acc.rate || 0}%
                         </span>
                         <h3 className="text-xs font-black text-slate-100">{acc.name}</h3>
                       </div>
@@ -472,19 +472,19 @@ export default function SuppliersManagement({ token, role, orders = [] }: Suppli
                       {/* Quantum of Metrics */}
                       <div className="space-y-2 text-[11px]">
                         <div className="flex justify-between">
-                          <span className="text-slate-200 font-extrabold font-mono">{acc.totalOrders} طلب</span>
+                          <span className="text-slate-200 font-extrabold font-mono">{acc.totalOrders || 0} طلب</span>
                           <span className="text-slate-450 text-slate-400">: إجمالي الطلبات المرفوعة</span>
                         </div>
 
                         <div className="flex justify-between">
-                          <span className="text-emerald-400 font-bold font-mono">{acc.deliveredOrders} طلب</span>
-                          <span className="text-slate-450 text-slate-450 text-slate-450">: مسلّم بنجاح للعميل</span>
+                          <span className="text-emerald-400 font-bold font-mono">{acc.deliveredOrders || 0} طلب</span>
+                          <span className="text-slate-450">: مسلّم بنجاح للعميل</span>
                         </div>
 
                         {/* Net Goods value - totalGoodsUploaded (without company shipping fees as requested!) */}
                         <div className="flex justify-between border-t border-dashed border-white/4 pt-2">
                           <span className="text-blue-400 font-extrabold font-mono">
-                            {acc.totalCOD.toLocaleString()} ج.م
+                            {Number(acc.totalCOD || 0).toLocaleString()} ج.م
                           </span>
                           <span className="text-slate-400">: إجمالي البضاعة المرفوعة (صافي)</span>
                         </div>
@@ -492,7 +492,7 @@ export default function SuppliersManagement({ token, role, orders = [] }: Suppli
                         {/* Returns deducted value */}
                         <div className="flex justify-between">
                           <span className="text-red-400 font-bold font-mono">
-                            {acc.returnsDelivered.toLocaleString()} ج.م ({acc.returnsCount} طلب مسترجع)
+                            {Number(acc.returnsDelivered || 0).toLocaleString()} ج.م ({acc.returnsCount || 0} طلب مسترجع)
                           </span>
                           <span className="text-slate-400">: المرتجعات المرتدة والخصم</span>
                         </div>
@@ -500,16 +500,16 @@ export default function SuppliersManagement({ token, role, orders = [] }: Suppli
                         {/* Total payments paid to supplier */}
                         <div className="flex justify-between">
                           <span className="text-slate-300 font-bold font-mono">
-                            {acc.payments.toLocaleString()} ج.م
+                            {Number(acc.payments || 0).toLocaleString()} ج.م
                           </span>
                           <span className="text-slate-400">: الدفعات النقدية المسددة</span>
                         </div>
 
                         {/* Reverse Adjustments on supplier */}
-                        {acc.adjustments !== 0 && (
+                        {acc.adjustments !== undefined && acc.adjustments !== null && Number(acc.adjustments) !== 0 && (
                           <div className="flex justify-between">
                             <span className="text-red-300 font-bold font-mono">
-                              {acc.adjustments.toLocaleString()} ج.م
+                              {Number(acc.adjustments).toLocaleString()} ج.م
                             </span>
                             <span className="text-slate-400">: التسويات العكسية/ السحوبات</span>
                           </div>
@@ -518,7 +518,7 @@ export default function SuppliersManagement({ token, role, orders = [] }: Suppli
                         {/* Final Net Account Due */}
                         <div className="flex justify-between text-xs font-black border-t border-white/6 pt-2.5 mt-2">
                           <span className={`font-mono text-sm font-black ${outstanding > 0 ? "text-amber-500" : outstanding < 0 ? "text-red-400" : "text-slate-350"}`}>
-                            {outstanding.toLocaleString()} ج.م
+                            {Number(outstanding || 0).toLocaleString()} ج.م
                           </span>
                           <span className="text-slate-200 font-black">: المستحقات العالقة الحالية</span>
                         </div>
@@ -533,7 +533,7 @@ export default function SuppliersManagement({ token, role, orders = [] }: Suppli
                           setSelectedLedgerSupplier(acc.name);
                           setActiveSubTab("statement");
                         }}
-                        className="flex-1 py-2 bg-slate-950 hover:bg-slate-900 border border-white/8 rounded-xl text-[10px] font-black font-semibold text-slate-350 text-center cursor-pointer transition-colors"
+                        className="flex-1 py-2 bg-slate-950 hover:bg-slate-900 border border-white/8 rounded-xl text-[10px] font-black text-slate-350 text-center cursor-pointer transition-colors"
                       >
                         📂 كشف تفصيلي
                       </button>
@@ -940,35 +940,35 @@ export default function SuppliersManagement({ token, role, orders = [] }: Suppli
             <form onSubmit={handleSettleSubmit} className="space-y-4">
               
               {/* Settle break stats */}
-              <div className="bg-slate-950 p-4 border border-white/6 rounded-xl space-y-2.5 text-xs">
-                <div className="flex justify-between items-center text-slate-300">
-                  <span className="font-mono font-bold text-blue-400">
-                    {activeSettleSupplier.totalCOD.toLocaleString()} ج.م
-                  </span>
-                  <span>إجمالي البضاعة المرفوعة (صافي بضاعة)</span>
-                </div>
+               <div className="bg-slate-950 p-4 border border-white/6 rounded-xl space-y-2.5 text-xs">
+                 <div className="flex justify-between items-center text-slate-300">
+                   <span className="font-mono font-bold text-blue-400">
+                     {Number(activeSettleSupplier.totalCOD || 0).toLocaleString()} ج.م
+                   </span>
+                   <span>إجمالي البضاعة المرفوعة (صافي بضاعة)</span>
+                 </div>
 
-                <div className="flex justify-between items-center text-slate-300">
-                  <span className="font-mono font-bold text-red-400">
-                    {activeSettleSupplier.returnsDelivered.toLocaleString()} ج.م
-                  </span>
-                  <span>المرتجعات المخصومة والمسلمة</span>
-                </div>
+                 <div className="flex justify-between items-center text-slate-300">
+                   <span className="font-mono font-bold text-red-400">
+                     {Number(activeSettleSupplier.returnsDelivered || 0).toLocaleString()} ج.م
+                   </span>
+                   <span>المرتجعات المخصومة والمسلمة</span>
+                 </div>
 
-                <div className="flex justify-between items-center text-slate-300">
-                  <span className="font-mono font-light text-slate-400">
-                    {activeSettleSupplier.payments.toLocaleString()} ج.م
-                  </span>
-                  <span>الدفعات النقدية السابقة</span>
-                </div>
+                 <div className="flex justify-between items-center text-slate-300">
+                   <span className="font-mono font-light text-slate-400">
+                     {Number(activeSettleSupplier.payments || 0).toLocaleString()} ج.م
+                   </span>
+                   <span>الدفعات النقدية السابقة</span>
+                 </div>
 
-                <div className="border-t border-white/6 pt-2 pb-1 flex justify-between items-center font-black">
-                  <span className={`font-mono text-sm font-black ${activeSettleSupplier.balance > 0 ? "text-amber-500" : activeSettleSupplier.balance < 0 ? "text-red-400" : "text-slate-200"}`}>
-                    {activeSettleSupplier.balance.toLocaleString()} ج.م
-                  </span>
-                  <span className="text-slate-100">المبلغ المستحق الصافي الحالي</span>
-                </div>
-              </div>
+                 <div className="border-t border-white/6 pt-2 pb-1 flex justify-between items-center font-black">
+                   <span className={`font-mono text-sm font-black ${Number(activeSettleSupplier.balance || 0) > 0 ? "text-amber-500" : Number(activeSettleSupplier.balance || 0) < 0 ? "text-red-400" : "text-slate-200"}`}>
+                     {Number(activeSettleSupplier.balance || 0).toLocaleString()} ج.م
+                   </span>
+                   <span className="text-slate-100">المبلغ المستحق الصافي الحالي</span>
+                 </div>
+               </div>
 
               {/* Transaction direction */}
               <div>
