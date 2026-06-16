@@ -1349,7 +1349,7 @@ function getSupplierDashboard(sheets, d) {
   const totalPaid = sLedger.filter(isHumanPayout).reduce((sum, l) => sum - Number(l.amount || 0), 0);
 
   // 4. Current outstanding balance based on formula: Outstanding = TotalGoodsUploaded - Returned - Paid
-  const remaining = Math.max(0, totalGoodsUploaded - returnsDeliveredValue - totalPaid);
+  const remaining = totalGoodsUploaded - returnsDeliveredValue - totalPaid;
 
   return {
     ok: true,
@@ -1401,7 +1401,7 @@ function getSupplierAccounts(sheets) {
     const paid = sLedger.filter(isHumanPayout).reduce((sum, l) => sum - Number(l.amount || 0), 0);
 
     // 4. Current outstanding balance based on final formula: Outstanding = TotalGoodsUploaded - Returned - Paid
-    const balance = Math.max(0, totalGoodsUploaded - returnsDeliveredValue - paid);
+    const balance = totalGoodsUploaded - returnsDeliveredValue - paid;
 
     const totalOrders = sOrders.length;
     const deliveredOrders = sOrders.filter(o => o.status === "تم التسليم").length;

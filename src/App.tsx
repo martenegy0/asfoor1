@@ -872,7 +872,7 @@ export default function App() {
             }`}
           >
             <Users size={14} />
-            <span>إدارة الموردين</span>
+            <span>كشف حساب وإدارة الموردين</span>
           </button>
         )}
       </nav>

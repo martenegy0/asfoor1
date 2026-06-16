@@ -558,7 +558,7 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
 
   // 5. Calculate outstanding balance: Outstanding = TotalGoodsUploaded - Returned - Paid
   const rawOutstanding = totalGoodsUploaded - returnsDeliveredValue - paymentsValue - reverseAdjustmentsValue;
-  const outstanding = Math.max(0, rawOutstanding);
+  const outstanding = rawOutstanding;
 
   // Build the ledger entries list
   const entries: any[] = [];
@@ -1939,7 +1939,7 @@ app.post("/api", async (req: Request, res: Response) => {
       // UPDATE ORDER STATUS (Workflow Controls)
       // ─────────────────────────────────────────────────────────────
       case "updateStatus": {
-        const { tracking, status, returnShippingType, notes, delivDate } = d;
+        const { tracking, status, returnShippingType, notes, delivDate, partialAmount } = d;
         if (!tracking || !status) return err(res, "معاملات مفقودة");
 
         const sc = tracking.toString().trim().toUpperCase();
@@ -1954,9 +1954,9 @@ app.post("/api", async (req: Request, res: Response) => {
         const matchedTracking = order.tracking;
         const oldStatus = order.status;
 
-        // 🚨 Standard Restriction on 'تم التسليم'
-        if (oldStatus === "تم التسليم") {
-          return err(res, "لا يمكن تعديل حالة أوردر تم تسليمه");
+        // 🚨 Standard Restriction on 'تم التسليم' or 'تسليم جزئي'
+        if (oldStatus === "تم التسليم" || oldStatus === "تسليم جزئي") {
+          return err(res, "لا يمكن تعديل حالة أوردر تم تسليمه أو تسليمه جزئياً");
         }
 
         // 🚨 Role Permissions Guard for status transitions
@@ -1975,7 +1975,7 @@ app.post("/api", async (req: Request, res: Response) => {
 
         // Agent Restrictions:
         if (isAgent) {
-          const agentAllowedStatuses = ["تم التسليم", "مرتجع", "مؤجل", "لا يوجد رد"];
+          const agentAllowedStatuses = ["تم التسليم", "تسليم جزئي", "مرتجع", "مؤجل", "لا يوجد رد"];
           if (!agentAllowedStatuses.includes(status)) {
             return err(res, "غير مسموح للمندوب باختيار هذه الحالة");
           }
@@ -2099,6 +2099,44 @@ app.post("/api", async (req: Request, res: Response) => {
                 tracking: order.tracking,
                 amount: supplierShare,
                 desc: `حقوق أوردر تم تسليمه: ${order.tracking} (سعر المنتج ${order.prodPrice} - شحن الشركة ${order.shipPrice})`
+              });
+            }
+          }
+
+          if (status === "تسليم جزئي") {
+            order.delivDate = now();
+            const pAm = Number(partialAmount || order.totalCOD || 0);
+            order.totalCOD = pAm;
+            order.partialAmount = pAm;
+            order.returnQueueStatus = "مرتجع جزئي بالمستودع";
+            order.isPartial = true;
+
+            // Calculate Courier Commission
+            const courierProfile = db.couriers.find((c: any) => c.name === order.courier);
+            const commVal = courierProfile ? Number(courierProfile.commission || 25) : 25;
+            order.commission = commVal;
+
+            // Save to Courier Ledger
+            db.courierLedger.push({
+              courier: order.courier,
+              date: now(),
+              type: "تسليم جزئي",
+              tracking: order.tracking,
+              amount: commVal,
+              desc: `عمولة تسليم جزئي للأوردر: ${order.tracking} (المبلغ الفعلي المستلم: ${pAm} ج.م)`
+            });
+
+            // Credit the Supplier Ledger based on updated totalCOD (TotalCOD - Shipping)
+            const dupLedger = db.supplierLedger.find((l: any) => l.tracking === order.tracking && (l.type === "أوردر مستلم" || l.type === "تسليم" || l.type === "أوردر مستلم جزئي"));
+            if (!dupLedger) {
+              const supplierShare = pAm - Number(order.shipPrice || 0);
+              db.supplierLedger.push({
+                supplier: order.supplier,
+                date: now(),
+                type: "أوردر مستلم جزئي",
+                tracking: order.tracking,
+                amount: supplierShare,
+                desc: `حقوق توريد أوردر تسليم جزئي: ${order.tracking} (المبلغ المحصل للشركة ${pAm} - شحن الشركة ${order.shipPrice})`
               });
             }
           }
@@ -2911,8 +2949,8 @@ app.post("/api", async (req: Request, res: Response) => {
         const todayDate = tod();
 
         // Strict Courier Settlement Calculations (Today's performance):
-        // 1. Delivered Cash (كاش الأوردرات المسلمة اليوم): (ثمن المنتجات + مصاريف الشحن) لجميع الأوردرات "تم التسليم" اليوم
-        const todayDeliveredOrders = courierOrders.filter((o: any) => o.status === "تم التسليم" && o.delivDate && isDateToday(o.delivDate));
+        // 1. Delivered Cash (كاش الأوردرات المسلمة اليوم): (ثمن المنتجات + مصاريف الشحن) لجميع الأوردرات "تم التسليم" أو "تسليم جزئي" اليوم
+        const todayDeliveredOrders = courierOrders.filter((o: any) => (o.status === "تم التسليم" || o.status === "تسليم جزئي") && o.delivDate && isDateToday(o.delivDate));
         const todayDeliveredCount = todayDeliveredOrders.length;
         const todayDeliveredCash = todayDeliveredOrders.reduce((sum: number, o: any) => sum + Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0))), 0);
 
@@ -2928,7 +2966,7 @@ app.post("/api", async (req: Request, res: Response) => {
         const todayTotalCommission = (todayDeliveredCount * commissionSuccess) + (todayReturnedPaidCount * commissionSuccess);
 
         // Cumulative totals (for historical indicators)
-        const deliveredCount = courierOrders.filter((o: any) => o.status === "تم التسليم").length;
+        const deliveredCount = courierOrders.filter((o: any) => o.status === "تم التسليم" || o.status === "تسليم جزئي").length;
         const returnedCount = courierOrders.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length;
         const returnedPaidCount = courierOrders.filter((o: any) => o.status === "مرتجع" && o.returnShippingType === "paid").length;
 
@@ -2953,7 +2991,7 @@ app.post("/api", async (req: Request, res: Response) => {
 
         // Compute COD Collection tracking for anti-deficit control
         // Life-time or cumulative collected
-        const totalCollected = courierOrders.filter((o: any) => o.status === "تم التسليم").reduce((sum: number, o: any) => sum + Number(o.totalCOD || 0), 0);
+        const totalCollected = courierOrders.filter((o: any) => o.status === "تم التسليم" || o.status === "تسليم جزئي").reduce((sum: number, o: any) => sum + Number(o.totalCOD || 0), 0);
         
         // Handed Over to company = Sum of "استلام عهدة مندوب" records in cashbox for this courier
         const totalPaidToCompany = db.cashbox
@@ -2969,7 +3007,7 @@ app.post("/api", async (req: Request, res: Response) => {
 
         const datesSet = new Set<string>();
         for (const o of courierOrders) {
-          if (o.status === "تم التسليم" && o.delivDate) {
+          if ((o.status === "تم التسليم" || o.status === "تسليم جزئي") && o.delivDate) {
             datesSet.add(o.delivDate.substring(0, 10));
           }
           if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) && o.retDate) {
@@ -2991,7 +3029,7 @@ app.post("/api", async (req: Request, res: Response) => {
         const dailyEarnings = sortedDates.map(dStr => {
           const isToday = dStr === todayDate;
 
-          const deliveredList = courierOrders.filter((o: any) => o.status === "تم التسليم" && o.delivDate && o.delivDate.substring(0, 10) === dStr);
+          const deliveredList = courierOrders.filter((o: any) => (o.status === "تم التسليم" || o.status === "تسليم جزئي") && o.delivDate && o.delivDate.substring(0, 10) === dStr);
           const returnedList = courierOrders.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) && o.retDate && o.retDate.substring(0, 10) === dStr);
           
           const deliveredDay = deliveredList.length;
@@ -3074,7 +3112,7 @@ app.post("/api", async (req: Request, res: Response) => {
 
         const ordersList = db.orders.filter((o: any) => o.courier === courierName);
         const total = ordersList.length;
-        const delivered = ordersList.filter((o: any) => o.status === "تم التسليم").length;
+        const delivered = ordersList.filter((o: any) => o.status === "تم التسليم" || o.status === "تسليم جزئي").length;
         const returnedPaid = ordersList.filter((o: any) => o.status === "مرتجع" && o.returnShippingType === "paid").length;
         const returnedAll = ordersList.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length;
 
@@ -3090,8 +3128,8 @@ app.post("/api", async (req: Request, res: Response) => {
         const todayDate = tod();
 
         // Strict Courier Settlement Calculations (Today's performance):
-        // 1. Delivered Cash (كاش الأوردرات المسلمة اليوم): (ثمن المنتجات + مصاريف الشحن) لجميع الأوردرات "تم التسليم" اليوم
-        const todayDeliveredOrders = ordersList.filter((o: any) => o.status === "تم التسليم" && o.delivDate && isDateToday(o.delivDate));
+        // 1. Delivered Cash (كاش الأوردرات المسلمة اليوم): (ثمن المنتجات + مصاريف الشحن) لجميع الأوردرات "تم التسليم" أو "تسليم جزئي" اليوم
+        const todayDeliveredOrders = ordersList.filter((o: any) => (o.status === "تم التسليم" || o.status === "تسليم جزئي") && o.delivDate && isDateToday(o.delivDate));
         const todayDeliveredCount = todayDeliveredOrders.length;
         const todayDeliveredCash = todayDeliveredOrders.reduce((sum: number, o: any) => sum + Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0))), 0);
 
@@ -3123,7 +3161,7 @@ app.post("/api", async (req: Request, res: Response) => {
 
         const datesSet = new Set<string>();
         for (const o of ordersList) {
-          if (o.status === "تم التسليم" && o.delivDate) {
+          if ((o.status === "تم التسليم" || o.status === "تسليم جزئي") && o.delivDate) {
             datesSet.add(o.delivDate.substring(0, 10));
           }
           if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) && o.retDate) {
@@ -3145,7 +3183,7 @@ app.post("/api", async (req: Request, res: Response) => {
         const dailyEarnings = sortedDates.map(dStr => {
           const isToday = dStr === todayDate;
 
-          const deliveredList = ordersList.filter((o: any) => o.status === "تم التسليم" && o.delivDate && o.delivDate.substring(0, 10) === dStr);
+          const deliveredList = ordersList.filter((o: any) => (o.status === "تم التسليم" || o.status === "تسليم جزئي") && o.delivDate && o.delivDate.substring(0, 10) === dStr);
           const returnedList = ordersList.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) && o.retDate && o.retDate.substring(0, 10) === dStr);
           
           const deliveredDay = deliveredList.length;
@@ -3181,7 +3219,7 @@ app.post("/api", async (req: Request, res: Response) => {
         });
 
         // Total cash collected vs deposited for the courier portal itself
-        const totalCollectedOnInfo = ordersList.filter((o: any) => o.status === "تم التسليم").reduce((sum: number, o: any) => sum + Number(o.totalCOD || 0), 0);
+        const totalCollectedOnInfo = ordersList.filter((o: any) => o.status === "تم التسليم" || o.status === "تسليم جزئي").reduce((sum: number, o: any) => sum + Number(o.totalCOD || 0), 0);
         const totalPaidToCompanyOnInfo = db.cashbox
           .filter((item: any) => item.type === "استلام عهدة مندوب" && item.ref === courierName)
           .reduce((sum: number, item: any) => sum + Number(item.amount || 0), 0);
@@ -3328,7 +3366,7 @@ app.post("/api", async (req: Request, res: Response) => {
           if (db.orders) {
             for (const o of db.orders) {
               if (o.courier === courierName) {
-                const isCommitted = ["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع والعميل دفع الشحن"].includes(o.status);
+                const isCommitted = ["تم التسليم", "تسليم جزئي", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع والعميل دفع الشحن"].includes(o.status);
                 if (isCommitted) {
                   o.isClosed = true;
                 }
