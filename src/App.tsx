@@ -293,20 +293,7 @@ export default function App() {
         console.warn("getOrders api failed, using local/mock fallback", err);
       }
 
-      const isDevOrPreview = 
-        window.location.hostname === "localhost" || 
-        window.location.hostname.includes("run.app") || 
-        window.location.hostname.includes("ais-dev") || 
-        window.location.hostname.includes("ais-pre");
-
       let finalRaw = [...rawOrders];
-      if (isDevOrPreview || finalRaw.length < 10) {
-        const mockList = getMockOrders();
-        const existingTrackings = new Set(rawOrders.map((o: any) => o.tracking));
-        const filteredMock = mockList.filter((m: any) => !existingTrackings.has(m.tracking));
-        finalRaw = [...rawOrders, ...filteredMock];
-      }
-
       let orderList = [...finalRaw];
 
       // Strict client-side role filtering safety boundary
@@ -386,93 +373,27 @@ export default function App() {
 
   // --- Accountant operations triggers ---
   async function fetchCashboxDetails(tk = token) {
-    let mockBalance = 0;
-    let mockEntriesList: any[] = [];
-    
-    const isDevOrPreview = 
-      window.location.hostname === "localhost" || 
-      window.location.hostname.includes("run.app") || 
-      window.location.hostname.includes("ais-dev") || 
-      window.location.hostname.includes("ais-pre");
-
-    if (isDevOrPreview) {
-      mockEntriesList = getMockCashboxEntries();
-      mockBalance = mockEntriesList[mockEntriesList.length - 1]?.balance || 50000;
-    }
-
     try {
       const res = await apiCall("cashbox", tk);
       if (res.ok) {
-        const serverEntries = res.entries || [];
-        const serverBalance = res.balance || 0;
-        
-        if (isDevOrPreview) {
-          const existingRefs = new Set(serverEntries.map((e: any) => e.ref));
-          const filteredMock = mockEntriesList.filter((m: any) => !existingRefs.has(m.ref));
-          
-          let combinedEntries = [...filteredMock, ...serverEntries];
-          setCashboxEntries(combinedEntries);
-          
-          let finalBal = combinedEntries.reduce((bal, item) => {
-            const isInc = ["وارد", "تحصيل مندوب"].includes(item.type);
-            return isInc ? bal + Number(item.amount || 0) : bal - Number(item.amount || 0);
-          }, 0);
-          setCashboxBalance(finalBal);
-        } else {
-          setCashboxEntries(serverEntries);
-          setCashboxBalance(serverBalance);
-        }
-      } else if (isDevOrPreview) {
-        setCashboxEntries(mockEntriesList);
-        setCashboxBalance(mockBalance);
+        setCashboxEntries(res.entries || []);
+        setCashboxBalance(res.balance !== undefined ? res.balance : 0);
       }
     } catch (e) {
-      console.warn("Cashbox fetching error, falling back to mock", e);
-      if (isDevOrPreview) {
-        setCashboxEntries(mockEntriesList);
-        setCashboxBalance(mockBalance);
-      }
+      console.warn("Cashbox fetching error", e);
     }
   }
 
   async function fetchExpensesDetails(tk = token) {
-    let mockExpensesList: any[] = [];
-    
-    const isDevOrPreview = 
-      window.location.hostname === "localhost" || 
-      window.location.hostname.includes("run.app") || 
-      window.location.hostname.includes("ais-dev") || 
-      window.location.hostname.includes("ais-pre");
-
-    if (isDevOrPreview) {
-      mockExpensesList = getMockExpenses();
-    }
-
     try {
       const res = await apiCall("expenses", tk);
       if (res.ok) {
         const serverExpenses = res.expenses || [];
-        let combined = [...serverExpenses];
-        
-        if (isDevOrPreview && mockExpensesList.length > 0) {
-          const serverDescs = new Set(serverExpenses.map((e: any) => e.desc));
-          const filteredMock = mockExpensesList.filter((m: any) => !serverDescs.has(m.desc));
-          combined = [...filteredMock, ...serverExpenses];
-        }
-
-        setExpenses(combined);
-        const totalAmount = combined.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-        setExpensesTotal(totalAmount);
-      } else if (isDevOrPreview && mockExpensesList.length > 0) {
-        setExpenses(mockExpensesList);
-        setExpensesTotal(mockExpensesList.reduce((sum, item) => sum + Number(item.amount || 0), 0));
+        setExpenses(serverExpenses);
+        setExpensesTotal(res.total !== undefined ? res.total : serverExpenses.reduce((sum, item) => sum + Number(item.amount || 0), 0));
       }
     } catch (e) {
       console.warn("Expenses list retrieval error", e);
-      if (isDevOrPreview && mockExpensesList.length > 0) {
-        setExpenses(mockExpensesList);
-        setExpensesTotal(mockExpensesList.reduce((sum, item) => sum + Number(item.amount || 0), 0));
-      }
     }
   }
 

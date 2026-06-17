@@ -53,16 +53,6 @@ export default function Dashboard({ token, role, username, orders, setOrders, on
         window.location.hostname.includes("ais-pre");
 
       let finalOrders = [...serverOrders];
-
-      // If in development/preview or we have very few orders, inject high quality realistic mock orders matching user specification
-      if (isDevOrPreview || finalOrders.length < 10) {
-        const mockData = getMockOrders();
-        // Prevent duplicate orders by matching tracking numbers
-        const serverTrackings = new Set(serverOrders.map((o: any) => o.tracking));
-        const filteredMock = mockData.filter((o: any) => !serverTrackings.has(o.tracking));
-        finalOrders = [...serverOrders, ...filteredMock];
-      }
-
       setAllOrders(finalOrders);
 
       const todayStr = getTodayDateStr();

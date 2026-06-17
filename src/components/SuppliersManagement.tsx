@@ -160,12 +160,19 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
     initializeData();
   }, [token]);
 
-  // Auto-set supplier for statements if role is "مورد"
+  // Auto-set supplier for statements if role is "مورد" or auto-select first for admins if empty
   useEffect(() => {
     if (isSupplierRole) {
       const lockName = user || uniqueSuppliersList[0] || "";
       setSelectedLedgerSupplier(lockName);
       setQuerySupplier(lockName);
+    } else if (uniqueSuppliersList.length > 0) {
+      if (!selectedLedgerSupplier) {
+        setSelectedLedgerSupplier(uniqueSuppliersList[0]);
+      }
+      if (!querySupplier) {
+        setQuerySupplier(uniqueSuppliersList[0]);
+      }
     }
   }, [uniqueSuppliersList, isSupplierRole, user]);
 
