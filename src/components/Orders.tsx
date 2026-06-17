@@ -226,6 +226,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
   const [search, setSearch] = useState("");
   const [activeFilter, setActiveFilter] = useState("all");
   const [selectedDate, setSelectedDate] = useState<string>(getTodayDateStr());
+  const [selectedSupplierFilter, setSelectedSupplierFilter] = useState<string>("");
   const [displayLimit, setDisplayLimit] = useState<number>(25);
   const [courierConfirmModal, setCourierConfirmModal] = useState<{
     tracking: string;
@@ -235,7 +236,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
 
   React.useEffect(() => {
     setDisplayLimit(25);
-  }, [search, activeFilter, selectedDate]);
+  }, [search, activeFilter, selectedDate, selectedSupplierFilter]);
 
   const lastDays = React.useMemo(() => {
     const days = [];
@@ -458,6 +459,13 @@ export default function Orders({ token, role, username, orders, setOrders, couri
           return false;
         }
 
+        // Filter by supplier if selected
+        if (selectedSupplierFilter) {
+          if (!o.supplier || o.supplier.toString().trim().toLowerCase() !== selectedSupplierFilter.toLowerCase()) {
+            return false;
+          }
+        }
+
         // Logistic Status Categorization & Fallback mapping
         if (activeFilter !== "all") {
           const status = (o.status || "").toString().trim();
@@ -517,7 +525,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
         const timeB = valB ? new Date(valB.replace(" ", "T")).getTime() : 0;
         return timeB - timeA;
       });
-  }, [roleFilteredOrders, isAgent, username, activeFilter, isSupplier, isReturnsOfficer, selectedDate, search]);
+  }, [roleFilteredOrders, isAgent, username, activeFilter, isSupplier, isReturnsOfficer, selectedDate, search, selectedSupplierFilter]);
 
   // Today's hold-ups / suspended orders ("معلقات اليوم") for agent/courier view
   const suspendedOrders = React.useMemo(() => {
@@ -537,6 +545,106 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       return true;
     });
   }, [isAgent, roleFilteredOrders, username, search]);
+
+  // Dynamic reactive count of orders within each status category, filtered by selected date and chosen supplier
+  const statusCounts = React.useMemo(() => {
+    // We filter by selected date AND chosen supplier (if any) to get exact count!
+    const dayOrders = roleFilteredOrders.filter((o) => {
+      // Date filter
+      if (selectedDate !== "all") {
+        const orderDayStr = normalizeDateToYMD(o.orderDate || o.createdAt);
+        if (orderDayStr !== selectedDate) return false;
+      }
+      // Supplier filter
+      if (selectedSupplierFilter) {
+        if (!o.supplier || o.supplier.toString().trim().toLowerCase() !== selectedSupplierFilter.toLowerCase()) {
+          return false;
+        }
+      }
+      return true;
+    });
+
+    const counts: { [key: string]: number } = {
+      all: dayOrders.length,
+      "جديد": 0,
+      "مسند": 0,
+      "خارج للتسليم": 0,
+      "تم التسليم": 0,
+      "العميل رد وجاري التسليم": 0,
+      "مرتجع بالمستودع": 0,
+      "تم تسليم المرتجع للمورد": 0,
+      "مؤجل": 0,
+      "لا يوجد رد": 0
+    };
+
+    dayOrders.forEach((o) => {
+      const status = (o.status || "").toString().trim();
+      if (status === "جديد") counts["جديد"]++;
+      else if (["تم الإسناد", "مسند", "تم الاسناد"].includes(status)) counts["مسند"]++;
+      else if (["خارج مع المندوب", "خارج للتسليم", "خارج للتوصيل", "مع المندوب"].includes(status)) counts["خارج للتسليم"]++;
+      else if (["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي"].includes(status)) counts["تم التسليم"]++;
+      else if (["تم رد العميل وجاري التنسيق", "العميل رد وجاري التسليم"].includes(status) || status.includes("رد وجاري")) counts["العميل رد وجاري التسليم"]++;
+      else if (["مرتجع بالمستودع", "مرتجع", "مرتجع جديد", "مرتجع جاري تسليمه للمكتب"].includes(status)) counts["مرتجع بالمستودع"]++;
+      else if (["تم تسليم المرتجع للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "جاري الرجوع للمورد"].includes(status)) counts["تم تسليم المرتجع للمورد"]++;
+      else if (status === "مؤجل") counts["مؤجل"]++;
+      else if (["لا يوجد رد", "العميل لم يقم بالرد"].includes(status)) counts["لا يوجد رد"]++;
+    });
+
+    return counts;
+  }, [roleFilteredOrders, selectedDate, selectedSupplierFilter]);
+
+  // Real-time metrics for selected supplier on specified date
+  const selectedSupplierStats = React.useMemo(() => {
+    if (!selectedSupplierFilter) return null;
+
+    // Filter by supplier
+    const supplierAllOrders = roleFilteredOrders.filter(
+      (o) => o.supplier && o.supplier.toString().trim().toLowerCase() === selectedSupplierFilter.toLowerCase()
+    );
+
+    // Filter by date
+    const supplierDayOrders = supplierAllOrders.filter((o) => {
+      if (selectedDate !== "all") {
+        return normalizeDateToYMD(o.orderDate || o.createdAt) === selectedDate;
+      }
+      return true;
+    });
+
+    const total = supplierDayOrders.length;
+    const newCount = supplierDayOrders.filter(o => (o.status || "") === "جديد").length;
+    
+    const outForDelivery = supplierDayOrders.filter(o => {
+      const status = (o.status || "").toString().trim();
+      return ["خارج مع المندوب", "خارج للتسليم", "خارج للتوصيل", "مع المندوب"].includes(status);
+    }).length;
+    
+    const delivered = supplierDayOrders.filter(o => {
+      const status = (o.status || "").toString().trim();
+      return ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي"].includes(status);
+    }).length;
+    
+    const returnedInWarehouse = supplierDayOrders.filter(o => {
+      const status = (o.status || "").toString().trim();
+      return ["مرتجع بالمستودع", "مرتجع", "مرتجع جديد", "مرتجع جاري تسليمه للمكتب"].includes(status);
+    }).length;
+    
+    const returnedDelivered = supplierDayOrders.filter(o => {
+      const status = (o.status || "").toString().trim();
+      return ["تم تسليم المرتجع للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "جاري الرجوع للمورد"].includes(status);
+    }).length;
+    
+    const pendingUnaddressed = total - (newCount + outForDelivery + delivered + returnedInWarehouse + returnedDelivered);
+
+    return {
+      total,
+      newCount,
+      outForDelivery,
+      delivered,
+      returnedInWarehouse,
+      returnedDelivered,
+      pending: pendingUnaddressed >= 0 ? pendingUnaddressed : 0
+    };
+  }, [roleFilteredOrders, selectedSupplierFilter, selectedDate]);
 
   function toggleSelect(tracking: string) {
     const next = new Set(selected);
@@ -1370,6 +1478,8 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                 </button>
               </>
             )}
+          </div>
+        )}
 
             {isReturnsOfficer && (
               <div className="flex flex-col gap-3 bg-slate-950 p-3.5 rounded-xl border border-purple-500/30 w-full text-right" dir="rtl">
@@ -1404,7 +1514,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                 <div className="flex flex-col gap-1">
                   <span className="text-[10px] text-purple-400 font-bold">اختر صفة وحالة المرتجع الحالية:</span>
                   <select
-                    value={o.status}
+                    value={o.status || ""}
                     disabled={pendingTrackings.has(o.tracking)}
                     onChange={(e) => {
                       const val = e.target.value;
@@ -1428,8 +1538,6 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                 </div>
               </div>
             )}
-          </div>
-        )}
 
         {/* Clean isolated communication */}
         {o.phone && (() => {
@@ -1473,6 +1581,31 @@ export default function Orders({ token, role, username, orders, setOrders, couri
             className="w-full bg-slate-900 border border-white/6 rounded-xl py-2.5 pr-10 pl-4 text-xs font-bold text-slate-200 placeholder-slate-500 text-right outline-none focus:border-amber-500/20"
           />
         </div>
+
+        {/* Quick Supplier Filter Dropdown */}
+        <div className="relative min-w-[170px] max-w-full">
+          <select
+            value={selectedSupplierFilter}
+            onChange={(e) => {
+              setSelectedSupplierFilter(e.target.value);
+              setSelected(new Set());
+            }}
+            className="bg-slate-900 border border-white/6 rounded-xl py-2.5 px-3 text-xs font-black text-amber-400 outline-none text-right focus:border-amber-500 hover:bg-slate-850 cursor-pointer w-full"
+          >
+            <option value="">👤 كافة الشحنات (كل الموردين)</option>
+            {Array.from(new Set(
+              (roleFilteredOrders || [])
+                .map((o: any) => o.supplier)
+                .filter(Boolean)
+                .map((s: any) => s.toString().trim())
+            ))
+            .sort()
+            .map((sup: string) => (
+              <option key={sup} value={sup}>{sup}</option>
+            ))}
+          </select>
+        </div>
+
         <div className="flex items-center gap-2">
           {canReconcile && (
             <button
@@ -1492,9 +1625,9 @@ export default function Orders({ token, role, username, orders, setOrders, couri
           )}
           {(isAdmin || isSuper || isOps || (role || "").toString().toLowerCase().includes("محاسب")) && (
             <button
-              onClick={exportToCSV}
-              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-slate-950 font-black text-[10px] rounded-xl flex items-center gap-1.5 cursor-pointer transition-all whitespace-nowrap"
-              title="تصدير النتائج الحليّة بصيغة CSV"
+               onClick={exportToCSV}
+               className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-slate-950 font-black text-[10px] rounded-xl flex items-center gap-1.5 cursor-pointer transition-all whitespace-nowrap"
+               title="تصدير النتائج الحليّة بصيغة CSV"
             >
               <Download size={13} />
               تصدير كـ CSV
@@ -1503,17 +1636,68 @@ export default function Orders({ token, role, username, orders, setOrders, couri
         </div>
       </div>
 
-      {/* Category filters */}
-      <div className="flex gap-2 overflow-x-auto px-4 pb-1 scrollbar-none">
+      {/* Supplier dashboard stats card for specified date */}
+      {selectedSupplierStats && (
+        <div className="mx-4 p-4 bg-gradient-to-br from-amber-600/10 via-[#0a1122] to-[#070d1a] border border-amber-500/20 rounded-2xl animate-fadeIn text-right space-y-3.5 shadow-xl">
+          <div className="flex items-center justify-between border-b border-white/5 pb-2.5">
+            <div className="flex items-center gap-2">
+              <span className="p-1 px-2 bg-amber-550/10 text-amber-400 rounded-md text-[10px] shrink-0 font-sans">📊</span>
+              <span className="text-xs font-black text-slate-200">
+                إحصائيات المورد <span className="text-amber-400 underline decoration-amber-500/40 decoration-2 underline-offset-4 font-black">{selectedSupplierFilter}</span> لليوم المحدد ({selectedDate === "all" ? "جميع الأيام المتاحة" : selectedDate})
+              </span>
+            </div>
+            <button
+              onClick={() => setSelectedSupplierFilter("")}
+              className="text-[10px] font-bold text-red-400 hover:text-red-300 cursor-pointer transition-colors bg-red-950/20 hover:bg-red-950/45 px-2.5 py-1 rounded-lg border border-red-900/30 font-sans"
+            >
+              ✕ إلغاء الفلترة السريعة
+            </button>
+          </div>
+          
+          <div className="grid grid-cols-2 sm:grid-cols-7 gap-2">
+            <div className="p-2 bg-slate-950/60 border border-white/6 rounded-xl text-center">
+              <div className="text-[9px] text-slate-400 font-bold mb-0.5">إجمالي الأوردرات</div>
+              <div className="font-mono text-base font-black text-slate-200">{selectedSupplierStats.total}</div>
+            </div>
+            <div className="p-2 bg-slate-950/60 border border-blue-900/30 rounded-xl text-center">
+              <div className="text-[9px] text-blue-400 font-bold mb-0.5">جديد</div>
+              <div className="font-mono text-base font-black text-blue-400">{selectedSupplierStats.newCount}</div>
+            </div>
+            <div className="p-2 bg-slate-950/60 border border-yellow-905 rounded-xl text-center">
+              <div className="text-[9px] text-yellow-500 font-bold mb-0.5">خارج شحن</div>
+              <div className="font-mono text-base font-black text-yellow-500">{selectedSupplierStats.outForDelivery}</div>
+            </div>
+            <div className="p-2 bg-slate-950/60 border border-emerald-915 rounded-xl text-center">
+              <div className="text-[9px] text-emerald-400 font-bold mb-0.5">تم التسليم</div>
+              <div className="font-mono text-base font-black text-emerald-400">{selectedSupplierStats.delivered}</div>
+            </div>
+            <div className="p-2 bg-slate-950/60 border border-amber-900/40 rounded-xl text-center">
+              <div className="text-[9px] text-amber-500 font-bold mb-0.5">مرتجع مستودع (بايت)</div>
+              <div className="font-mono text-base font-black text-amber-500">{selectedSupplierStats.returnedInWarehouse}</div>
+            </div>
+            <div className="p-2 bg-slate-950/60 border border-rose-950/30 rounded-xl text-center">
+              <div className="text-[9px] text-red-400 font-bold mb-0.5">تسليم للمورد</div>
+              <div className="font-mono text-base font-black text-red-400">{selectedSupplierStats.returnedDelivered}</div>
+            </div>
+            <div className="p-2 bg-slate-950/60 border border-purple-900/30 rounded-xl text-center">
+              <div className="text-[9px] text-purple-400 font-bold mb-0.5">معلق ومؤجل</div>
+              <div className="font-mono text-base font-black text-purple-400">{selectedSupplierStats.pending}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Category filters Grid */}
+      <div className="grid grid-cols-2 xs:grid-cols-2 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-10 gap-2 px-4 font-sans">
         {[
           { key: "all", label: "الكل" },
           { key: "جديد", label: "🆕 جديد" },
           { key: "مسند", label: "📋 مسند" },
           { key: "خارج للتسليم", label: "🚚 خارج للتسليم" },
           { key: "تم التسليم", label: "✅ تم التسليم" },
-          { key: "العميل رد وجاري التسليم", label: "📞 العميل رد وجاري التسليم" },
-          { key: "مرتجع بالمستودع", label: "📦 مرتجع بالمستودع" },
-          { key: "تم تسليم المرتجع للمورد", label: "↩ تم تسليم المرتجع للمورد" },
+          { key: "العميل رد وجاري التسليم", label: "📞 لرد وجاري" },
+          { key: "مرتجع بالمستودع", label: "📦 بالمنشأ/المكتب" },
+          { key: "تم تسليم المرتجع للمورد", label: "↩ تسليم للمورد" },
           { key: "مؤجل", label: "⏳ مؤجل" },
           { key: "لا يوجد رد", label: "📵 لا يوجد رد" }
         ].map((f) => (
@@ -1523,13 +1707,20 @@ export default function Orders({ token, role, username, orders, setOrders, couri
               setActiveFilter(f.key);
               setSelected(new Set());
             }}
-            className={`px-4 py-1.5 rounded-full text-[10px] font-black cursor-pointer transition-all border whitespace-nowrap ${
+            className={`flex flex-col items-center justify-center p-2.5 rounded-2xl border cursor-pointer transition-all min-h-[66px] select-none text-right ${
               activeFilter === f.key
-                ? "bg-amber-500 text-slate-950 border-amber-500"
-                : "bg-slate-950 text-slate-400 border-white/6 hover:text-slate-200"
+                ? "bg-amber-500 text-slate-950 border-amber-500 font-black shadow-lg shadow-amber-550/10 scale-98"
+                : "bg-slate-900/50 hover:bg-slate-900 border-white/6 text-slate-350 hover:text-white"
             }`}
           >
-            {f.label}
+            <span className="text-[10px] font-black tracking-wide block text-center mb-1">
+              {f.label}
+            </span>
+            <span className={`text-xs font-mono font-black border-t w-full text-center block pt-1 ${
+              activeFilter === f.key ? "border-slate-950/20 text-slate-950" : "border-white/5 text-amber-500"
+            }`}>
+              {statusCounts[f.key] || 0}
+            </span>
           </button>
         ))}
       </div>

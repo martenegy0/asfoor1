@@ -1114,6 +1114,10 @@ app.post("/api", async (req: Request, res: Response) => {
         }
       }
 
+      if (d.action === "updateOrder" && payloadToSheet.order && !payloadToSheet.order.tracking && d.tracking) {
+        payloadToSheet.order.tracking = d.tracking;
+      }
+
       if ((d.action === "addUser" || d.action === "registerUser") && !payloadToSheet.user) {
         const getPermissionsForRole = (r: string) => {
           const rTrim = (r || "").trim();
