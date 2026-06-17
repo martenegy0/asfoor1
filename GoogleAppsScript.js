@@ -1343,6 +1343,68 @@ function getSupplierLedger(sheets, d) {
   return { ok: true, ledger: filtered.reverse() };
 }
 
+function getOrderFinancials(o) {
+  if (!o) return { prodPrice: 0, shipPrice: 0, totalCOD: 0 };
+  
+  var shipPrice = 0;
+  var rawShip = o["سعر الشحن"] !== undefined ? o["سعر الشحن"] :
+                (o["الشحن"] !== undefined ? o["الشحن"] :
+                (o["تكلفة الشحن"] !== undefined ? o["تكلفة الشحن"] :
+                (o["مصاريف الشحن"] !== undefined ? o["مصاريف الشحن"] :
+                (o["shipping"] !== undefined ? o["shipping"] :
+                (o["shipPrice"] !== undefined ? o["shipPrice"] :
+                o["ship_price"])))));
+                
+  if (rawShip !== undefined && rawShip !== null && rawShip !== "") {
+    shipPrice = Number(rawShip);
+  }
+  if (isNaN(shipPrice)) shipPrice = 0;
+
+  var totalCOD = 0;
+  var rawTotal = o["المطلوب تحصيله"] !== undefined ? o["المطلوب تحصيله"] :
+                 (o["التحصيل"] !== undefined ? o["التحصيل"] :
+                 (o["المطلوب"] !== undefined ? o["المطلوب"] :
+                 (o["إجمالي الكود"] !== undefined ? o["إجمالي الكود"] :
+                 (o["الإجمالي"] !== undefined ? o["الإجمالي"] :
+                 (o["الاجمالي"] !== undefined ? o["الاجمالي"] :
+                 (o["إجمالي الأوردر"] !== undefined ? o["إجمالي الأوردر"] :
+                 (o["total"] !== undefined ? o["total"] :
+                 (o["totalCOD"] !== undefined ? o["totalCOD"] :
+                 (o["total_cod"] !== undefined ? o["total_cod"] :
+                 (o["cash_to_be_collected"] !== undefined ? o["cash_to_be_collected"] :
+                 o["cash"]))))))))));
+                 
+  if (rawTotal !== undefined && rawTotal !== null && rawTotal !== "") {
+    totalCOD = Number(rawTotal);
+  }
+  if (isNaN(totalCOD)) totalCOD = 0;
+
+  var prodPrice = 0;
+  var rawProd = o["سعر المنتج"] !== undefined ? o["سعر المنتج"] :
+                (o["المنتج"] !== undefined ? o["المنتج"] :
+                (o["سعر المادة"] !== undefined ? o["سعر المادة"] :
+                (o["price"] !== undefined ? o["price"] :
+                (o["prodPrice"] !== undefined ? o["prodPrice"] :
+                o["product_price"]))));
+                
+  if (rawProd !== undefined && rawProd !== null && rawProd !== "") {
+    prodPrice = Number(rawProd);
+  }
+  if (isNaN(prodPrice)) prodPrice = 0;
+
+  if (totalCOD > 0) {
+    prodPrice = totalCOD - shipPrice;
+  } else if (prodPrice > 0 && shipPrice > 0 && totalCOD === 0) {
+    totalCOD = prodPrice + shipPrice;
+  }
+
+  return {
+    prodPrice: isNaN(prodPrice) ? 0 : prodPrice,
+    shipPrice: isNaN(shipPrice) ? 0 : shipPrice,
+    totalCOD: isNaN(totalCOD) ? 0 : totalCOD
+  };
+}
+
 function getSupplierDashboard(sheets, d) {
   const { supplier } = d;
   const orders = getTableData(sheets.orders);
@@ -1368,7 +1430,7 @@ function getSupplierDashboard(sheets, d) {
   
   // 1. Total uploaded goods (value of products only without shipping)
   const totalGoodsUploaded = supOrders.reduce((sum, o) => {
-    return sum + (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
+    return sum + getOrderFinancials(o).prodPrice;
   }, 0);
 
   const returnedDGoods = supOrders.filter(o => isReturnedDeliveredToSupplier(o.status));
@@ -1376,7 +1438,7 @@ function getSupplierDashboard(sheets, d) {
   
   // 2. Returns delivered back to supplier ("تم تسليم المرتجع للمورد" or equivalent)
   const returnsDeliveredValue = returnedDGoods.reduce((sum, o) => {
-    return sum + (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
+    return sum + getOrderFinancials(o).prodPrice;
   }, 0);
 
   // 3. Cash payments paid to supplier (Strict signed human payout classification)
@@ -1440,14 +1502,14 @@ function getSupplierAccounts(sheets) {
 
     // 1. Total Goods Uploaded (without shipping)
     const totalGoodsUploaded = sOrders.reduce(function(sum, o) {
-      return sum + (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
+      return sum + getOrderFinancials(o).prodPrice;
     }, 0);
 
     // 2. Returns delivered back to supplier
     const returnedOrders = sOrders.filter(function(o) { return isReturnedDeliveredToSupplier(o.status); });
     const returnsCount = returnedOrders.length;
     const returnsDeliveredValue = returnedOrders.reduce(function(sum, o) {
-      return sum + (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
+      return sum + getOrderFinancials(o).prodPrice;
     }, 0);
 
     // 3. Cash payments paid to supplier

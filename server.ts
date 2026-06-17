@@ -471,6 +471,47 @@ const isSupplierRole = (r: string): boolean => {
   return t === "مورد" || t === "موردين" || t.includes("مورد") || t === "supplier" || t.includes("supplier");
 };
 
+function getOrderFinancials(o: any) {
+  if (!o) return { prodPrice: 0, shipPrice: 0, totalCOD: 0 };
+  
+  // 1. Resolve shipPrice
+  let shipPrice = 0;
+  const rawShip = o["سعر الشحن"] ?? o["الشحن"] ?? o["تكلفة الشحن"] ?? o["مصاريف الشحن"] ?? o["shipping"] ?? o["shipPrice"] ?? o["ship_price"];
+  if (rawShip !== undefined && rawShip !== null && rawShip !== "") {
+    shipPrice = Number(rawShip);
+  }
+  if (isNaN(shipPrice)) shipPrice = 0;
+
+  // 2. Resolve totalCOD
+  let totalCOD = 0;
+  const rawTotal = o["المطلوب تحصيله"] ?? o["التحصيل"] ?? o["المطلوب"] ?? o["إجمالي الكود"] ?? o["الإجمالي"] ?? o["الاجمالي"] ?? o["إجمالي الأوردر"] ?? o["total"] ?? o["totalCOD"] ?? o["total_cod"] ?? o["cash_to_be_collected"] ?? o["cash"];
+  if (rawTotal !== undefined && rawTotal !== null && rawTotal !== "") {
+    totalCOD = Number(rawTotal);
+  }
+  if (isNaN(totalCOD)) totalCOD = 0;
+
+  // 3. Resolve prodPrice
+  let prodPrice = 0;
+  const rawProd = o["سعر المنتج"] ?? o["المنتج"] ?? o["سعر المادة"] ?? o["price"] ?? o["prodPrice"] ?? o["product_price"];
+  if (rawProd !== undefined && rawProd !== null && rawProd !== "") {
+    prodPrice = Number(rawProd);
+  }
+  if (isNaN(prodPrice)) prodPrice = 0;
+
+  // If totalCOD is provided, enforce formula: prodPrice = totalCOD - shipPrice
+  if (totalCOD > 0) {
+    prodPrice = totalCOD - shipPrice;
+  } else if (prodPrice > 0 && shipPrice > 0 && totalCOD === 0) {
+    totalCOD = prodPrice + shipPrice;
+  }
+
+  return {
+    prodPrice: isNaN(prodPrice) ? 0 : prodPrice,
+    shipPrice: isNaN(shipPrice) ? 0 : shipPrice,
+    totalCOD: isNaN(totalCOD) ? 0 : totalCOD
+  };
+}
+
 function getSupplierUnifiedLedger(db: any, supplierName: string) {
   if (!db) {
     return {
@@ -543,18 +584,18 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
     return isPayOrAdj && !isAutoOrReturn;
   };
 
-  // 1. Total uploaded goods (value of products only without shipping)
+  // 1. Total uploaded goods (value of products only without shipping) using getOrderFinancials
   const totalGoodsUploaded = supplierOrders.reduce((sum: number, o: any) => {
-    const prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
-    return sum + prodPrice;
+    const financials = getOrderFinancials(o);
+    return sum + financials.prodPrice;
   }, 0);
 
   // 2. Successful deliveries
   const deliveredOrders = supplierOrders.filter((o: any) => o.status === "تم التسليم");
   const deliveredOrdersCount = deliveredOrders.length;
   const deliveredOrdersValue = deliveredOrders.reduce((sum: number, o: any) => {
-    const prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
-    return sum + prodPrice;
+    const financials = getOrderFinancials(o);
+    return sum + financials.prodPrice;
   }, 0);
 
   // 3. Returns delivered back to supplier (Dynamic Status Matching - only deduct financially when officially delivered to supplier)
@@ -563,8 +604,8 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
   });
   const returnsDeliveredCount = returnedOrders.length;
   const returnsDeliveredValue = returnedOrders.reduce((sum: number, o: any) => {
-    const prodPrice = o.prodPrice !== undefined && o.prodPrice !== "" ? Number(o.prodPrice) : (Number(o.totalCOD || 0) - Number(o.shipPrice || 0));
-    return sum + prodPrice;
+    const financials = getOrderFinancials(o);
+    return sum + financials.prodPrice;
   }, 0);
 
   // 4. Payments and Adjustments made to supplier from ledger (Strict human payout classification)
@@ -598,7 +639,8 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
 
   // A. All uploaded orders count as supplier credit
   for (const o of supplierOrders) {
-    const prodPriceNum = Number(o.totalCOD || 0) - Number(o.shipPrice || 0);
+    const financials = getOrderFinancials(o);
+    const prodPriceNum = financials.prodPrice;
     entries.push({
       date: o.orderDate || o.createdAt || "",
       type: "حقوق بضاعة أوردر",
@@ -610,7 +652,8 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
 
   // B. Returned orders as debit
   for (const o of returnedOrders) {
-    const prodPrice = Number(o.totalCOD || 0) - Number(o.shipPrice || 0);
+    const financials = getOrderFinancials(o);
+    const prodPrice = financials.prodPrice;
     entries.push({
       date: o.retDate || o.updatedAt || o.createdAt || "",
       type: "مرتجع مخصوم",
