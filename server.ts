@@ -465,6 +465,12 @@ const sameSup = (na: string, nb: string): boolean => {
   return normalizeArabic(na) === normalizeArabic(nb);
 };
 
+const isSupplierRole = (r: string): boolean => {
+  if (!r) return false;
+  const t = r.toString().trim();
+  return t === "مورد" || t === "موردين" || t.includes("مورد");
+};
+
 function getSupplierUnifiedLedger(db: any, supplierName: string) {
   if (!db) {
     return {
@@ -814,11 +820,20 @@ const SESSIONS: { [token: string]: { user: string; role: string; perms?: string 
 function getSession(token: string) {
   if (!token) return null;
   if (SESSIONS[token]) {
-    return SESSIONS[token];
+    const s = SESSIONS[token];
+    return {
+      user: (s.user || "").toString().trim(),
+      role: (s.role || "").toString().trim(),
+      perms: s.perms
+    };
   }
   const verified = verifyStatelessToken(token);
   if (verified) {
-    return { user: verified.user, role: verified.role, perms: verified.perms };
+    return {
+      user: (verified.user || "").toString().trim(),
+      role: (verified.role || "").toString().trim(),
+      perms: verified.perms
+    };
   }
   return null;
 }
@@ -1381,7 +1396,7 @@ app.post("/api", async (req: Request, res: Response) => {
           };
 
           if (d.action === "getSupplierLedger") {
-            const supplierName = currentRole === "مورد" ? currentUser : (d.supplier || "");
+            const supplierName = isSupplierRole(currentRole) ? currentUser : (d.supplier || "");
             const unified = getSupplierUnifiedLedger(mockDb, supplierName);
             // Return identical structure with local mode
             return ok(res, { 
@@ -1392,7 +1407,7 @@ app.post("/api", async (req: Request, res: Response) => {
           }
 
           if (d.action === "supplierDashboard") {
-            const isSupplier = currentRole === "مورد";
+            const isSupplier = isSupplierRole(currentRole);
             const targetSupplier = isSupplier ? currentUser : (d.supplier || "");
             if (!targetSupplier) return err(res, "المورد غير معروف");
 
@@ -1680,9 +1695,9 @@ app.post("/api", async (req: Request, res: Response) => {
       // GET ORDERS
       // ─────────────────────────────────────────────────────────────
       case "getOrders": {
-        const isAgent = currentRole === "مندوب";
-        const isSupplier = currentRole === "مورد";
-        const isReturnsOfficer = currentRole === "مسؤول مرتجعات";
+        const isAgent = (currentRole || "").toString().trim() === "مندوب" || (currentRole || "").toString().trim().includes("مندوب");
+        const isSupplier = isSupplierRole(currentRole);
+        const isReturnsOfficer = (currentRole || "").toString().trim() === "مسؤول مرتجعات" || (currentRole || "").toString().trim().includes("مرتجع");
         const isOps = currentRole === "موظف عمليات" || (currentRole || "").toString().includes("عمليات");
         let ordersList = [...db.orders];
 
@@ -1786,7 +1801,7 @@ app.post("/api", async (req: Request, res: Response) => {
            createdAt: tNow,
            updatedAt: tNow,
            orderDate: tod(),
-           supplier: currentRole === "مورد" ? currentUser : (o.supplier || ""),
+           supplier: isSupplierRole(currentRole) ? currentUser : (o.supplier || ""),
            prodType: o.prodType || "",
            customer: o.customer || "",
            phone: phoneClean,
@@ -1857,12 +1872,12 @@ app.post("/api", async (req: Request, res: Response) => {
       // BULK UPLOAD EXCEL / CSV
       // ─────────────────────────────────────────────────────────────
       case "addBulk": {
-        if (!["مدير", "مشرف", "مورد"].includes(currentRole)) {
+        if (!["مدير", "مشرف"].includes(currentRole) && !isSupplierRole(currentRole)) {
           return err(res, "ليس لديك صلاحية رفع طلبات جماعية");
         }
 
         const ordersArr = d.orders || [];
-        const fallbackSupplier = currentRole === "مورد" ? currentUser : (d.supplier || "مورد عام");
+        const fallbackSupplier = isSupplierRole(currentRole) ? currentUser : (d.supplier || "مورد عام");
         const tNow = now();
         let addedCount = 0;
 
@@ -1872,7 +1887,7 @@ app.post("/api", async (req: Request, res: Response) => {
 
           // Resolve supplier row-by-row
           let orderSupplier = fallbackSupplier;
-          if (currentRole === "مورد") {
+          if (isSupplierRole(currentRole)) {
             orderSupplier = currentUser;
           } else {
             const itemRowSupplier = (item.supplier || "").toString().trim();
@@ -2017,7 +2032,7 @@ app.post("/api", async (req: Request, res: Response) => {
         const isSuper = currentRole === "مشرف";
         const isOps = currentRole === "موظف عمليات";
         const isAgent = currentRole === "مندوب";
-        const isSupplier = currentRole === "مورد";
+        const isSupplier = isSupplierRole(currentRole);
         const isReturnsOfficer = currentRole === "مسؤول مرتجعات";
 
         // Assignment restrictions:
@@ -2874,7 +2889,7 @@ app.post("/api", async (req: Request, res: Response) => {
       // SUPPLIER LEDGER SYSTEM (COD calculations)
       // ─────────────────────────────────────────────────────────────
       case "getSupplierLedger": {
-        const supplierName = currentRole === "مورد" ? currentUser : (d.supplier || "");
+        const supplierName = isSupplierRole(currentRole) ? currentUser : (d.supplier || "");
         const unified = getSupplierUnifiedLedger(db, supplierName);
         return ok(res, { 
           entries: unified.entries, 
@@ -2884,7 +2899,7 @@ app.post("/api", async (req: Request, res: Response) => {
       }
 
       case "supplierDashboard": {
-        const isSupplier = currentRole === "مورد";
+        const isSupplier = isSupplierRole(currentRole);
         const targetSupplier = isSupplier ? currentUser : (d.supplier || "");
 
         if (!targetSupplier) return err(res, "المورد غير معروف");

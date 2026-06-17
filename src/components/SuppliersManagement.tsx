@@ -257,7 +257,17 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
       if (!dateStr) return "";
       try {
         const clean = dateStr.toString().trim();
-        // 1. If it's already YYYY-MM-DD or YYYY/MM/DD
+        
+        // 1. Try standard Date first! If it's valid, use it
+        const parsed = new Date(clean);
+        if (!isNaN(parsed.getTime())) {
+          const y = parsed.getFullYear();
+          const m = String(parsed.getMonth() + 1).padStart(2, '0');
+          const d = String(parsed.getDate()).padStart(2, '0');
+          return `${y}-${m}-${d}`;
+        }
+
+        // 2. If it's already YYYY-MM-DD or YYYY/MM/DD
         if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(clean)) {
           const parts = clean.substring(0, 10).split(/[-/]/);
           const y = parts[0];
@@ -266,22 +276,21 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
           return `${y}-${m}-${d}`;
         }
         
-        // 2. If it's DD/MM/YYYY or DD-MM-YYYY or D/M/YYYY
+        // 3. If it's DD/MM/YYYY or DD-MM-YYYY or D/M/YYYY
         if (/^\d{1,2}[-/]\d{1,2}[-/]\d{4}/.test(clean)) {
           const parts = clean.substring(0, 10).split(/[-/]/);
-          const d = parts[0].padStart(2, '0');
-          const m = parts[1].padStart(2, '0');
-          const y = parts[2];
-          return `${y}-${m}-${d}`;
-        }
-
-        // 3. Fallback to standard javascript date parsing
-        const parsed = new Date(clean);
-        if (!isNaN(parsed.getTime())) {
-          const y = parsed.getFullYear();
-          const m = String(parsed.getMonth() + 1).padStart(2, '0');
-          const d = String(parsed.getDate()).padStart(2, '0');
-          return `${y}-${m}-${d}`;
+          const p0Check = Number(parts[0]);
+          if (p0Check > 12) {
+            const d = parts[0].padStart(2, '0');
+            const m = parts[1].padStart(2, '0');
+            const y = parts[2];
+            return `${y}-${m}-${d}`;
+          } else {
+            const m = parts[0].padStart(2, '0');
+            const d = parts[1].padStart(2, '0');
+            const y = parts[2];
+            return `${y}-${m}-${d}`;
+          }
         }
       } catch (err) {
         // Quiet fallthrough
