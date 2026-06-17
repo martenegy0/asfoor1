@@ -159,13 +159,20 @@ export default function Ledger({ token, role, user }: LedgerProps) {
     fetchResourceLists();
   }, [token]);
 
+  // Sync selectedSupplier with the user prop when it updates (especially on slow async logins)
+  useEffect(() => {
+    if (isSupplier && user) {
+      setSelectedSupplier(user);
+    }
+  }, [isSupplier, user]);
+
   useEffect(() => {
     if (activeLedger === "supplier") {
       loadSupplierLedger();
     } else {
       loadCourierLedger();
     }
-  }, [activeLedger, selectedSupplier, selectedCourier, periodFilter]);
+  }, [activeLedger, selectedSupplier, selectedCourier, periodFilter, user]);
 
   // Submit payment to supplier (Deducted from Ledger & Cashbox)
   async function handleSupplierPayout(e: React.FormEvent) {

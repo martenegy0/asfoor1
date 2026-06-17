@@ -280,39 +280,31 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
       try {
         const clean = dateStr.toString().trim();
         
-        // 1. Try standard Date first! If it's valid, use it
+        // 1. Strict DD/MM/YYYY pattern match (e.g. 10/06/2026 or 10-06-2026 with possible trailing time)
+        const dmyMatch = clean.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+        if (dmyMatch) {
+          const d = dmyMatch[1].padStart(2, '0');
+          const m = dmyMatch[2].padStart(2, '0');
+          const y = dmyMatch[3];
+          return `${y}-${m}-${d}`;
+        }
+
+        // 2. Strict YYYY-MM-DD pattern match (e.g. 2026-06-10 or 2026/06/10)
+        const ymdMatch = clean.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+        if (ymdMatch) {
+          const y = ymdMatch[1];
+          const m = ymdMatch[2].padStart(2, '0');
+          const d = ymdMatch[3].padStart(2, '0');
+          return `${y}-${m}-${d}`;
+        }
+
+        // 3. Try standard Date first! If it's valid, use it
         const parsed = new Date(clean);
         if (!isNaN(parsed.getTime())) {
           const y = parsed.getFullYear();
           const m = String(parsed.getMonth() + 1).padStart(2, '0');
           const d = String(parsed.getDate()).padStart(2, '0');
           return `${y}-${m}-${d}`;
-        }
-
-        // 2. If it's already YYYY-MM-DD or YYYY/MM/DD
-        if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(clean)) {
-          const parts = clean.substring(0, 10).split(/[-/]/);
-          const y = parts[0];
-          const m = parts[1].padStart(2, '0');
-          const d = parts[2].padStart(2, '0');
-          return `${y}-${m}-${d}`;
-        }
-        
-        // 3. If it's DD/MM/YYYY or DD-MM-YYYY or D/M/YYYY
-        if (/^\d{1,2}[-/]\d{1,2}[-/]\d{4}/.test(clean)) {
-          const parts = clean.substring(0, 10).split(/[-/]/);
-          const p0Check = Number(parts[0]);
-          if (p0Check > 12) {
-            const d = parts[0].padStart(2, '0');
-            const m = parts[1].padStart(2, '0');
-            const y = parts[2];
-            return `${y}-${m}-${d}`;
-          } else {
-            const m = parts[0].padStart(2, '0');
-            const d = parts[1].padStart(2, '0');
-            const y = parts[2];
-            return `${y}-${m}-${d}`;
-          }
         }
       } catch (err) {
         // Quiet fallthrough

@@ -467,8 +467,8 @@ const sameSup = (na: string, nb: string): boolean => {
 
 const isSupplierRole = (r: string): boolean => {
   if (!r) return false;
-  const t = r.toString().trim();
-  return t === "مورد" || t === "موردين" || t.includes("مورد");
+  const t = r.toString().trim().toLowerCase();
+  return t === "مورد" || t === "موردين" || t.includes("مورد") || t === "supplier" || t.includes("supplier");
 };
 
 function getSupplierUnifiedLedger(db: any, supplierName: string) {
@@ -1376,18 +1376,23 @@ app.post("/api", async (req: Request, res: Response) => {
 
       if (["getSupplierLedger", "supplierAccounts", "supplierDashboard"].includes(d.action)) {
         try {
+          const isSup = isSupplierRole(currentRole);
+          const targetSupplier = isSup ? currentUser : (d.supplier || "");
+
           // Fetch raw orders and ledger from Google Sheets proxy using cached helpers
           const resOrders = await executeProxyRequest(gscriptUrl, {
             action: "getOrders",
             token: "14014",
             currentUser,
-            currentRole
+            currentRole,
+            supplier: targetSupplier
           });
           const resLedger = await executeProxyRequest(gscriptUrl, {
             action: "getSupplierLedger",
             token: "14014",
             currentUser,
-            currentRole
+            currentRole,
+            supplier: targetSupplier
           });
 
           const mockDb = {
