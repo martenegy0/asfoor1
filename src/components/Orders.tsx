@@ -599,7 +599,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       else if (["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي"].includes(status)) counts["تم التسليم"]++;
       else if (["تم رد العميل وجاري التنسيق", "العميل رد وجاري التسليم"].includes(status) || status.includes("رد وجاري")) counts["العميل رد وجاري التسليم"]++;
       else if (["مرتجع بالمستودع", "مرتجع", "مرتجع جديد", "مرتجع جاري تسليمه للمكتب"].includes(status)) counts["مرتجع بالمستودع"]++;
-      else if (["تم تسليم المرتجع للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "جاري الرجوع للمورد"].includes(status)) counts["تم تسليم المرتجع للمورد"]++;
+      else if (["تم تسليم المرتجع للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "جاري الرجوع للمورد", "التسليم للمورد"].includes(status)) counts["تم تسليم المرتجع للمورد"]++;
       else if (status === "مؤجل") counts["مؤجل"]++;
       else if (["لا يوجد رد", "العميل لم يقم بالرد"].includes(status)) counts["لا يوجد رد"]++;
     });
@@ -644,7 +644,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
     
     const returnedDelivered = supplierDayOrders.filter(o => {
       const status = (o.status || "").toString().trim();
-      return ["تم تسليم المرتجع للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "جاري الرجوع للمورد"].includes(status);
+      return ["تم تسليم المرتجع للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "جاري الرجوع للمورد", "التسليم للمورد"].includes(status);
     }).length;
     
     const pendingUnaddressed = total - (newCount + outForDelivery + delivered + returnedInWarehouse + returnedDelivered);
@@ -795,6 +795,11 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       updatedFields.delivDate = delivDate || nowEgyptStr;
     } else if (["مرتجع", "التسليم للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد"].includes(status)) {
       updatedFields.retDate = nowEgyptStr;
+    } else if (status === "جديد") {
+      updatedFields.returnQueueStatus = undefined;
+      updatedFields.returnQueueAgent = undefined;
+      updatedFields.courier = "";
+      updatedFields.commission = 0;
     }
     if (returnShippingType) {
       updatedFields.returnShippingType = returnShippingType;
@@ -970,6 +975,8 @@ export default function Orders({ token, role, username, orders, setOrders, couri
     if (bulkCourier) {
       if (bulkCourier === "reset_warehouse") {
         updatedFields.status = "جديد";
+        updatedFields.courier = "";
+        updatedFields.commission = 0;
       } else {
         updatedFields.courier = bulkCourier;
       }
@@ -1057,6 +1064,8 @@ export default function Orders({ token, role, username, orders, setOrders, couri
     if (floatingCourier) {
       if (floatingCourier === "reset_warehouse") {
         updatedFields.status = "جديد";
+        updatedFields.courier = "";
+        updatedFields.commission = 0;
       } else {
         updatedFields.courier = floatingCourier;
       }
@@ -1924,7 +1933,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                 >
                   <option value="تم التسليم">✅ تم التسليم</option>
                   <option value="مرتجع">↩️ مرتجع (تجهيز تصفية)</option>
-                  <option value="التسليم للمورد">📦 التسليم للمورد (استرداد المرتجعات)</option>
+                  <option value="تم تسليم المرتجع للمورد">📦 تم تسليم المرتجع للمورد (استرداد المرتجعات)</option>
                   <option value="خارج مع المندوب">🚚 خارج للتوصيل مع المندوب</option>
                 </select>
               </div>
@@ -2167,7 +2176,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                     <option value="مرتجع جديد">مرتجع جديد (مسار الاسترجاع)</option>
                     <option value="مرتجع جاري تسليمه للمكتب">مرتجع جاري تسليمه للمكتب</option>
                     <option value="جاري الرجوع للمورد">جاري الرجوع للمورد</option>
-                    <option value="تم تسليم المرتجع للمورد وتصفية حسابه">تم تسليم المرتجع للمورد وتصفية حسابه</option>
+                    <option value="تم تسليم المرتجع للمورد">تم تسليم المرتجع للمورد وتصفية حسابه</option>
                   </>
                 )}
 
@@ -2202,7 +2211,6 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                     <option value="مرتجع">مرتجع (من طرف العميل)</option>
                     <option value="مؤجل">مؤجل (متابعة لاحقة)</option>
                     <option value="لا يوجد رد">لا يوجد رد</option>
-                    <option value="التسليم للمورد">التسليم للمورد</option>
                   </>
                 )}
               </select>

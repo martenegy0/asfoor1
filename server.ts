@@ -630,36 +630,45 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
     return sum - Number(l.amount || 0);
   }, 0);
 
-  // 5. Calculate outstanding balance: Outstanding = TotalGoodsUploaded - Returned - Paid
-  const rawOutstanding = totalGoodsUploaded - returnsDeliveredValue - paymentsValue - reverseAdjustmentsValue;
+  // 5. Calculate outstanding balance: Outstanding = DeliveredOrdersValue - Paid (Returned goods are not credited so they aren't deducted)
+  const rawOutstanding = deliveredOrdersValue - paymentsValue - reverseAdjustmentsValue;
   const outstanding = rawOutstanding;
 
   // Build the ledger entries list
   const entries: any[] = [];
 
-  // A. All uploaded orders count as supplier credit
+  // A. All uploaded orders count as supplier credit (Only delivered orders have positive value, others keep trace with 0 value)
   for (const o of supplierOrders) {
     const financials = getOrderFinancials(o);
-    const prodPriceNum = financials.prodPrice;
+    const isDelivered = o.status === "تم التسليم";
+    const prodPriceNum = isDelivered ? financials.prodPrice : 0;
+    
+    let orderDesc = "";
+    if (isDelivered) {
+      orderDesc = `حقوق توريد أوردر رقم #${o.tracking} (صافي بضاعة مستحقة: ${prodPriceNum} ج.م - حالة الأوردر: ${o.status})`;
+    } else if (isReturnedDeliveredToSupplier(o.status) || ["مرتجع", "تم تسليم المرتجع للمورد", "التسليم للمورد"].includes(o.status)) {
+      orderDesc = `أوردر مرتجع رقم #${o.tracking} (صافي بضاعة: 0 ج.م - حالة الأوردر: ${o.status})`;
+    } else {
+      orderDesc = `أوردر تحت التسليم رقم #${o.tracking} (صافي بضاعة غير مستحقة: 0 ج.م - حالة الأوردر: ${o.status})`;
+    }
+
     entries.push({
       date: o.orderDate || o.createdAt || "",
       type: "حقوق بضاعة أوردر",
       tracking: o.tracking,
       amount: prodPriceNum,
-      desc: `حقوق توريد أوردر رقم #${o.tracking} (صافي بضاعة: ${prodPriceNum} ج.م - حالة الأوردر: ${o.status})`
+      desc: orderDesc
     });
   }
 
-  // B. Returned orders as debit
+  // B. Returned orders as debit trace (since returned goods aren't credited, there is no financial deduction needed)
   for (const o of returnedOrders) {
-    const financials = getOrderFinancials(o);
-    const prodPrice = financials.prodPrice;
     entries.push({
       date: o.retDate || o.updatedAt || o.createdAt || "",
       type: "مرتجع مخصوم",
       tracking: o.tracking,
-      amount: -prodPrice,
-      desc: `خصم مرتجع مستلم للمورد أوردر رقم #${o.tracking} (بضاعة: -${prodPrice} ج.م)`
+      amount: 0,
+      desc: `مرتجع مستلم للمورد أوردر رقم #${o.tracking} (حالة الأوردر: ${o.status} - لا توجد مستحقات للتوريد للخصم)`
     });
   }
 
@@ -2192,6 +2201,10 @@ app.post("/api", async (req: Request, res: Response) => {
           if (status === "جديد") {
             order.returnQueueStatus = undefined;
             order.returnQueueAgent = undefined;
+            order.lastCourier = order.courier;
+            order.lastCommission = order.commission;
+            order.courier = "";
+            order.commission = 0;
           }
 
           if (status === "تم التسليم") {
@@ -2552,7 +2565,8 @@ app.post("/api", async (req: Request, res: Response) => {
             if (courier === "reset_warehouse" || courier === "") {
               order.lastCourier = order.courier;
               order.lastCommission = order.commission;
-              // Don't zero out courier or commission to maintain historical logs and commissions
+              order.courier = "";
+              order.commission = 0;
               if (order.status !== "جديد") {
                 const prevStatus = order.status;
                 order.status = "جديد";
@@ -2702,7 +2716,8 @@ app.post("/api", async (req: Request, res: Response) => {
             if (courier === "reset_warehouse" || courier === "") {
               order.lastCourier = order.courier;
               order.lastCommission = order.commission;
-              // Don't zero out courier or commission to maintain historical logs and commissions
+              order.courier = "";
+              order.commission = 0;
               if (order.status !== "جديد") {
                 const prevStatus = order.status;
                 order.status = "جديد";
