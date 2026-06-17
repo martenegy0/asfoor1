@@ -2281,6 +2281,15 @@ app.post("/api", async (req: Request, res: Response) => {
           order.delivDate = delivDate;
         }
 
+        const clearCourierWithSignature = d.clearCourierWithSignature === true || d.clearCourierWithSignature === "true";
+        if (clearCourierWithSignature) {
+          if (order.courier) {
+            order.courierSignature = `${order.courier} (توقيع تصفية المرتجع ✍️)`;
+            order.lastCourier = order.courier;
+            order.courier = ""; // Clear from representative's active lists
+          }
+        }
+
         order.updatedAt = now();
 
         // Save Status History log (which act as audit trail)

@@ -227,6 +227,8 @@ export default function Orders({ token, role, username, orders, setOrders, couri
   const [activeFilter, setActiveFilter] = useState("all");
   const [selectedDate, setSelectedDate] = useState<string>(getTodayDateStr());
   const [selectedSupplierFilter, setSelectedSupplierFilter] = useState<string>("");
+  const [selectedCourierFilter, setSelectedCourierFilter] = useState<string>("");
+  const [showOperationalReport, setShowOperationalReport] = useState<boolean>(false);
   const [displayLimit, setDisplayLimit] = useState<number>(25);
   const [courierConfirmModal, setCourierConfirmModal] = useState<{
     tracking: string;
@@ -236,7 +238,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
 
   React.useEffect(() => {
     setDisplayLimit(25);
-  }, [search, activeFilter, selectedDate, selectedSupplierFilter]);
+  }, [search, activeFilter, selectedDate, selectedSupplierFilter, selectedCourierFilter, showOperationalReport]);
 
   const lastDays = React.useMemo(() => {
     const days = [];
@@ -466,8 +468,20 @@ export default function Orders({ token, role, username, orders, setOrders, couri
           }
         }
 
-        // Logistic Status Categorization & Fallback mapping
-        if (activeFilter !== "all") {
+        // Filter by selected courier
+        if (selectedCourierFilter) {
+          if (!o.courier || o.courier.toString().trim().toLowerCase() !== selectedCourierFilter.toLowerCase()) {
+            return false;
+          }
+        }
+
+        // Operational Daily Report Mode (groups New, Assigned, Pending, Coordinating statuses)
+        if (showOperationalReport) {
+          const status = (o.status || "").toString().trim();
+          const isOperational = ["جديد", "تم الإسناد", "مسند", "تم الاسناد", "مؤجل", "لا يوجد رد", "العميل لم يقم بالرد", "تم رد العميل وجاري التنسيق", "العميل رد وجاري التسليم"].includes(status) || status.includes("رد وجاري");
+          if (!isOperational) return false;
+        } else if (activeFilter !== "all") {
+          // Logistic Status Categorization & Fallback mapping
           const status = (o.status || "").toString().trim();
           if (activeFilter === "جديد" && status !== "جديد") return false;
           if (activeFilter === "مسند" && !["تم الإسناد", "مسند", "تم الاسناد"].includes(status)) return false;
@@ -525,7 +539,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
         const timeB = valB ? new Date(valB.replace(" ", "T")).getTime() : 0;
         return timeB - timeA;
       });
-  }, [roleFilteredOrders, isAgent, username, activeFilter, isSupplier, isReturnsOfficer, selectedDate, search, selectedSupplierFilter]);
+  }, [roleFilteredOrders, isAgent, username, activeFilter, isSupplier, isReturnsOfficer, selectedDate, search, selectedSupplierFilter, selectedCourierFilter, showOperationalReport]);
 
   // Today's hold-ups / suspended orders ("معلقات اليوم") for agent/courier view
   const suspendedOrders = React.useMemo(() => {
@@ -728,7 +742,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
   };
 
   // --- Actions ---
-  async function triggerStatusUpdate(tracking: string, status: string, returnShippingType = "", notes = "", delivDate = "") {
+  async function triggerStatusUpdate(tracking: string, status: string, returnShippingType = "", notes = "", delivDate = "", clearCourierWithSignature = false) {
     // If order was marked as 'مرتجع' and no shipping type chosen, open dialog (Third Point Fix!)
     if (status === "مرتجع" && !returnShippingType) {
       const ordObj = orders.find((o) => o.tracking === tracking);
@@ -766,6 +780,14 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       status,
       updatedAt: nowEgyptStr,
     };
+    if (clearCourierWithSignature) {
+      const ordObj = orders.find((o) => o.tracking === tracking);
+      if (ordObj && ordObj.courier) {
+        updatedFields.courierSignature = `${ordObj.courier} (توقيع تصفية المرتجع ✍️)`;
+        updatedFields.lastCourier = ordObj.courier;
+        updatedFields.courier = "";
+      }
+    }
     if (notes) updatedFields.notes = notes;
     if (delivDate) updatedFields.delivDate = delivDate;
 
@@ -802,6 +824,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       returnShippingType,
       notes,
       delivDate,
+      clearCourierWithSignature,
     })
       .then((res) => {
         if (res && res.ok) {
@@ -1233,11 +1256,20 @@ export default function Orders({ token, role, username, orders, setOrders, couri
           </span>
         </div>
 
-        {/* Hide or show sensitive courier assignments */}
+        {/* Hide or show sensitive courier assignments & display handover signature */}
         {!isSupplier && o.courier && (
           <div className="flex items-center gap-2 text-slate-300 border-t border-white/4 pt-2 mt-2">
             <Truck size={14} className="text-slate-500 shrink-0" />
-            <span>المندوب: <span className="font-bold text-indigo-400">{o.courier}</span></span>
+            <span>المندوب الحالي: <span className="font-bold text-indigo-400">{o.courier}</span></span>
+          </div>
+        )}
+
+        {!isSupplier && (o.courierSignature || o.lastCourier) && (
+          <div className="flex items-center gap-2 text-purple-300 border-t border-purple-500/20 bg-purple-950/20 px-3 py-2.5 rounded-xl mt-2 select-text text-right" dir="rtl">
+            <span className="text-sm shrink-0">✍️</span>
+            <span className="text-[11px] font-bold">
+              توقيع ذمة المندوب السابق: <span className="font-sans underline decoration-dotted font-black text-slate-100">{o.courierSignature || `${o.lastCourier} (توقيع تصفية المرتجع)`}</span>
+            </span>
           </div>
         )}
 
@@ -1476,6 +1508,21 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                   {pendingTrackings.has(o.tracking) && <Loader2 size={10} className="animate-spin text-red-500" />}
                   <span>مرتجع سريع</span>
                 </button>
+                {o.courier && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (confirm(`هل أنت متأكد من سحب هذا الأوردر وتبرئة المندوب (${o.courier}) بالتوقيع الإلكتروني للمرتجع؟`)) {
+                        triggerStatusUpdate(o.tracking, "مرتجع بالمستودع", "", "", "", true);
+                      }
+                    }}
+                    disabled={pendingTrackings.has(o.tracking)}
+                    className="px-2.5 py-1 bg-purple-950 text-purple-300 border border-purple-500/30 text-[9px] font-black rounded hover:bg-purple-900 cursor-pointer flex items-center gap-1 shrink-0"
+                    title="سحب وتصفية عهدة المندوب بالتوقيع"
+                  >
+                    <span>✍️ سحب وتوقيع المصفى</span>
+                  </button>
+                )}
               </>
             )}
           </div>
@@ -1607,6 +1654,24 @@ export default function Orders({ token, role, username, orders, setOrders, couri
         </div>
 
         <div className="flex items-center gap-2">
+          {(isAdmin || isSuper || isOps) && (
+            <button
+              onClick={() => setShowOperationalReport(!showOperationalReport)}
+              className={`px-4 py-2 text-[10px] rounded-xl font-black flex items-center gap-1.5 cursor-pointer transition-all whitespace-nowrap ${
+                showOperationalReport
+                  ? "bg-amber-500 text-slate-950 font-black shadow-lg shadow-amber-500/10"
+                  : "bg-slate-900 border border-white/8 text-amber-500 font-extrabold hover:text-amber-400"
+              }`}
+              title="عرض الطلبات العملياتية المتبقية والنشطة لليوم مجمعة"
+            >
+              <span>📋 التقرير العملياتي اليومي</span>
+              <span className={`text-[9.5px] px-1.5 py-0.5 rounded font-bold ${
+                showOperationalReport ? "bg-amber-950/30 text-amber-950" : "bg-slate-950 text-amber-500"
+              }`}>
+                {showOperationalReport ? "نشط" : "مغلق"}
+              </span>
+            </button>
+          )}
           {canReconcile && (
             <button
               onClick={() => setShowReconPortal(!showReconPortal)}
@@ -2192,29 +2257,126 @@ export default function Orders({ token, role, username, orders, setOrders, couri
         </div>
       )}
 
-      {/* Orders List Workspace */}
-      <div className="px-4 space-y-4">
-        {visibleOrders.length === 0 ? (
-          <div className="text-center py-12 text-xs text-slate-500 space-y-2">
-            <div>📭</div>
-            <p>لا توجد شحنات مطابقة لخيارات التصفية الحالية</p>
-          </div>
-        ) : (
-          <>
-            {visibleOrders.slice(0, displayLimit).map((o) => renderOrderCard(o))}
-            {visibleOrders.length > displayLimit && (
-              <div className="flex justify-center pt-4 pb-2">
-                <button
-                  type="button"
-                  onClick={() => setDisplayLimit((prev) => prev + 25)}
-                  className="px-6 py-2.5 bg-slate-900 border border-white/10 hover:border-amber-500 text-slate-300 hover:text-amber-500 font-bold text-xs rounded-xl transition-all cursor-pointer shadow-md flex items-center gap-2"
-                >
-                  🚀 عرض المزيد من الشحنات ({visibleOrders.length - displayLimit} متبقية)
-                </button>
+      {/* Orders List Workspace with Quick Representative Selection Sidebar */}
+      <div className="px-4">
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 items-start">
+          
+          {/* Active Representatives Sidebar Selector (Show for Admins, Supervisors and Operations) */}
+          {(isAdmin || isSuper || isOps) && (
+            <div className="lg:col-span-1 bg-slate-900/80 p-4 rounded-2xl border border-white/6 h-fit space-y-4 text-right" dir="rtl">
+              <div className="flex items-center justify-between border-b border-white/5 pb-2.5">
+                <span className="text-xs font-black text-amber-400 flex items-center gap-1.5 select-none">
+                  <span>👤</span> مندوبو التوصيل النشطون ({Array.from(new Set(roleFilteredOrders.map(o => o.courier).filter(Boolean))).length})
+                </span>
+                {selectedCourierFilter && (
+                  <button
+                    onClick={() => setSelectedCourierFilter("")}
+                    className="text-[10px] text-red-400 hover:text-red-300 transition-colors font-extrabold cursor-pointer border border-red-900/30 bg-red-950/20 px-2 py-0.5 rounded"
+                  >
+                    إلغاء ×
+                  </button>
+                )}
               </div>
+              
+              <div className="flex flex-row lg:flex-col gap-2 overflow-x-auto lg:overflow-x-visible lg:max-h-[500px] overflow-y-auto scrollbar-thin pb-2 lg:pb-0">
+                {/* Select All Couriers */}
+                <button
+                  onClick={() => setSelectedCourierFilter("")}
+                  className={`w-full text-right p-3 rounded-xl text-xs font-bold transition-all border flex items-center justify-between cursor-pointer shrink-0 min-w-[200px] lg:min-w-0 ${
+                    !selectedCourierFilter
+                      ? "bg-amber-500 text-slate-950 border-amber-500 font-black shadow-lg shadow-amber-500/10"
+                      : "bg-slate-950 text-slate-300 border-white/4 hover:text-white hover:border-white/10"
+                  }`}
+                >
+                  <span className="font-black">كل مناديب التوصيل (عرض الكل)</span>
+                  <span className={`text-[9.5px] px-1.5 py-0.5 rounded font-mono font-bold ${
+                    !selectedCourierFilter ? "bg-amber-600/30 text-amber-950" : "bg-slate-900 text-slate-400"
+                  }`}>
+                    {roleFilteredOrders.filter(o => o.courier).length} طرد
+                  </span>
+                </button>
+
+                {/* Individual Couriers with count of active orders */}
+                {Array.from(new Set(
+                  (roleFilteredOrders || [])
+                    .map((o: any) => o.courier)
+                    .filter(Boolean)
+                    .map((c: any) => c.toString().trim())
+                ))
+                .sort()
+                .map((courierNameRaw) => {
+                  const courierName = String(courierNameRaw);
+                  const activeCountForCourier = roleFilteredOrders.filter(
+                    (o: any) => o.courier && o.courier.toString().trim().toLowerCase() === courierName.toLowerCase()
+                  ).length;
+                  
+                  const isSelected = selectedCourierFilter.toLowerCase() === courierName.toLowerCase();
+
+                  return (
+                    <button
+                      key={courierName}
+                      onClick={() => setSelectedCourierFilter(isSelected ? "" : courierName)}
+                      className={`w-full text-right p-3 rounded-xl text-xs font-bold transition-all border flex items-center justify-between cursor-pointer shrink-0 min-w-[170px] lg:min-w-0 ${
+                        isSelected
+                          ? "bg-purple-600 text-white border-purple-500 font-black shadow-md shadow-purple-500/15"
+                          : "bg-slate-950 text-slate-350 border-white/4 hover:text-white"
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 truncate">
+                        <span className="opacity-75">👤</span>
+                        <span className="truncate">{courierName}</span>
+                      </div>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-bold shrink-0 ${
+                        isSelected ? "bg-purple-950 text-purple-300" : "bg-slate-900 text-slate-400"
+                      }`}>
+                        {activeCountForCourier} طرد
+                      </span>
+                    </button>
+                  );
+                })}
+
+                {/* If no couriers have orders */}
+                {roleFilteredOrders.filter(o => o.courier).length === 0 && (
+                  <p className="text-[10px] text-slate-500 text-center py-4 w-full select-none font-sans font-bold">لا يوجد مناديب نشطين اليوم</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Orders list workspace itself (takes 3 grid cols on desktop, full-width on mobile or if sidebar hidden) */}
+          <div className={`${(isAdmin || isSuper || isOps) ? "lg:col-span-3 space-y-4 pb-4" : "col-span-1 lg:col-span-4 space-y-4 pb-4"} w-full`}>
+            {visibleOrders.length === 0 ? (
+              <div className="text-center py-12 text-xs text-slate-500 space-y-2 bg-slate-900/20 rounded-2xl border border-white/4 p-8">
+                <div>📭</div>
+                <p>لا توجد شحنات مطابقة لخيارات التصفية الحالية</p>
+                {selectedCourierFilter && (
+                  <button 
+                    onClick={() => setSelectedCourierFilter("")}
+                    className="text-[10px] text-amber-500 underline font-black cursor-pointer bg-amber-950/10 px-2 py-1 rounded border border-amber-900/30"
+                  >
+                    رؤية شحنات بقية المناديب
+                  </button>
+                )}
+              </div>
+            ) : (
+              <>
+                {visibleOrders.slice(0, displayLimit).map((o) => renderOrderCard(o))}
+                {visibleOrders.length > displayLimit && (
+                  <div className="flex justify-center pt-4 pb-2">
+                    <button
+                      type="button"
+                      onClick={() => setDisplayLimit((prev) => prev + 25)}
+                      className="px-6 py-2.5 bg-slate-900 border border-white/10 hover:border-amber-500 text-slate-300 hover:text-amber-500 font-bold text-xs rounded-xl transition-all cursor-pointer shadow-md flex items-center gap-2"
+                    >
+                      🚀 عرض المزيد من الشحنات ({visibleOrders.length - displayLimit} متبقية)
+                    </button>
+                  </div>
+                )}
+              </>
             )}
-          </>
-        )}
+          </div>
+
+        </div>
       </div>
 
       {/* Today's hold-ups ("معلقات اليوم") at the bottom of the courier screen */}
