@@ -1325,7 +1325,7 @@ function isSameSupplier(nameA, nameB) {
       .toLowerCase()
       .replace(/[أإآإأ]/g, "ا")
       .replace(/[يى]/g, "ي")
-      .replace(/ة\b/g, "ه")
+      .replace(/[ة]/g, "ه")
       .replace(/\s+/g, " ")
       .trim();
   }

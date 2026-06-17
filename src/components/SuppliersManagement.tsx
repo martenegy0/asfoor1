@@ -38,7 +38,9 @@ interface LedgerEntry {
 
 export default function SuppliersManagement({ token, role, orders = [], user = "" }: SuppliersManagementProps) {
   // Navigation tabs (page internal)
-  const isSupplierRole = role === "مورد" || role === "موردين";
+  const isSupplierRole = (role || "").toString().trim() === "مورد" || 
+                         (role || "").toString().trim() === "موردين" || 
+                         (role || "").toString().trim().includes("مورد");
   const [activeSubTab, setActiveSubTab] = useState<"directory" | "statement" | "query">(
     isSupplierRole ? "statement" : "directory"
   );
@@ -84,6 +86,23 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
     }
   });
 
+  const normalizeArabicText = (str: string): string => {
+    if (!str) return "";
+    return str
+      .toString()
+      .trim()
+      .toLowerCase()
+      .replace(/[أإآإأ]/g, "ا")
+      .replace(/[يى]/g, "ي")
+      .replace(/[ة]/g, "ه")
+      .replace(/\s+/g, " ")
+      .trim();
+  };
+
+  const sameSupplierNames = (na: string, nb: string): boolean => {
+    return normalizeArabicText(na) === normalizeArabicText(nb);
+  };
+
   // Calculate unique supplier names
   const uniqueSuppliersList = useMemo(() => {
     const names = new Set<string>();
@@ -99,7 +118,7 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
     
     const supplierOrders = (orders || []).filter(o => {
       const sup = (o.supplier || "").toString().trim();
-      if (sup !== target.trim()) return false;
+      if (!sameSupplierNames(sup, target)) return false;
       const oDate = (o.orderDate || o.createdAt || "").toString().substring(0, 10);
       return oDate === queryDate;
     });
@@ -154,8 +173,10 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
   useEffect(() => {
     if (selectedLedgerSupplier) {
       fetchSupplierStatement(selectedLedgerSupplier);
+    } else if (isSupplierRole && user) {
+      fetchSupplierStatement(user);
     }
-  }, [selectedLedgerSupplier]);
+  }, [selectedLedgerSupplier, isSupplierRole, user]);
 
   async function initializeData() {
     setIsLoading(true);
@@ -180,11 +201,12 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
 
   // Fetch detailed accounting statement for a target vendor
   async function fetchSupplierStatement(supplierName: string) {
-    if (!supplierName) return;
+    const targetName = supplierName || (isSupplierRole ? user : "");
+    if (!targetName) return;
     setIsLedgerLoading(true);
     setErrorMsg("");
     try {
-      const res = await apiCall("getSupplierLedger", token, { supplier: supplierName });
+      const res = await apiCall("getSupplierLedger", token, { supplier: targetName });
       if (res.ok) {
         setLedgerEntries(res.entries || []);
         setLedgerStats(res.stats || null);

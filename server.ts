@@ -455,7 +455,7 @@ const normalizeArabic = (str: string): string => {
     .toLowerCase()
     .replace(/[أإآإأ]/g, "ا")
     .replace(/[يى]/g, "ي")
-    .replace(/ة\b/g, "ه")
+    .replace(/[ة]/g, "ه")
     .replace(/\s+/g, " ")
     .trim();
 };
@@ -1429,19 +1429,25 @@ app.post("/api", async (req: Request, res: Response) => {
           }
 
           if (d.action === "supplierAccounts") {
-            if (!["مدير", "مشرف", "محاسب"].includes(currentRole)) {
+            const isSup = isSupplierRole(currentRole);
+            if (!isSup && !["مدير", "مشرف", "محاسب"].includes(currentRole)) {
               return err(res, "ليس لديك صلاحية سحب كشوفات الموردين المالية");
             }
 
-            const resSuppliers = await executeProxyRequest(gscriptUrl, {
-              action: "getSuppliers",
-              token: "14014",
-              currentUser,
-              currentRole
-            });
-            const registeredNames = (resSuppliers.suppliers || []).map((s: any) => s.name).filter(Boolean);
-            const orderNames = (mockDb.orders || []).map((o: any) => o.supplier).filter(Boolean);
-            const allSuppliers = Array.from(new Set([...registeredNames, ...orderNames]));
+            let allSuppliers: string[] = [];
+            if (isSup) {
+              allSuppliers = [currentUser];
+            } else {
+              const resSuppliers = await executeProxyRequest(gscriptUrl, {
+                action: "getSuppliers",
+                token: "14014",
+                currentUser,
+                currentRole
+              });
+              const registeredNames = (resSuppliers.suppliers || []).map((s: any) => s.name).filter(Boolean);
+              const orderNames = (mockDb.orders || []).map((o: any) => o.supplier).filter(Boolean);
+              allSuppliers = Array.from(new Set([...registeredNames, ...orderNames]));
+            }
 
             const accountsList = allSuppliers.map((supName: any) => {
               const sup = String(supName);
@@ -2922,14 +2928,19 @@ app.post("/api", async (req: Request, res: Response) => {
       }
 
       case "supplierAccounts": {
-        // Only accessible to Admin, Super, Accountant
-        if (!["مدير", "مشرف", "محاسب"].includes(currentRole)) {
+        const isSup = isSupplierRole(currentRole);
+        if (!isSup && !["مدير", "مشرف", "محاسب"].includes(currentRole)) {
           return err(res, "ليس لديك صلاحية سحب كشوفات الموردين المالية");
         }
 
-        const registeredNames = (db.suppliers || []).map((s: any) => s.name).filter(Boolean);
-        const orderNames = (db.orders || []).map((o: any) => o.supplier).filter(Boolean);
-        const allSuppliers = Array.from(new Set([...registeredNames, ...orderNames]));
+        let allSuppliers: string[] = [];
+        if (isSup) {
+          allSuppliers = [currentUser];
+        } else {
+          const registeredNames = (db.suppliers || []).map((s: any) => s.name).filter(Boolean);
+          const orderNames = (db.orders || []).map((o: any) => o.supplier).filter(Boolean);
+          allSuppliers = Array.from(new Set([...registeredNames, ...orderNames]));
+        }
 
         const accountsList = allSuppliers.map((supName: any) => {
           const sup = String(supName);
