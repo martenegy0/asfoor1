@@ -456,8 +456,8 @@ export default function Orders({ token, role, username, orders, setOrders, couri
           if (!isRet) return false;
         }
 
-        // Exclude delayed / unanswered hold-ups from the main "all" (الكل) tab list globally
-        if (activeFilter === "all" && ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)) {
+        // Exclude delayed / unanswered hold-ups from the main "all" (الكل) tab list globally (do not hide from courier)
+        if (!isAgent && activeFilter === "all" && ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)) {
           return false;
         }
 
@@ -499,8 +499,8 @@ export default function Orders({ token, role, username, orders, setOrders, couri
           }
         }
 
-        // Dynamic Date Filter - Filter by orderDate (or fallback to createdAt) matching selectedDateYMD
-        if (selectedDate !== "all") {
+        // Dynamic Date Filter - Filter by orderDate (or fallback to createdAt) matching selectedDateYMD (do not hide from courier view to capture complete custody)
+        if (!isAgent && selectedDate !== "all") {
           const orderDayStr = normalizeDateToYMD(o.orderDate || o.createdAt);
           if (orderDayStr !== selectedDate) return false;
         }
@@ -742,7 +742,15 @@ export default function Orders({ token, role, username, orders, setOrders, couri
   };
 
   // --- Actions ---
-  async function triggerStatusUpdate(tracking: string, status: string, returnShippingType = "", notes = "", delivDate = "", clearCourierWithSignature = false) {
+  async function triggerStatusUpdate(
+    tracking: string,
+    status: string,
+    returnShippingType = "",
+    notes = "",
+    delivDate = "",
+    clearCourierWithSignature = false,
+    partialAmount?: number
+  ) {
     // If order was marked as 'مرتجع' and no shipping type chosen, open dialog (Third Point Fix!)
     if (status === "مرتجع" && !returnShippingType) {
       const ordObj = orders.find((o) => o.tracking === tracking);
@@ -783,9 +791,25 @@ export default function Orders({ token, role, username, orders, setOrders, couri
     if (clearCourierWithSignature) {
       const ordObj = orders.find((o) => o.tracking === tracking);
       if (ordObj && ordObj.courier) {
-        updatedFields.courierSignature = `${ordObj.courier} (توقيع تصفية المرتجع ✍️)`;
+        updatedFields.courierSignature = `${ordObj.courier} (توقيع تصفية المرتجع الميداني ✍️)`;
         updatedFields.lastCourier = ordObj.courier;
+        updatedFields.lastCommission = ordObj.commission;
         updatedFields.courier = "";
+        updatedFields.commission = 0;
+
+        // Strict status transitions matching server rules on courier clear
+        const prevStatus = ordObj.status;
+        if (prevStatus === "مرتجع") {
+          updatedFields.status = "مرتجع بالمستودع";
+        } else if (prevStatus === "تسليم جزئي") {
+          updatedFields.status = "مرتجع جزئي بالمستودع";
+        } else if (prevStatus === "مؤجل") {
+          updatedFields.status = "مؤجل";
+        } else if (["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(prevStatus)) {
+          updatedFields.status = prevStatus;
+        } else {
+          updatedFields.status = "جديد";
+        }
       }
     }
     if (notes) updatedFields.notes = notes;
@@ -800,6 +824,13 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       updatedFields.returnQueueAgent = undefined;
       updatedFields.courier = "";
       updatedFields.commission = 0;
+    } else if (status === "تسليم جزئي") {
+      updatedFields.isPartial = true;
+      updatedFields.returnQueueStatus = "مرتجع جزئي بالمستودع";
+      if (partialAmount !== undefined) {
+        updatedFields.totalCOD = partialAmount;
+        updatedFields.partialAmount = partialAmount;
+      }
     }
     if (returnShippingType) {
       updatedFields.returnShippingType = returnShippingType;
@@ -825,11 +856,12 @@ export default function Orders({ token, role, username, orders, setOrders, couri
     // --- BG API CALL ---
     apiCall("updateStatus", token, {
       tracking,
-      status,
+      status: updatedFields.status || status,
       returnShippingType,
       notes,
       delivDate,
       clearCourierWithSignature,
+      partialAmount,
     })
       .then((res) => {
         if (res && res.ok) {
@@ -2740,6 +2772,25 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                         >
                           {pendingTrackings.has(o.tracking) && <Loader2 size={11} className="animate-spin" />}
                           <span>✅ تم التسليم والتحصيل</span>
+                        </button>
+                        <button
+                          onClick={() => {
+                            const amtStr = prompt("يرجى إدخال المبلغ المستلم الفعلي من العميل (ج.م):", o.totalCOD || "");
+                            if (amtStr === null) return;
+                            const amt = parseFloat(amtStr);
+                            if (isNaN(amt) || amt < 0) {
+                              alert("⚠️ يرجى إدخال مبلغ صحيح");
+                              return;
+                            }
+                            triggerStatusUpdate(o.tracking, "تسليم جزئي", "", "", "", false, amt);
+                          }}
+                          disabled={pendingTrackings.has(o.tracking)}
+                          className={`px-3 py-1.5 bg-cyan-605 text-slate-950 hover:bg-cyan-650 active:scale-98 font-black text-[10px] rounded-lg cursor-pointer flex items-center gap-1 ${
+                            pendingTrackings.has(o.tracking) ? "opacity-50 pointer-events-none" : ""
+                          }`}
+                        >
+                          {pendingTrackings.has(o.tracking) && <Loader2 size={11} className="animate-spin" />}
+                          <span>📦 تسليم جزئي</span>
                         </button>
                         <button
                           onClick={() => triggerStatusUpdate(o.tracking, "مرتجع")}

@@ -284,6 +284,37 @@ export default function Ledger({ token, role, user }: LedgerProps) {
       });
   }
 
+  // Settle and pull all courier active orders to warehouse
+  async function handleSettleCourierOrders() {
+    if (!selectedCourier) return;
+    if (!confirm(`هل أنت متأكد من سحب جميع الشحنات وجرد المرتجعات الميدانية لـ (${selectedCourier})؟ \n\nسيتم سحب كافة الأوردرات المعلقة وتبرئة عهدة المندوب فوراً من الشاشة.`)) {
+      return;
+    }
+
+    setSubmittingLedger(true);
+    window.dispatchEvent(new CustomEvent("bg-sync-start"));
+
+    apiCall("settleCourierOrders", token, {
+      courier: selectedCourier
+    })
+      .then((res) => {
+        if (res && res.ok) {
+          alert(`✅ ${res.msg || "تم سحب وتصفية عهدة المندوب بالمستودع وتبرئته بنجاح!"}`);
+          loadCourierLedger();
+        } else {
+          alert(`⚠️ عطل: ${res?.error || "فشل تصفية العهدة والفرز"}`);
+        }
+      })
+      .catch((err) => {
+        console.error("Settle courier orders error:", err);
+        alert("⚠️ عطل عابر في تصفية عهدة المندوب");
+      })
+      .finally(() => {
+        setSubmittingLedger(false);
+        window.dispatchEvent(new CustomEvent("bg-sync-end"));
+      });
+  }
+
   // Submit Physical COD Handover from Courier directly to Centralized Cashbox
   async function handleCourierHandover(e: React.FormEvent) {
     e.preventDefault();
@@ -974,13 +1005,23 @@ export default function Ledger({ token, role, user }: LedgerProps) {
                       />
                     </div>
 
-                     <button
-                      type="submit"
-                      disabled={submittingLedger}
-                      className="w-full bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-black text-xs py-2.5 rounded-lg cursor-pointer transition-colors disabled:opacity-50"
-                    >
-                      🤝 تسوية حساب المندوب وإغلاق اليوم
-                    </button>
+                     <div className="md:col-span-4 grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                       <button
+                        type="submit"
+                        disabled={submittingLedger}
+                        className="w-full bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-black text-xs py-3 rounded-lg cursor-pointer transition-colors disabled:opacity-50"
+                      >
+                        🤝 تسوية حساب المندوب المالي وإيداع الخزنة
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleSettleCourierOrders}
+                        disabled={submittingLedger}
+                        className="w-full bg-indigo-600 hover:bg-indigo-700 text-slate-950 font-black text-xs py-3 rounded-lg cursor-pointer transition-colors disabled:opacity-50"
+                      >
+                        🔄 سحب الأوردرات للمستودع وتصفية العهدة اللوجستية
+                      </button>
+                     </div>
                   </form>
                 </div>
               )}

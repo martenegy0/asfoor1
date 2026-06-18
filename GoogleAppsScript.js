@@ -909,21 +909,35 @@ function updateOrder(sheets, d) {
   if (o.courier !== undefined) {
     const oldCourier = order.courier;
     if (o.courier === "reset_warehouse" || o.courier === "") {
+      const prevStatus = order.status;
       o.lastCourier = oldCourier;
       o.lastCommission = order.commission;
       o.courier = "";
       o.commission = 0;
-      if (!["مرتجع", "تسليم جزئي", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع بالمستودع", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد"].includes(order.status)) {
-        if (order.status !== "جديد") {
+      
+      // Strict status transitions on courier reset
+      if (prevStatus === "مرتجع") {
+        o.status = "مرتجع بالمستودع";
+      } else if (prevStatus === "تسليم جزئي") {
+        o.status = "مرتجع جزئي بالمستودع";
+      } else if (prevStatus === "مؤجل") {
+        o.status = "مؤجل"; // remains مؤجل
+      } else if (prevStatus === "تم التسليم" || prevStatus === "تم التسليم بنجاح" || prevStatus === "تم التسليم (ناجح كاش)") {
+        o.status = prevStatus; // remains تم التسليم
+      } else {
+        if (prevStatus !== "جديد") {
           o.status = "جديد";
-          appendToSheet(sheets.statusHistory, ["tracking", "oldStatus", "newStatus", "updatedBy", "dateTime"], {
-            tracking: o.tracking,
-            oldStatus: order.status,
-            newStatus: "جديد",
-            updatedBy: d.currentUser || "إدارة",
-            dateTime: now()
-          });
         }
+      }
+      
+      if (o.status !== prevStatus) {
+        appendToSheet(sheets.statusHistory, ["tracking", "oldStatus", "newStatus", "updatedBy", "dateTime"], {
+          tracking: o.tracking,
+          oldStatus: prevStatus,
+          newStatus: o.status,
+          updatedBy: d.currentUser || "إدارة",
+          dateTime: now()
+        });
       }
     } else {
       o.courier = o.courier;
@@ -1184,10 +1198,23 @@ function updateOrdersStatusBulk(sheets, d) {
            if (commissionIdx !== -1) {
              data[r][commissionIdx] = 0;
            }
-           if (!["مرتجع", "تسليم جزئي", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع بالمستودع", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد"].includes(oldStatus)) {
-             if (statusIdx !== -1 && oldStatus !== "جديد") {
-              data[r][statusIdx] = "جديد";
+           
+           var nextStatus = oldStatus;
+           if (oldStatus === "مرتجع") {
+             nextStatus = "مرتجع بالمستودع";
+           } else if (oldStatus === "تسليم جزئي") {
+             nextStatus = "مرتجع جزئي بالمستودع";
+           } else if (oldStatus === "مؤجل") {
+             nextStatus = "مؤجل";
+           } else if (oldStatus === "تم التسليم" || oldStatus === "تم التسليم بنجاح" || oldStatus === "تم التسليم (ناجح كاش)") {
+             nextStatus = oldStatus;
+           } else {
+             if (oldStatus !== "جديد") {
+               nextStatus = "جديد";
              }
+           }
+           if (statusIdx !== -1 && nextStatus !== oldStatus) {
+             data[r][statusIdx] = nextStatus;
            }
          } else if (newCourier !== rowCourierName) {
           data[r][courierIdx] = newCourier;

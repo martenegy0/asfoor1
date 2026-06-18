@@ -2430,22 +2430,35 @@ app.post("/api", async (req: Request, res: Response) => {
         if (o.courier !== undefined) {
           const oldCourier = order.courier;
           if (o.courier === "reset_warehouse" || o.courier === "") {
+            const prevStatus = order.status;
             order.lastCourier = oldCourier;
             order.lastCommission = order.commission;
             order.courier = "";
             order.commission = 0;
-            if (!["مرتجع", "تسليم جزئي", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع بالمستودع", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد"].includes(order.status)) {
-              if (order.status !== "جديد") {
-                const prevStatus = order.status;
+            
+            // Now, status transitions on warehouse return:
+            if (prevStatus === "مرتجع") {
+              order.status = "مرتجع بالمستودع";
+            } else if (prevStatus === "تسليم جزئي") {
+              order.status = "مرتجع جزئي بالمستودع";
+            } else if (prevStatus === "مؤجل") {
+              order.status = "مؤجل"; // remains مؤجل
+            } else if (prevStatus === "تم التسليم" || prevStatus === "تم التسليم بنجاح" || prevStatus === "تم التسليم (ناجح كاش)") {
+              order.status = prevStatus; // remains تم التسليم
+            } else {
+              if (prevStatus !== "جديد") {
                 order.status = "جديد";
-                db.statusHistory.push({
-                  tracking,
-                  oldStatus: prevStatus,
-                  newStatus: "جديد",
-                  updatedBy: currentUser,
-                  dateTime: now()
-                });
               }
+            }
+            
+            if (order.status !== prevStatus) {
+              db.statusHistory.push({
+                tracking,
+                oldStatus: prevStatus,
+                newStatus: order.status,
+                updatedBy: currentUser,
+                dateTime: now()
+              });
             }
           } else {
             order.courier = o.courier;
@@ -3167,6 +3180,64 @@ app.post("/api", async (req: Request, res: Response) => {
         writeDB(db);
         return ok(res, { msg: isWithdrawal ? "تم تسجيل حركة السحب المالي العكسية بنجاح وتسويتها بالخزنة" : "تم تسجيل الدفعة النقدية بنجاح وتسويتها بالخزنة" });
       }
+      
+      // Overnight face-to-face settlement action
+      case "settleCourierOrders": {
+        const { courier } = d;
+        if (!courier) return err(res, "المندوب غير محدد");
+        
+        let settledCount = 0;
+        const nowCairoStr = now();
+        
+        db.orders.forEach((order: any) => {
+          if (order.courier && order.courier.toString().trim().toLowerCase() === courier.toString().trim().toLowerCase()) {
+            const oldStatus = order.status;
+            order.lastCourier = order.courier;
+            order.lastCommission = order.commission;
+            
+            // Apply strict status transitions on warehouse settlement
+            if (oldStatus === "مرتجع") {
+              order.status = "مرتجع بالمستودع";
+              order.courierSignature = `${order.courier} (توقيع تصفية المرتجع الميداني ✍️)`;
+              order.courier = "";
+              order.commission = 0;
+            } else if (oldStatus === "تسليم جزئي") {
+              order.status = "مرتجع جزئي بالمستودع";
+              order.courierSignature = `${order.courier} (توقيع تصفية المرتجع الجزئي ✍️)`;
+              order.courier = "";
+              order.commission = 0;
+            } else if (oldStatus === "مؤجل") {
+              order.status = "مؤجل"; // remains مؤجل
+              order.courier = "";
+              order.commission = 0;
+            } else if (oldStatus === "تم التسليم" || oldStatus === "تم التسليم بنجاح" || oldStatus === "تم التسليم (ناجح كاش)") {
+              order.courier = "";
+              order.commission = 0;
+            } else {
+              order.status = "جديد";
+              order.courier = "";
+              order.commission = 0;
+            }
+            
+            order.updatedAt = nowCairoStr;
+            
+            if (!db.statusHistory) db.statusHistory = [];
+            db.statusHistory.push({
+              tracking: order.tracking,
+              oldStatus: oldStatus,
+              newStatus: order.status,
+              updatedBy: currentUser,
+              dateTime: nowCairoStr
+            });
+            
+            settledCount++;
+          }
+        });
+        
+        writeDB(db);
+        return ok(res, { settled: settledCount, msg: `تم سحب وتصفية ${settledCount} شحنة للمستودع وتبرئة المندوب بنجاح ✓` });
+      }
+
       // COURIER LEDGER SYSTEM & COMPENSTATION
       // ─────────────────────────────────────────────────────────────
       case "getCourierLedger": {
