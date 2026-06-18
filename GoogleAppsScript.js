@@ -675,7 +675,7 @@ function addBulk(sheets, d) {
 }
 
 function updateStatus(sheets, d) {
-  const { tracking, status, returnShippingType, currentUser, currentRole, notes, delivDate, date } = d;
+  const { tracking, status, returnShippingType, currentUser, currentRole, notes, delivDate, date, clearCourierWithSignature } = d;
   if (!tracking || !status) return { ok: false, error: "معاملات مسندة مفقودة" };
 
   // 🚨 Security Guard & Role Enforcement for Apps Script
@@ -738,6 +738,15 @@ function updateStatus(sheets, d) {
     status: finalStatus,
     updatedAt: now()
   };
+
+  const cleanClearCourier = clearCourierWithSignature === true || clearCourierWithSignature === "true";
+  if (cleanClearCourier) {
+    if (order.courier) {
+      updateObj.courierSignature = order.courier + " (توقيع تصفية المرتجع ✍️)";
+      updateObj.lastCourier = order.courier;
+      updateObj.courier = "";
+    }
+  }
 
   if (notes !== undefined && notes !== "") {
     updateObj.notes = notes;
@@ -895,6 +904,44 @@ function updateOrder(sheets, d) {
       newVal: `سعر المنتج: ${newProd} ج.م، الشحن: ${newShip} ج.م`,
       reason: d.reason || o.reason || "تجميع وتعديل الأسعار يدويًا بواسطة الإدارة"
     });
+  }
+
+  if (o.courier !== undefined) {
+    const oldCourier = order.courier;
+    if (o.courier === "reset_warehouse" || o.courier === "") {
+      o.lastCourier = oldCourier;
+      o.lastCommission = order.commission;
+      o.courier = "";
+      o.commission = 0;
+      if (!["مرتجع", "تسليم جزئي", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع بالمستودع", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد"].includes(order.status)) {
+        if (order.status !== "جديد") {
+          o.status = "جديد";
+          appendToSheet(sheets.statusHistory, ["tracking", "oldStatus", "newStatus", "updatedBy", "dateTime"], {
+            tracking: o.tracking,
+            oldStatus: order.status,
+            newStatus: "جديد",
+            updatedBy: d.currentUser || "إدارة",
+            dateTime: now()
+          });
+        }
+      }
+    } else {
+      o.courier = o.courier;
+      // If assigned (and old courier was empty/different), transition status to 'تم الإسناد' per workflow
+      if (o.courier && (!oldCourier || oldCourier === "reset_warehouse" || oldCourier === "") && order.status === "جديد") {
+        o.status = "تم الإسناد";
+        appendToSheet(sheets.statusHistory, ["tracking", "oldStatus", "newStatus", "updatedBy", "dateTime"], {
+          tracking: o.tracking,
+          oldStatus: "جديد",
+          newStatus: "تم الإسناد",
+          updatedBy: d.currentUser || "إدارة",
+          dateTime: now()
+        });
+      }
+      const couriers = getTableData(sheets.couriers);
+      const cProfile = couriers.find(c => c.name === o.courier);
+      o.commission = cProfile ? Number(cProfile.commission || 25) : 25;
+    }
   }
 
   o.updatedAt = now();
@@ -1131,12 +1178,18 @@ function updateOrdersStatusBulk(sheets, d) {
            if (lastCommissionIdx !== -1 && commissionIdx !== -1) {
              data[r][lastCommissionIdx] = data[r][commissionIdx];
            }
-           // Do not clear courier ID to preserve historical custody visibility
-           // Do not reset courier commission to preserve historical settlement details
-           if (statusIdx !== -1 && oldStatus !== "جديد") {
-            data[r][statusIdx] = "جديد";
-          }
-        } else if (newCourier !== rowCourierName) {
+           if (courierIdx !== -1) {
+             data[r][courierIdx] = "";
+           }
+           if (commissionIdx !== -1) {
+             data[r][commissionIdx] = 0;
+           }
+           if (!["مرتجع", "تسليم جزئي", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع بالمستودع", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد"].includes(oldStatus)) {
+             if (statusIdx !== -1 && oldStatus !== "جديد") {
+              data[r][statusIdx] = "جديد";
+             }
+           }
+         } else if (newCourier !== rowCourierName) {
           data[r][courierIdx] = newCourier;
           const cProfile = couriers.find(function(c) { return c.name === newCourier; });
           const comm = cProfile ? Number(cProfile.commission || 25) : 25;

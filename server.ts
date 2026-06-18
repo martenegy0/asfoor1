@@ -663,29 +663,20 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
     return sum - Number(l.amount || 0);
   }, 0);
 
-  // 5. Calculate outstanding balance: Outstanding = DeliveredOrdersValue - Paid (Returned goods are not credited so they aren't deducted)
-  const rawOutstanding = deliveredOrdersValue - paymentsValue - reverseAdjustmentsValue;
-  const outstanding = rawOutstanding;
+  // 5. Calculate outstanding balance: Outstanding = TotalGoodsUploaded - ReturnsDeliveredValue - paymentsValue - reverseAdjustmentsValue
+  const outstanding = totalGoodsUploaded - returnsDeliveredValue - paymentsValue - reverseAdjustmentsValue;
 
   // Build the ledger entries list
   const entries: any[] = [];
 
-  // A. All uploaded orders count as supplier credit (Only delivered orders have positive value, others keep trace with 0 value)
+  // A. All uploaded orders count as supplier credit immediately
   for (const o of supplierOrders) {
     const financials = getOrderFinancials(o);
     const status = getOrderStatus(o);
     const tracking = getOrderTracking(o);
-    const isDelivered = status === "تم التسليم";
-    const prodPriceNum = isDelivered ? financials.prodPrice : 0;
+    const prodPriceNum = financials.prodPrice;
     
-    let orderDesc = "";
-    if (isDelivered) {
-      orderDesc = `حقوق توريد أوردر رقم #${tracking} (صافي بضاعة مستحقة: ${prodPriceNum} ج.م - حالة الأوردر: ${status})`;
-    } else if (isReturnedDeliveredToSupplier(status) || ["مرتجع", "تم تسليم المرتجع للمورد", "التسليم للمورد"].includes(status)) {
-      orderDesc = `أوردر مرتجع رقم #${tracking} (صافي بضاعة: 0 ج.م - حالة الأوردر: ${status})`;
-    } else {
-      orderDesc = `أوردر تحت التسليم رقم #${tracking} (صافي بضاعة غير مستحقة: 0 ج.م - حالة الأوردر: ${status})`;
-    }
+    const orderDesc = `حقوق بضاعة أوردر رقم #${tracking} (صافي بضاعة: ${prodPriceNum} ج.م - حالة الأوردر: ${status})`;
 
     entries.push({
       date: o.orderDate || o.createdAt || "",
@@ -696,16 +687,18 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
     });
   }
 
-  // B. Returned orders as debit trace (since returned goods aren't credited, there is no financial deduction needed)
+  // B. Returned orders as debit action (negative deduction since they are delivered back to supplier)
   for (const o of returnedOrders) {
+    const financials = getOrderFinancials(o);
     const tracking = getOrderTracking(o);
     const status = getOrderStatus(o);
+    const prodPriceNum = financials.prodPrice;
     entries.push({
       date: o.retDate || o.updatedAt || o.createdAt || "",
       type: "مرتجع مخصوم",
       tracking: tracking,
-      amount: 0,
-      desc: `مرتجع مستلم للمورد أوردر رقم #${tracking} (حالة الأوردر: ${status} - لا توجد مستحقات للتوريد للخصم)`
+      amount: -prodPriceNum,
+      desc: `خصم قيمة مرتجع مستلم للمورد أوردر رقم #${tracking} (تنزيل بضاعة مرتجعة: -${prodPriceNum} ج.م - حالة الأوردر: ${status})`
     });
   }
 
@@ -2130,7 +2123,7 @@ app.post("/api", async (req: Request, res: Response) => {
       // UPDATE ORDER STATUS (Workflow Controls)
       // ─────────────────────────────────────────────────────────────
       case "updateStatus": {
-        const { tracking, status, returnShippingType, notes, delivDate, partialAmount } = d;
+        const { tracking, status, returnShippingType, notes, delivDate, partialAmount, customerConfirmed } = d;
         if (!tracking || !status) return err(res, "معاملات مفقودة");
 
         const sc = tracking.toString().trim().toUpperCase();
@@ -2144,6 +2137,10 @@ app.post("/api", async (req: Request, res: Response) => {
 
         const matchedTracking = order.tracking;
         const oldStatus = order.status;
+
+        if (customerConfirmed !== undefined) {
+          order.customerConfirmed = customerConfirmed;
+        }
 
         // 🚨 Standard Restriction on 'تم التسليم' or 'تسليم جزئي'
         if (oldStatus === "تم التسليم" || oldStatus === "تسليم جزئي") {
@@ -2432,23 +2429,43 @@ app.post("/api", async (req: Request, res: Response) => {
         // Courier assignment details
         if (o.courier !== undefined) {
           const oldCourier = order.courier;
-          order.courier = o.courier;
+          if (o.courier === "reset_warehouse" || o.courier === "") {
+            order.lastCourier = oldCourier;
+            order.lastCommission = order.commission;
+            order.courier = "";
+            order.commission = 0;
+            if (!["مرتجع", "تسليم جزئي", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع بالمستودع", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد"].includes(order.status)) {
+              if (order.status !== "جديد") {
+                const prevStatus = order.status;
+                order.status = "جديد";
+                db.statusHistory.push({
+                  tracking,
+                  oldStatus: prevStatus,
+                  newStatus: "جديد",
+                  updatedBy: currentUser,
+                  dateTime: now()
+                });
+              }
+            }
+          } else {
+            order.courier = o.courier;
 
-          // If assigned (and old courier was empty), transition status to 'تم الإسناد' per workflow
-          if (o.courier && !oldCourier && order.status === "جديد") {
-            order.status = "تم الإسناد";
-            db.statusHistory.push({
-              tracking,
-              oldStatus: "جديد",
-              newStatus: "تم الإسناد",
-              updatedBy: currentUser,
-              dateTime: now()
-            });
+            // If assigned (and old courier was empty/different), transition status to 'تم الإسناد' per workflow
+            if (o.courier && (!oldCourier || oldCourier === "reset_warehouse" || oldCourier === "") && order.status === "جديد") {
+              order.status = "تم الإسناد";
+              db.statusHistory.push({
+                tracking,
+                oldStatus: "جديد",
+                newStatus: "تم الإسناد",
+                updatedBy: currentUser,
+                dateTime: now()
+              });
+            }
+
+            // Fetch new commission rate
+            const courierProfile = db.couriers.find((c: any) => c.name === o.courier);
+            order.commission = courierProfile ? Number(courierProfile.commission || 25) : 25;
           }
-
-          // Fetch new commission rate
-          const courierProfile = db.couriers.find((c: any) => c.name === o.courier);
-          order.commission = courierProfile ? Number(courierProfile.commission || 25) : 0;
         }
 
         order.updatedAt = now();
@@ -2623,17 +2640,19 @@ app.post("/api", async (req: Request, res: Response) => {
               order.lastCommission = order.commission;
               order.courier = "";
               order.commission = 0;
-              if (order.status !== "جديد") {
-                const prevStatus = order.status;
-                order.status = "جديد";
-                if (!db.statusHistory) db.statusHistory = [];
-                db.statusHistory.push({
-                  tracking: t,
-                  oldStatus: prevStatus,
-                  newStatus: "جديد",
-                  updatedBy: currentUser,
-                  dateTime: now()
-                });
+              if (!["مرتجع", "تسليم جزئي", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع بالمستودع", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد"].includes(order.status)) {
+                if (order.status !== "جديد") {
+                  const prevStatus = order.status;
+                  order.status = "جديد";
+                  if (!db.statusHistory) db.statusHistory = [];
+                  db.statusHistory.push({
+                    tracking: t,
+                    oldStatus: prevStatus,
+                    newStatus: "جديد",
+                    updatedBy: currentUser,
+                    dateTime: now()
+                  });
+                }
               }
             } else if (courier !== order.courier) {
               order.courier = courier;
@@ -2774,17 +2793,19 @@ app.post("/api", async (req: Request, res: Response) => {
               order.lastCommission = order.commission;
               order.courier = "";
               order.commission = 0;
-              if (order.status !== "جديد") {
-                const prevStatus = order.status;
-                order.status = "جديد";
-                if (!db.statusHistory) db.statusHistory = [];
-                db.statusHistory.push({
-                  tracking: t,
-                  oldStatus: prevStatus,
-                  newStatus: "جديد",
-                  updatedBy: currentUser,
-                  dateTime: now()
-                });
+              if (!["مرتجع", "تسليم جزئي", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع بالمستودع", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد"].includes(order.status)) {
+                if (order.status !== "جديد") {
+                  const prevStatus = order.status;
+                  order.status = "جديد";
+                  if (!db.statusHistory) db.statusHistory = [];
+                  db.statusHistory.push({
+                    tracking: t,
+                    oldStatus: prevStatus,
+                    newStatus: "جديد",
+                    updatedBy: currentUser,
+                    dateTime: now()
+                  });
+                }
               }
             } else if (courier !== order.courier) {
               order.courier = courier;

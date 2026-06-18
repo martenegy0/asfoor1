@@ -863,6 +863,48 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       });
   }
 
+  async function toggleCustomerConfirmed(tracking: string) {
+    const ordObj = orders.find((o) => o.tracking === tracking);
+    if (!ordObj) return;
+
+    const newValue = ordObj.customerConfirmed === "true" || ordObj.customerConfirmed === true ? "false" : "true";
+
+    if (setOrders) {
+      setOrders((prev) => {
+        const next = prev.map((o) => (o.tracking === tracking ? { ...o, customerConfirmed: newValue } : o));
+        localStorage.setItem("fp_cached_orders", JSON.stringify(next));
+        return next;
+      });
+    }
+
+    setPendingTrackings((prev) => {
+      const next = new Set(prev);
+      next.add(tracking);
+      return next;
+    });
+
+    try {
+      const res = await apiCall("updateStatus", token, {
+        tracking,
+        status: ordObj.status,
+        customerConfirmed: newValue
+      });
+      if (!res || !res.ok) {
+        alert("⚠️ فشل تحديث تأكيد العميل على السيرفر");
+        onRefresh();
+      }
+    } catch (err) {
+      console.error("Error setting customer confirm", err);
+      onRefresh();
+    } finally {
+      setPendingTrackings((prev) => {
+        const next = new Set(prev);
+        next.delete(tracking);
+        return next;
+      });
+    }
+  }
+
   // Admin edit order detail saver
   async function saveAdminEdits(e: React.FormEvent) {
     e.preventDefault();
@@ -974,7 +1016,6 @@ export default function Orders({ token, role, username, orders, setOrders, couri
     if (bulkStatus) updatedFields.status = bulkStatus;
     if (bulkCourier) {
       if (bulkCourier === "reset_warehouse") {
-        updatedFields.status = "جديد";
         updatedFields.courier = "";
         updatedFields.commission = 0;
       } else {
@@ -984,7 +1025,18 @@ export default function Orders({ token, role, username, orders, setOrders, couri
 
     if (setOrders) {
       setOrders((prev) => {
-        const next = prev.map((o) => (trackingsToUpdate.includes(o.tracking) ? { ...o, ...updatedFields } : o));
+        const next = prev.map((o) => {
+          if (trackingsToUpdate.includes(o.tracking)) {
+            const extra: any = {};
+            if (bulkCourier === "reset_warehouse") {
+              if (!["مرتجع", "تسليم جزئي", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع بالمستودع", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد"].includes(o.status)) {
+                extra.status = "جديد";
+              }
+            }
+            return { ...o, ...updatedFields, ...extra };
+          }
+          return o;
+        });
         localStorage.setItem("fp_cached_orders", JSON.stringify(next));
         return next;
       });
@@ -1063,7 +1115,6 @@ export default function Orders({ token, role, username, orders, setOrders, couri
     }
     if (floatingCourier) {
       if (floatingCourier === "reset_warehouse") {
-        updatedFields.status = "جديد";
         updatedFields.courier = "";
         updatedFields.commission = 0;
       } else {
@@ -1073,7 +1124,18 @@ export default function Orders({ token, role, username, orders, setOrders, couri
 
     if (setOrders) {
       setOrders((prev) => {
-        const next = prev.map((o) => (trackingsToUpdate.includes(o.tracking) ? { ...o, ...updatedFields } : o));
+        const next = prev.map((o) => {
+          if (trackingsToUpdate.includes(o.tracking)) {
+            const extra: any = {};
+            if (floatingCourier === "reset_warehouse") {
+              if (!["مرتجع", "تسليم جزئي", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع بالمستودع", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد"].includes(o.status)) {
+                extra.status = "جديد";
+              }
+            }
+            return { ...o, ...updatedFields, ...extra };
+          }
+          return o;
+        });
         localStorage.setItem("fp_cached_orders", JSON.stringify(next));
         return next;
       });
@@ -1141,7 +1203,10 @@ export default function Orders({ token, role, username, orders, setOrders, couri
     let cardBorderStyle = "border-slate-700/80";
     let cardBgClass = "bg-slate-900/95";
     
-    if (statusType === "تم التسليم") {
+    if (o.customerConfirmed === "true" || o.customerConfirmed === true) {
+      cardBorderStyle = "border-r-4 border-r-emerald-500 border-emerald-500/40";
+      cardBgClass = "bg-emerald-950/20 shadow-[0_0_15px_rgba(16,185,129,0.1)]";
+    } else if (statusType === "تم التسليم") {
       cardBorderStyle = "border-r-4 border-r-emerald-500 border-y-slate-700/70 border-l-slate-700/70";
       cardBgClass = "bg-emerald-950/10";
     } else if (statusType.includes("مرتجع")) {
@@ -2652,6 +2717,20 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                     {/* Courier quick controls */}
                     {isAgent && o.courier === username && (
                       <>
+                        <button
+                          onClick={() => toggleCustomerConfirmed(o.tracking)}
+                          disabled={pendingTrackings.has(o.tracking)}
+                          className={`px-3 py-1.5 font-black text-[10px] rounded-lg cursor-pointer flex items-center gap-1 active:scale-98 transition ${
+                            pendingTrackings.has(o.tracking) ? "opacity-50 pointer-events-none" : ""
+                          } ${
+                            o.customerConfirmed === "true" || o.customerConfirmed === true
+                              ? "bg-emerald-600 hover:bg-emerald-700 text-slate-950"
+                              : "bg-amber-500 hover:bg-amber-600 text-slate-950"
+                          }`}
+                        >
+                          {pendingTrackings.has(o.tracking) && <Loader2 size={11} className="animate-spin" />}
+                          <span>{o.customerConfirmed === "true" || o.customerConfirmed === true ? "📞 تم الرد والتأكيد ✓" : "📞 تم الرد والتأكيد؟"}</span>
+                        </button>
                         <button
                           onClick={() => triggerStatusUpdate(o.tracking, "تم التسليم")}
                           disabled={pendingTrackings.has(o.tracking)}
