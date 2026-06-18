@@ -425,9 +425,14 @@ function addOrder(sheets, d) {
   // Generate tracking ID if missing
   if (!o.tracking) {
     const lastRow = sheets.orders.getLastRow();
-    const counter = 1000 + lastRow;
+    let counter = 1000 + lastRow;
     const yearSuffix = Utilities.formatDate(new Date(), "GMT+3", "yy");
-    o.tracking = "FP-" + counter + "-" + yearSuffix;
+    let candidate = "FP-" + counter + "-" + yearSuffix;
+    while (findRowIndex(sheets.orders, "tracking", candidate) !== -1) {
+      counter++;
+      candidate = "FP-" + counter + "-" + yearSuffix;
+    }
+    o.tracking = candidate;
   }
 
   // فحص عدم تكرار التتبع
@@ -523,16 +528,36 @@ function addBulk(sheets, d) {
   const yearSuffix = Utilities.formatDate(new Date(), "GMT+3", "yy");
   const fallbackSupplier = d.supplier || "مورد عام";
 
+  // Cache existing trackings to avoid repeating findRowIndex in loop
+  const existingTrackings = {};
+  if (currentLastRow > 1) {
+    const colIndex = getHeaderIndex(sheets.orders, "tracking");
+    if (colIndex !== -1) {
+      const vals = sheets.orders.getRange(2, colIndex, currentLastRow - 1, 1).getValues();
+      for (let i = 0; i < vals.length; i++) {
+        existingTrackings[vals[i][0].toString().trim()] = true;
+      }
+    }
+  }
+
   // Pre-fetch all registered suppliers from sheets to check against dynamically
   const registeredSuppliers = getTableData(sheets.suppliers);
 
   list.forEach(o => {
     if (!o.tracking) {
-      o.tracking = "FP-" + (1000 + currentLastRow) + "-" + yearSuffix;
-      currentLastRow++;
+      let counter = 1000 + currentLastRow;
+      let candidate = "FP-" + counter + "-" + yearSuffix;
+      while (existingTrackings[candidate]) {
+        counter++;
+        candidate = "FP-" + counter + "-" + yearSuffix;
+      }
+      o.tracking = candidate;
+      existingTrackings[candidate] = true;
+      currentLastRow = counter - 1000 + 1; // update currentLastRow for subsequent generations
     }
 
-    if (findRowIndex(sheets.orders, "tracking", o.tracking) === -1) {
+    if (!existingTrackings[o.tracking]) {
+      existingTrackings[o.tracking] = true; // reserve it
       // Resolve supplier row-by-row
       let orderSupplier = fallbackSupplier;
       if (d.currentRole === "مورد") {

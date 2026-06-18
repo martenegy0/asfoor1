@@ -460,6 +460,36 @@ const normalizeArabic = (str: string): string => {
     .trim();
 };
 
+const getOrderSupplier = (o: any): string => {
+  if (!o) return "";
+  const raw = o.supplier ?? o["المورد"] ?? o["اسم المورد"] ?? o["مورد"] ?? o["merchant"] ?? o["merchantName"] ?? o["merchant_name"] ?? o["المستخدم"];
+  return raw ? raw.toString().trim() : "";
+};
+
+const getOrderTracking = (o: any): string => {
+  if (!o) return "";
+  const raw = o.tracking ?? o["رقم التتبع"] ?? o["التتبع"] ?? o["رقم الشحنة"] ?? o["الباركود"] ?? o["id"] ?? o["trackingId"] ?? o["tracking_id"];
+  return raw ? raw.toString().trim() : "";
+};
+
+const getOrderStatus = (o: any): string => {
+  if (!o) return "";
+  const raw = o.status ?? o["حالة الأوردر"] ?? o["الحالة"] ?? o["حالة الشحنة"] ?? o["وضع الأوردر"] ?? o["orderStatus"] ?? o["order_status"];
+  return raw ? raw.toString().trim() : "";
+};
+
+const getOrderCourier = (o: any): string => {
+  if (!o) return "";
+  const raw = o.courier ?? o["المندوب"] ?? o["مندوب الشحن"] ?? o["الموصل"] ?? o["الطيار"] ?? o["courierName"] ?? o["courier_name"];
+  return raw ? raw.toString().trim() : "";
+};
+
+const getOrderCustomer = (o: any): string => {
+  if (!o) return "";
+  const raw = o.customer ?? o["العميل"] ?? o["اسم العميل"] ?? o["اسم المستلم"] ?? o["customerName"] ?? o["customer_name"];
+  return raw ? raw.toString().trim() : "";
+};
+
 const sameSup = (na: string, nb: string): boolean => {
   if (!na || !nb) return false;
   return normalizeArabic(na) === normalizeArabic(nb);
@@ -531,12 +561,12 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
     };
   }
 
-  const rawOrders = (db.orders || []).filter((o: any) => sameSup(o.supplier, supplierName));
+  const rawOrders = (db.orders || []).filter((o: any) => sameSup(getOrderSupplier(o), supplierName));
   
   // Dedup rawOrders by tracking ID (Unique Order ID) keeping the latest instance/update
   const supplierOrdersMap = new Map<string, any>();
   for (const o of rawOrders) {
-    const track = (o.tracking || "").toString().trim();
+    const track = getOrderTracking(o);
     if (track) {
       supplierOrdersMap.set(track, o);
     } else {
@@ -546,8 +576,11 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
   const supplierOrders = Array.from(supplierOrdersMap.values());
   
   // Clean raw ledger: force payouts and withdrawals to be negative (debited deductions)
-  const rawLedger = (db.supplierLedger || []).filter((l: any) => sameSup(l.supplier, supplierName)).map((l: any) => {
-    const type = (l.type || "").toString().trim();
+  const rawLedger = (db.supplierLedger || []).filter((l: any) => {
+    const sup = l.supplier || l["المورد"];
+    return sup && sameSup(sup, supplierName);
+  }).map((l: any) => {
+    const type = (l.type || l["النوع"] || "").toString().trim();
     const isWithdrawal = type.includes("سحب") || type.includes("عكسية") || type.includes("طرح") || type.includes("خصم");
     const isPayout = ["دفع نقدي", "دفعة مورد", "صرف مورد", "دفعة", "مسحوبات", "تسوية"].some(p => type.includes(p)) || l.tracking === "CASH-PAY";
     const val = Number(l.amount || 0);
@@ -564,9 +597,9 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
   // Helper function to check for genuine human payouts/adjustments
   const isHumanLedgedPayout = (l: any) => {
     if (!l) return false;
-    const type = (l.type || "").toString().trim();
-    const desc = (l.desc || "").toString().trim();
-    const tracking = (l.tracking || "").toString().trim();
+    const type = (l.type || l["النوع"] || "").toString().trim();
+    const desc = (l.desc || l["البيان"] || "").toString().trim();
+    const tracking = (l.tracking || l["رقم التتبع"] || "").toString().trim();
 
     const isPayOrAdj = ["دفع نقدي", "دفعة مورد", "صرف مورد", "دفعة", "مسحوبات", "طرح", "تسوية", "سحب"].includes(type) ||
                        type.includes("دفعة") ||
@@ -591,7 +624,7 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
   }, 0);
 
   // 2. Successful deliveries
-  const deliveredOrders = supplierOrders.filter((o: any) => o.status === "تم التسليم");
+  const deliveredOrders = supplierOrders.filter((o: any) => getOrderStatus(o) === "تم التسليم");
   const deliveredOrdersCount = deliveredOrders.length;
   const deliveredOrdersValue = deliveredOrders.reduce((sum: number, o: any) => {
     const financials = getOrderFinancials(o);
@@ -600,7 +633,7 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
 
   // 3. Returns delivered back to supplier (Dynamic Status Matching - only deduct financially when officially delivered to supplier)
   const returnedOrders = supplierOrders.filter((o: any) => {
-    return isReturnedDeliveredToSupplier(o.status);
+    return isReturnedDeliveredToSupplier(getOrderStatus(o));
   });
   const returnsDeliveredCount = returnedOrders.length;
   const returnsDeliveredValue = returnedOrders.reduce((sum: number, o: any) => {
@@ -613,12 +646,12 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
 
   // Separate Cash Payments from Reverse Adjustments
   const cashPayments = adjustmentsAndPayments.filter((l: any) => {
-    const type = (l.type || "").toString().trim();
+    const type = (l.type || l["النوع"] || "").toString().trim();
     return !type.includes("سحب") && !type.includes("عكسية") && !type.includes("طرح") && !type.includes("خصم");
   });
 
   const reverseAdjustments = adjustmentsAndPayments.filter((l: any) => {
-    const type = (l.type || "").toString().trim();
+    const type = (l.type || l["النوع"] || "").toString().trim();
     return type.includes("سحب") || type.includes("عكسية") || type.includes("طرح") || type.includes("خصم");
   });
 
@@ -640,22 +673,24 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
   // A. All uploaded orders count as supplier credit (Only delivered orders have positive value, others keep trace with 0 value)
   for (const o of supplierOrders) {
     const financials = getOrderFinancials(o);
-    const isDelivered = o.status === "تم التسليم";
+    const status = getOrderStatus(o);
+    const tracking = getOrderTracking(o);
+    const isDelivered = status === "تم التسليم";
     const prodPriceNum = isDelivered ? financials.prodPrice : 0;
     
     let orderDesc = "";
     if (isDelivered) {
-      orderDesc = `حقوق توريد أوردر رقم #${o.tracking} (صافي بضاعة مستحقة: ${prodPriceNum} ج.م - حالة الأوردر: ${o.status})`;
-    } else if (isReturnedDeliveredToSupplier(o.status) || ["مرتجع", "تم تسليم المرتجع للمورد", "التسليم للمورد"].includes(o.status)) {
-      orderDesc = `أوردر مرتجع رقم #${o.tracking} (صافي بضاعة: 0 ج.م - حالة الأوردر: ${o.status})`;
+      orderDesc = `حقوق توريد أوردر رقم #${tracking} (صافي بضاعة مستحقة: ${prodPriceNum} ج.م - حالة الأوردر: ${status})`;
+    } else if (isReturnedDeliveredToSupplier(status) || ["مرتجع", "تم تسليم المرتجع للمورد", "التسليم للمورد"].includes(status)) {
+      orderDesc = `أوردر مرتجع رقم #${tracking} (صافي بضاعة: 0 ج.م - حالة الأوردر: ${status})`;
     } else {
-      orderDesc = `أوردر تحت التسليم رقم #${o.tracking} (صافي بضاعة غير مستحقة: 0 ج.م - حالة الأوردر: ${o.status})`;
+      orderDesc = `أوردر تحت التسليم رقم #${tracking} (صافي بضاعة غير مستحقة: 0 ج.م - حالة الأوردر: ${status})`;
     }
 
     entries.push({
       date: o.orderDate || o.createdAt || "",
       type: "حقوق بضاعة أوردر",
-      tracking: o.tracking,
+      tracking: tracking,
       amount: prodPriceNum,
       desc: orderDesc
     });
@@ -663,12 +698,14 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
 
   // B. Returned orders as debit trace (since returned goods aren't credited, there is no financial deduction needed)
   for (const o of returnedOrders) {
+    const tracking = getOrderTracking(o);
+    const status = getOrderStatus(o);
     entries.push({
       date: o.retDate || o.updatedAt || o.createdAt || "",
       type: "مرتجع مخصوم",
-      tracking: o.tracking,
+      tracking: tracking,
       amount: 0,
-      desc: `مرتجع مستلم للمورد أوردر رقم #${o.tracking} (حالة الأوردر: ${o.status} - لا توجد مستحقات للتوريد للخصم)`
+      desc: `مرتجع مستلم للمورد أوردر رقم #${tracking} (حالة الأوردر: ${status} - لا توجد مستحقات للتوريد للخصم)`
     });
   }
 
@@ -834,10 +871,16 @@ function fixPhone(phone: any): string {
 }
 
 function generateID(db: any): string {
-  const counter = (db.settings.COUNTER || 1000) + 1;
-  db.settings.COUNTER = counter;
+  let counter = (db.settings.COUNTER || 1000) + 1;
   const yearSuffix = new Date().getFullYear().toString().slice(-2);
-  return `FP-${counter}-${yearSuffix}`;
+  let id = `FP-${counter}-${yearSuffix}`;
+  const orders = db.orders || [];
+  while (orders.some((o: any) => o.tracking === id)) {
+    counter++;
+    id = `FP-${counter}-${yearSuffix}`;
+  }
+  db.settings.COUNTER = counter;
+  return id;
 }
 
 // Stateless Session Helpers
@@ -1506,7 +1549,7 @@ app.post("/api", async (req: Request, res: Response) => {
                 currentRole
               });
               const registeredNames = (resSuppliers.suppliers || []).map((s: any) => s.name).filter(Boolean);
-              const orderNames = (mockDb.orders || []).map((o: any) => o.supplier).filter(Boolean);
+              const orderNames = (mockDb.orders || []).map((o: any) => getOrderSupplier(o)).filter(Boolean);
               allSuppliers = Array.from(new Set([...registeredNames, ...orderNames]));
             }
 
@@ -1572,16 +1615,20 @@ app.post("/api", async (req: Request, res: Response) => {
               stats.todayTotal++; // Today's Orders created today
             }
 
-            const isDeliveredToSupplier = isReturnedDeliveredToSupplier(o.status);
-            const isClosed = ["تم التسليم"].includes(o.status) || isDeliveredToSupplier;
-            const isAssigned = o.courier && o.courier !== "";
+            const oStatus = getOrderStatus(o);
+            const oCourier = getOrderCourier(o);
+            const oSupplier = getOrderSupplier(o);
+
+            const isDeliveredToSupplier = isReturnedDeliveredToSupplier(oStatus);
+            const isClosed = ["تم التسليم"].includes(oStatus) || isDeliveredToSupplier;
+            const isAssigned = oCourier && oCourier !== "";
             if (isAssigned && !isClosed) {
               stats.assignedPending++;
             }
 
-            const isReturn = isSomeReturn(o.status);
+            const isReturn = isSomeReturn(oStatus);
 
-            if (o.status === "تم التسليم") {
+            if (oStatus === "تم التسليم") {
               stats.delivered++;
               stats.totalCOD += Number(o.totalCOD || 0);
               stats.profit += Number(o.shipPrice || o.shipCost || 0);
@@ -1596,40 +1643,40 @@ app.post("/api", async (req: Request, res: Response) => {
               } else {
                 stats.returned++;
               }
-            } else if (["جديد", "تم الإسناد", "مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)) {
+            } else if (["جديد", "تم الإسناد", "مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(oStatus)) {
               stats.pending++;
-            } else if (o.status === "خارج مع المندوب") {
+            } else if (oStatus === "خارج مع المندوب") {
               stats.active++;
             }
 
             // Courier Statistics
-            if (o.courier) {
-              const cName = o.courier.toString().trim();
+            if (oCourier) {
+              const cName = oCourier.toString().trim();
               if (cName) {
                 if (!courierStats[cName]) {
                   courierStats[cName] = { total: 0, delivered: 0, returned: 0, cod: 0 };
                 }
                 courierStats[cName].total++;
-                if (o.status === "تم التسليم") {
+                if (oStatus === "تم التسليم") {
                   courierStats[cName].delivered++;
                   courierStats[cName].cod += Number(o.totalCOD || 0);
-                } else if (["مرتجع", "التسليم للمورد"].includes(o.status)) {
+                } else if (["مرتجع", "التسليم للمورد"].includes(oStatus)) {
                   courierStats[cName].returned++;
                 }
               }
             }
 
             // Supplier Statistics
-            if (o.supplier) {
-              const sName = o.supplier.toString().trim();
+            if (oSupplier) {
+              const sName = oSupplier.toString().trim();
               if (sName) {
                 if (!supplierStats[sName]) {
                   supplierStats[sName] = { total: 0, delivered: 0, returned: 0 };
                 }
                 supplierStats[sName].total++;
-                if (o.status === "تم التسليم") {
+                if (oStatus === "تم التسليم") {
                   supplierStats[sName].delivered++;
-                } else if (["مرتجع", "التسليم للمورد"].includes(o.status)) {
+                } else if (["مرتجع", "التسليم للمورد"].includes(oStatus)) {
                   supplierStats[sName].returned++;
                 }
               }
@@ -1708,7 +1755,10 @@ app.post("/api", async (req: Request, res: Response) => {
                 return activeOrUpdatedToday;
               });
             } else if (isSupplier) {
-              ordersList = ordersList.filter((o: any) => o.supplier && sameSup(o.supplier, currentUser));
+              ordersList = ordersList.filter((o: any) => {
+                const oSup = getOrderSupplier(o);
+                return oSup && sameSup(oSup, currentUser);
+              });
             }
             resData.orders = ordersList;
           }
@@ -1716,7 +1766,10 @@ app.post("/api", async (req: Request, res: Response) => {
           if (d.action === "getSupplierLedger" && Array.isArray(resData.ledger)) {
             const isSupplier = (currentRole || "").toString().trim() === "مورد" || (currentRole || "").toString().trim().includes("مورد");
             const targetSupplier = isSupplier ? currentUser : (d.supplier || "");
-            resData.ledger = resData.ledger.filter((l: any) => l.supplier && sameSup(l.supplier, targetSupplier));
+            resData.ledger = resData.ledger.filter((l: any) => {
+              const lSup = l.supplier || l["المورد"];
+              return lSup && sameSup(lSup, targetSupplier);
+            });
           }
         }
 
@@ -1799,7 +1852,10 @@ app.post("/api", async (req: Request, res: Response) => {
             return activeOrUpdatedToday;
           });
         } else if (isSupplier) {
-          ordersList = ordersList.filter((o: any) => o.supplier && o.supplier.toString().trim().toLowerCase() === currentUser.trim().toLowerCase());
+          ordersList = ordersList.filter((o: any) => {
+            const oSup = getOrderSupplier(o);
+            return oSup && sameSup(oSup, currentUser);
+          });
         }
 
         // Apply filters
@@ -2874,16 +2930,20 @@ app.post("/api", async (req: Request, res: Response) => {
             stats.todayTotal++; // Today's Orders created today
           }
 
-          const isClosed = ["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status);
-          const isAssigned = o.courier && o.courier !== "";
+          const oStatus = getOrderStatus(o);
+          const oSupplier = getOrderSupplier(o);
+          const oCourier = getOrderCourier(o);
+
+          const isClosed = ["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(oStatus);
+          const isAssigned = oCourier && oCourier !== "";
           if (isAssigned && !isClosed) {
             stats.assignedPending++;
           }
 
-          const isSomeReturn = ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "مرتجع والعميل دفع الشحن", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status) || (o.status || "").includes("مرتجع");
-          const isDeliveredToSupplier = ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status);
+          const isSomeReturn = ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "مرتجع والعميل دفع الشحن", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(oStatus) || oStatus.includes("مرتجع");
+          const isDeliveredToSupplier = ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(oStatus);
 
-          if (o.status === "تم التسليم") {
+          if (oStatus === "تم التسليم") {
             stats.delivered++;
             stats.totalCOD += Number(o.totalCOD || 0);
             stats.profit += Number(o.shipPrice || 0); // profit is ship share
@@ -2898,36 +2958,36 @@ app.post("/api", async (req: Request, res: Response) => {
             } else {
               stats.returned++;
             }
-          } else if (["جديد", "تم الإسناد", "مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)) {
+          } else if (["جديد", "تم الإسناد", "مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(oStatus)) {
             stats.pending++;
-          } else if (o.status === "خارج مع المندوب") {
+          } else if (oStatus === "خارج مع المندوب") {
             stats.active++;
           }
 
           // Courier Statistics
-          if (o.courier) {
-            if (!courierStats[o.courier]) {
-              courierStats[o.courier] = { total: 0, delivered: 0, returned: 0, cod: 0 };
+          if (oCourier) {
+            if (!courierStats[oCourier]) {
+              courierStats[oCourier] = { total: 0, delivered: 0, returned: 0, cod: 0 };
             }
-            courierStats[o.courier].total++;
-            if (o.status === "تم التسليم") {
-              courierStats[o.courier].delivered++;
-              courierStats[o.courier].cod += Number(o.totalCOD || 0);
-            } else if (["مرتجع", "التسليم للمورد"].includes(o.status)) {
-              courierStats[o.courier].returned++;
+            courierStats[oCourier].total++;
+            if (oStatus === "تم التسليم") {
+              courierStats[oCourier].delivered++;
+              courierStats[oCourier].cod += Number(o.totalCOD || 0);
+            } else if (["مرتجع", "التسليم للمورد"].includes(oStatus)) {
+              courierStats[oCourier].returned++;
             }
           }
 
           // Supplier Statistics
-          if (o.supplier) {
-            if (!supplierStats[o.supplier]) {
-              supplierStats[o.supplier] = { total: 0, delivered: 0, returned: 0 };
+          if (oSupplier) {
+            if (!supplierStats[oSupplier]) {
+              supplierStats[oSupplier] = { total: 0, delivered: 0, returned: 0 };
             }
-            supplierStats[o.supplier].total++;
-            if (o.status === "تم التسليم") {
-              supplierStats[o.supplier].delivered++;
-            } else if (["مرتجع", "التسليم للمورد"].includes(o.status)) {
-              supplierStats[o.supplier].returned++;
+            supplierStats[oSupplier].total++;
+            if (oStatus === "تم التسليم") {
+              supplierStats[oSupplier].delivered++;
+            } else if (["مرتجع", "التسليم للمورد"].includes(oStatus)) {
+              supplierStats[oSupplier].returned++;
             }
           }
         }
@@ -3014,7 +3074,7 @@ app.post("/api", async (req: Request, res: Response) => {
           allSuppliers = [currentUser];
         } else {
           const registeredNames = (db.suppliers || []).map((s: any) => s.name).filter(Boolean);
-          const orderNames = (db.orders || []).map((o: any) => o.supplier).filter(Boolean);
+          const orderNames = (db.orders || []).map((o: any) => getOrderSupplier(o)).filter(Boolean);
           allSuppliers = Array.from(new Set([...registeredNames, ...orderNames]));
         }
 
@@ -3789,20 +3849,23 @@ app.post("/api", async (req: Request, res: Response) => {
             list = ordersList.filter((o: any) => isDateToday(o.createdAt) || isDateToday(o.updatedAt));
             break;
           case "pending":
-            list = ordersList.filter((o: any) => ["جديد", "تم الإسناد", "خارج مع المندوب", "مؤجل", "لا يوجد رد"].includes(o.status));
+            list = ordersList.filter((o: any) => ["جديد", "تم الإسناد", "خارج مع المندوب", "مؤجل", "لا يوجد رد"].includes(getOrderStatus(o)));
             break;
           case "return":
-            list = ordersList.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status));
+            list = ordersList.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(getOrderStatus(o)));
             break;
           case "delivered":
-            list = ordersList.filter((o: any) => o.status === "تم التسليم");
+            list = ordersList.filter((o: any) => getOrderStatus(o) === "تم التسليم");
             break;
           default:
             list = ordersList;
         }
 
-        if (courier) list = list.filter((o: any) => o.courier === courier);
-        if (supplier) list = list.filter((o: any) => o.supplier && sameSup(o.supplier, supplier));
+        if (courier) list = list.filter((o: any) => getOrderCourier(o) === courier);
+        if (supplier) list = list.filter((o: any) => {
+          const oSup = getOrderSupplier(o);
+          return oSup && sameSup(oSup, supplier);
+        });
 
         return ok(res, { orders: list, count: list.length });
       }
