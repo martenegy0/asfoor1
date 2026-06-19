@@ -116,7 +116,7 @@ export default function Dashboard({
       };
 
       const courierStats: { [name: string]: { total: number; delivered: number; returned: number; cod: number } } = {};
-      const supplierStats: { [name: string]: { total: number; delivered: number; returned: number } } = {};
+      const supplierStats: { [name: string]: { total: number; delivered: number; returned: number; pendingStreetCount: number; pendingStreetCOD: number } } = {};
 
       for (const o of serverOrders) {
         const createdAtDate = o.createdAt || o.orderDate || "";
@@ -214,19 +214,39 @@ export default function Dashboard({
               }
             }
           }
+        }
 
-          if (o.supplier) {
-            const sName = o.supplier.toString().trim();
-            if (sName) {
-              if (!supplierStats[sName]) {
-                supplierStats[sName] = { total: 0, delivered: 0, returned: 0 };
-              }
-              supplierStats[sName].total++;
-              if (isDelivered) {
-                supplierStats[sName].delivered++;
-              } else if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع والعميل دفع الشحن"].includes(o.status)) {
-                supplierStats[sName].returned++;
-              }
+        // -------------------------------------------------------------
+        // UNRESTRICTED ALL-TIME SUPPLIER METRICS COMPILATION
+        // -------------------------------------------------------------
+        if (o.supplier) {
+          const sName = o.supplier.toString().trim();
+          if (sName) {
+            if (!supplierStats[sName]) {
+              supplierStats[sName] = { 
+                total: 0, 
+                delivered: 0, 
+                returned: 0, 
+                pendingStreetCount: 0, 
+                pendingStreetCOD: 0 
+              };
+            }
+            supplierStats[sName].total++;
+            if (isDelivered) {
+              supplierStats[sName].delivered++;
+            } else if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع والعميل دفع الشحن"].includes(statusStr)) {
+              supplierStats[sName].returned++;
+            }
+
+            // check if active in street custody
+            const isSettledValue = o.isSettled === true || o.isSettled === "true" || o.is_settled === "true" || o.is_settled === true;
+            const isSomeReturnedTerminal = ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع بالمستودع", "مؤرشف"].includes(statusStr);
+            const isStreetActive = o.courier && o.courier !== "" && !isDelivered && !isSomeReturnedTerminal && !o.isClosed && !isSettledValue;
+            
+            if (isStreetActive) {
+              supplierStats[sName].pendingStreetCount++;
+              const itemCOD = Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0)));
+              supplierStats[sName].pendingStreetCOD += itemCOD;
             }
           }
         }
@@ -249,7 +269,7 @@ export default function Dashboard({
 
       setStats({ ...dStats, rate });
       setCouriers(formattedCouriers.sort((a, b) => b.delivered - a.delivered));
-      setSuppliers(formattedSuppliers.sort((a, b) => b.delivered - a.delivered).slice(0, 10));
+      setSuppliers(formattedSuppliers.sort((a, b) => b.delivered - a.delivered));
       setBestCourier(bestCourierObj ? bestCourierObj.name : "—");
       setBestSupplier(bestSupplierObj ? bestSupplierObj.name : "—");
 
@@ -1022,23 +1042,25 @@ export default function Dashboard({
         <div className="bg-slate-900 border border-white/5 rounded-2xl p-5 space-y-4">
           <div className="flex items-center justify-between border-b border-white/5 pb-3">
             <div>
-              <h3 className="text-xs font-black text-slate-200 tracking-wider">📦 أداء وحركة التجار الموردين (اليومية الحالية)</h3>
-              <p className="text-[9px] text-slate-400 font-bold mt-0.5">مؤشرات وجرمسار أعمال التجار والشركات اليومية</p>
+              <h3 className="text-xs font-black text-slate-200 tracking-wider">📦 السجل التراكمي الشامل لأداء وحركة الموردين</h3>
+              <p className="text-[9px] text-slate-400 font-bold mt-0.5">مؤشرات عهدة الشارع، نسبة التسليم التراكمية، ومستحقات الموردين بالخارج</p>
             </div>
-            <BarChart3 size={16} className="text-amber-500" />
+            <BarChart3 size={16} className="text-indigo-400" />
           </div>
           {suppliers.length === 0 ? (
-            <div className="text-center py-10 text-xs text-slate-500 font-bold">لا يوجد أوردرات عمل مخصصة للموردين اليوم بعد</div>
+            <div className="text-center py-10 text-xs text-slate-500 font-bold">لا يوجد أوردرات عمل مخصصة للموردين في النظام بعد</div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-xs text-right border-collapse">
                 <thead>
                   <tr className="bg-slate-950 text-slate-400 font-black border-b border-white/5 text-right">
-                    <th className="p-3">المورد</th>
-                    <th className="p-3 text-center">أوردرات اليوم</th>
-                    <th className="p-3 text-center text-emerald-400">المستلم اليوم</th>
-                    <th className="p-3 text-center text-red-400">المرتجع اليوم</th>
-                    <th className="p-3 text-left">النسبة</th>
+                    <th className="p-3">اسم المورد والتاجر</th>
+                    <th className="p-3 text-center">إجمالي الطلبات</th>
+                    <th className="p-3 text-center text-emerald-400">ناجح ومستلم</th>
+                    <th className="p-3 text-center text-red-400">راجع ومرتجع</th>
+                    <th className="p-3 text-center text-amber-400">المعلق بالشارع حالياً</th>
+                    <th className="p-3 text-center text-emerald-400">كاش معلق بالشحنات</th>
+                    <th className="p-3 text-left">النسبة التراكمية</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1048,6 +1070,12 @@ export default function Dashboard({
                       <td className="p-3 text-center font-mono font-bold text-slate-400">{sl.total}</td>
                       <td className="p-3 text-center font-mono font-bold text-emerald-400">{sl.delivered}</td>
                       <td className="p-3 text-center font-mono font-bold text-red-400">{sl.returned}</td>
+                      <td className="p-3 text-center font-mono font-black text-amber-500 bg-amber-500/5">
+                        {sl.pendingStreetCount || 0} شحنة
+                      </td>
+                      <td className="p-3 text-center font-mono font-black text-emerald-400 bg-emerald-950/5">
+                        {(sl.pendingStreetCOD || 0).toLocaleString("ar")} <span className="text-[10px] font-sans text-slate-400 font-bold">ج.م</span>
+                      </td>
                       <td className="p-3 text-left">
                         <span className={`px-1.5 py-0.5 rounded font-mono font-bold text-[10px] ${getRateColor(sl.rate)}`}>
                           {sl.rate}%

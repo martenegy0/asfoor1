@@ -193,8 +193,14 @@ export default function Orders({ token, role, username, orders, setOrders, couri
   const todayDateStr = getTodayDateStr();
 
   const roleFilteredOrders = React.useMemo(() => {
+    // Strip settled orders out of active daily operations completely
+    const activeUnsettledOrders = orders.filter((o: any) => {
+      const isS = o.isSettled === true || o.isSettled === "true" || o.is_settled === "true" || o.is_settled === true;
+      return !isS;
+    });
+
     if (isAgent || isReturnsOfficer || isOps) {
-      return orders.filter((o: any) => {
+      return activeUnsettledOrders.filter((o: any) => {
         const orderDateYMD = normalizeDateToYMD(o.orderDate || o.createdAt);
         const updateDateYMD = o.updatedAt ? normalizeDateToYMD(o.updatedAt) : "";
         const delivDateYMD = o.delivDate ? normalizeDateToYMD(o.delivDate) : "";
@@ -210,7 +216,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
         return activeOrUpdatedToday;
       });
     }
-    return orders;
+    return activeUnsettledOrders;
   }, [orders, isAgent, isReturnsOfficer, isOps, todayDateStr]);
 
   const todayDeliveredOrders = roleFilteredOrders.filter((o: any) => {
@@ -235,6 +241,10 @@ export default function Orders({ token, role, username, orders, setOrders, couri
     status: string;
     title: string;
   } | null>(null);
+
+  const [deliveryChoiceOrder, setDeliveryChoiceOrder] = useState<any>(null);
+  const [partialAmountInput, setPartialAmountInput] = useState<string>("");
+  const [isSubmitPartialLoading, setIsSubmitPartialLoading] = useState<boolean>(false);
 
   React.useEffect(() => {
     setDisplayLimit(25);
@@ -458,8 +468,29 @@ export default function Orders({ token, role, username, orders, setOrders, couri
 
         const hasSearch = !!search.trim();
 
+        if (hasSearch) {
+          const q = search.toLowerCase().trim();
+          return [
+            o.tracking,
+            o.supplier,
+            o.courier,
+            o.customer,
+            o.phone,
+            o.phone2,
+            o.gov,
+            o.region,
+            o.address,
+            o.notes,
+            o.status,
+            o.returnQueueStatus
+          ]
+            .join(" ")
+            .toLowerCase()
+            .includes(q);
+        }
+
         // Exclude delayed / unanswered hold-ups from the main "all" (الكل) tab list globally (do not hide from courier)
-        if (!hasSearch && !isAgent && activeFilter === "all" && ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)) {
+        if (!isAgent && activeFilter === "all" && ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)) {
           return false;
         }
 
@@ -477,37 +508,34 @@ export default function Orders({ token, role, username, orders, setOrders, couri
           }
         }
 
-        // Only apply status filters and date filters if NO search pattern is entered
-        if (!hasSearch) {
-          // Operational Daily Report Mode (groups New, Assigned, Pending, Coordinating statuses)
-          if (showOperationalReport) {
-            const status = (o.status || "").toString().trim();
-            const isOperational = ["جديد", "تم الإسناد", "مسند", "تم الاسناد", "مؤجل", "لا يوجد رد", "العميل لم يقم بالرد", "تم رد العميل وجاري التنسيق", "العميل رد وجاري التسليم"].includes(status) || status.includes("رد وجاري");
-            if (!isOperational) return false;
-          } else if (activeFilter !== "all") {
-            // Logistic Status Categorization & Fallback mapping
-            const status = (o.status || "").toString().trim();
-            if (activeFilter === "جديد" && status !== "جديد") return false;
-            if (activeFilter === "مسند" && !["تم الإسناد", "مسند", "تم الاسناد"].includes(status)) return false;
-            if (activeFilter === "خارج للتسليم" && !["خارج مع المندوب", "خارج للتسليم", "خارج للتوصيل", "مع المندوب"].includes(status)) return false;
-            if (activeFilter === "تم التسليم" && !["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي"].includes(status)) return false;
-            if (activeFilter === "العميل رد وجاري التسليم" && !["تم رد العميل وجاري التنسيق", "العميل رد وجاري التسليم", "تم رد العميل وجاري التنسيق"].includes(status) && !status.includes("رد وجاري")) return false;
-            if (activeFilter === "مرتجع بالمستودع" && !["مرتجع بالمستودع", "مرتجع", "مرتجع جديد", "مرتجع جاري تسليمه للمكتب"].includes(status)) return false;
-            if (activeFilter === "تم تسليم المرتجع للمورد" && !["تم تسليم المرتجع للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "جاري الرجوع للمورد"].includes(status)) return false;
-            if (activeFilter === "مؤجل" && status !== "مؤجل") return false;
-            if (activeFilter === "لا يوجد رد" && !["لا يوجد رد", "العميل لم يقم بالرد"].includes(status)) return false;
-            
-            // Non-standard fallback filter matching
-            if (!["جديد", "مسند", "خارج للتسليم", "تم التسليم", "العميل رد وجاري التسليم", "مرتجع بالمستودع", "تم تسليم المرتجع للمورد", "مؤجل", "لا يوجد رد"].includes(activeFilter)) {
-              if (status !== activeFilter) return false;
-            }
+        // Operational Daily Report Mode (groups New, Assigned, Pending, Coordinating statuses)
+        if (showOperationalReport) {
+          const status = (o.status || "").toString().trim();
+          const isOperational = ["جديد", "تم الإسناد", "مسند", "تم الاسناد", "مؤجل", "لا يوجد رد", "العميل لم يقم بالرد", "تم رد العميل وجاري التنسيق", "العميل رد وجاري التسليم"].includes(status) || status.includes("رد وجاري");
+          if (!isOperational) return false;
+        } else if (activeFilter !== "all") {
+          // Logistic Status Categorization & Fallback mapping
+          const status = (o.status || "").toString().trim();
+          if (activeFilter === "جديد" && status !== "جديد") return false;
+          if (activeFilter === "مسند" && !["تم الإسناد", "مسند", "تم الاسناد"].includes(status)) return false;
+          if (activeFilter === "خارج للتسليم" && !["خارج مع المندوب", "خارج للتسليم", "خارج للتوصيل", "مع المندوب"].includes(status)) return false;
+          if (activeFilter === "تم التسليم" && !["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي", "تسليم جزئي - معلق للجرد"].includes(status)) return false;
+          if (activeFilter === "العميل رد وجاري التسليم" && !["تم رد العميل وجاري التنسيق", "العميل رد وجاري التسليم", "تم رد العميل وجاري التنسيق"].includes(status) && !status.includes("رد وجاري")) return false;
+          if (activeFilter === "مرتجع بالمستودع" && !["مرتجع بالمستودع", "مرتجع", "مرتجع جديد", "مرتجع جاري تسليمه للمكتب"].includes(status)) return false;
+          if (activeFilter === "تم تسليم المرتجع للمورد" && !["تم تسليم المرتجع للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "جاري الرجوع للمورد"].includes(status)) return false;
+          if (activeFilter === "مؤجل" && status !== "مؤجل") return false;
+          if (activeFilter === "لا يوجد رد" && !["لا يوجد رد", "العميل لم يقم بالرد"].includes(status)) return false;
+          
+          // Non-standard fallback filter matching
+          if (!["جديد", "مسند", "خارج للتسليم", "تم التسليم", "العميل رد وجاري التسليم", "مرتجع بالمستودع", "تم تسليم المرتجع للمورد", "مؤجل", "لا يوجد رد"].includes(activeFilter)) {
+            if (status !== activeFilter) return false;
           }
+        }
 
-          // Dynamic Date Filter - Filter by orderDate (or fallback to createdAt) matching selectedDateYMD (do not hide from courier view to capture complete custody)
-          if (!isAgent && selectedDate !== "all") {
-            const orderDayStr = normalizeDateToYMD(o.orderDate || o.createdAt);
-            if (orderDayStr !== selectedDate) return false;
-          }
+        // Dynamic Date Filter - Filter by orderDate (or fallback to createdAt) matching selectedDateYMD (do not hide from courier view to capture complete custody)
+        if (!isAgent && selectedDate !== "all") {
+          const orderDayStr = normalizeDateToYMD(o.orderDate || o.createdAt);
+          if (orderDayStr !== selectedDate) return false;
         }
 
         if (hasSearch) {
@@ -830,12 +858,13 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       updatedFields.returnQueueAgent = undefined;
       updatedFields.courier = "";
       updatedFields.commission = 0;
-    } else if (status === "تسليم جزئي") {
+    } else if (status === "تسليم جزئي" || status === "تسليم جزئي - معلق للجرد") {
       updatedFields.isPartial = true;
       updatedFields.returnQueueStatus = "مرتجع جزئي بالمستودع";
       if (partialAmount !== undefined) {
         updatedFields.totalCOD = partialAmount;
         updatedFields.partialAmount = partialAmount;
+        updatedFields.actualReceivedCash = partialAmount;
       }
     }
     if (returnShippingType) {
@@ -1226,11 +1255,13 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       case "تم الإسناد": return "bg-indigo-950/40 text-indigo-400 border border-indigo-900/30";
       case "خارج مع المندوب": return "bg-amber-950/40 text-amber-500 border border-amber-900/30";
       case "تم التسليم": return "bg-emerald-950/40 text-emerald-400 border border-emerald-900/30";
-      case "مرتجع": return "bg-red-950/40 text-red-450 border border-red-900/30";
+      case "مرتجع": return "bg-red-950/40 text-red-550 border border-red-900/30";
       case "مؤجل": return "bg-orange-950/40 text-orange-400 border border-orange-900/30";
       case "لا يوجد رد": return "bg-slate-900/80 text-slate-400 border border-slate-700/30";
-      case "التسليم للمورد": return "bg-rose-950/20 text-rose-450 border border-rose-900/30";
+      case "التسليم للمورد": return "bg-rose-950/20 text-rose-550 border border-rose-900/30";
       case "تم تسليم المرتجع للمورد": return "bg-purple-950/20 text-purple-400 border border-purple-900/30";
+      case "العميل رد وجاري التسليم": return "bg-lime-950 text-lime-400 border border-lime-900/40 font-black animate-pulse";
+      case "تسليم جزئي - معلق للجرد": return "bg-amber-950 text-amber-400 border border-amber-800 font-extrabold";
       default: return "bg-slate-900 text-slate-400 border border-slate-800";
     }
   };
@@ -1241,10 +1272,16 @@ export default function Orders({ token, role, username, orders, setOrders, couri
     let cardBorderStyle = "border-slate-700/80";
     let cardBgClass = "bg-slate-900/95";
     
-    if (o.customerConfirmed === "true" || o.customerConfirmed === true) {
+    if (statusType === "العميل رد وجاري التسليم") {
+      cardBorderStyle = "border-r-4 border-r-lime-400 border-lime-400/40";
+      cardBgClass = "bg-lime-950/25 border-lime-400/60 shadow-[0_0_20px_rgba(163,230,53,0.3)] animate-pulse border-r-4";
+    } else if (statusType === "لا يوجد رد") {
+      cardBorderStyle = "border-r-4 border-r-rose-600 border-rose-500/40";
+      cardBgClass = "bg-rose-950/20 border-rose-600/65 animate-pulse shadow-[0_0_15px_rgba(239,68,68,0.25)] border-r-4";
+    } else if (o.customerConfirmed === "true" || o.customerConfirmed === true) {
       cardBorderStyle = "border-r-4 border-r-emerald-500 border-emerald-500/40";
       cardBgClass = "bg-emerald-950/20 shadow-[0_0_15px_rgba(16,185,129,0.1)]";
-    } else if (statusType === "تم التسليم") {
+    } else if (statusType === "تم التسليم" || statusType === "تسليم جزئي - معلق للجرد") {
       cardBorderStyle = "border-r-4 border-r-emerald-500 border-y-slate-700/70 border-l-slate-700/70";
       cardBgClass = "bg-emerald-950/10";
     } else if (statusType.includes("مرتجع")) {
@@ -1521,17 +1558,26 @@ export default function Orders({ token, role, username, orders, setOrders, couri
 
 
         {/* Action Controls */}
-        {o.status !== "تم التسليم" && !isSupplier && (
+        {o.status === "تسليم جزئي - معلق للجرد" ? (
+          <div className="border-t border-rose-500/20 pt-3 text-center bg-rose-950/20 rounded-xl p-3 border border-rose-500/30 flex flex-col items-center gap-1.5 mt-2 animate-pulse">
+            <span className="text-xs font-black text-rose-400 flex items-center gap-1.5">
+              <span>🔒</span>
+              <span>معلق للجرد: يرجى تسليم المتبقي للمستودع الليلة للتصفية</span>
+            </span>
+            <span className="text-[10px] text-slate-405 text-slate-400 font-bold">
+              لقد سجلت تسليماً جزئياً بمبلغ {o.partialAmount || o.totalCOD} ج.م. لا يمكن تعديل الأوردر حالياً.
+            </span>
+          </div>
+        ) : o.status !== "تم التسليم" && !isSupplier && (
           <div className="border-t border-white/6 pt-3 flex flex-wrap gap-2 justify-end">
             {isAgent && o.courier === username && (
               <>
                 <button
                   type="button"
-                  onClick={() => setCourierConfirmModal({
-                    tracking: o.tracking,
-                    status: "تم التسليم",
-                    title: "تم التسليم والتحصيل"
-                  })}
+                  onClick={() => {
+                    setDeliveryChoiceOrder(o);
+                    setPartialAmountInput("");
+                  }}
                   disabled={pendingTrackings.has(o.tracking)}
                   className={`px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-slate-950 font-black text-[10px] rounded-lg cursor-pointer flex items-center gap-1 ${
                     pendingTrackings.has(o.tracking) ? "opacity-50 pointer-events-none" : ""
@@ -1540,6 +1586,18 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                   {pendingTrackings.has(o.tracking) && <Loader2 size={11} className="animate-spin text-slate-950" />}
                   <span>✅ تم التسليم والتحصيل</span>
                 </button>
+                {o.status !== "العميل رد وجاري التسليم" && (
+                  <button
+                    type="button"
+                    onClick={() => triggerStatusUpdate(o.tracking, "العميل رد وجاري التسليم")}
+                    disabled={pendingTrackings.has(o.tracking)}
+                    className={`px-3 py-1.5 bg-lime-550 bg-lime-500 hover:bg-lime-600 active:scale-98 text-slate-950 font-black text-[10px] rounded-lg cursor-pointer flex items-center gap-1 ${
+                      pendingTrackings.has(o.tracking) ? "opacity-50 pointer-events-none" : ""
+                    }`}
+                  >
+                    <span>📞 العميل رد وجاري التسليم</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => setCourierConfirmModal({
@@ -3238,6 +3296,123 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                 className="px-5 py-3 bg-slate-950 text-slate-400 hover:text-slate-200 rounded-xl text-xs font-bold border border-white/6 cursor-pointer"
               >
                 إلغاء التغيير
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- MODAL 5: NEW ENHANCED COURIER DELIVERED FLOW (FULL OR PARTIAL DELIVERY) --- */}
+      {deliveryChoiceOrder && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-50 flex items-center justify-center p-4 animate-fadeIn" dir="rtl">
+          <div className="bg-slate-900 border border-emerald-500/30 p-6 rounded-2xl w-full max-w-[460px] text-right space-y-5 shadow-2xl relative">
+            <button
+              onClick={() => {
+                setDeliveryChoiceOrder(null);
+                setPartialAmountInput("");
+              }}
+              className="absolute top-4 left-4 text-slate-500 hover:text-slate-300 transition-colors"
+            >
+              ✕
+            </button>
+            <div className="text-center space-y-2">
+              <span className="text-3xl">🚚</span>
+              <h3 className="text-base font-black text-emerald-400">خيارات تسليم الأوردر {deliveryChoiceOrder.tracking}</h3>
+              <p className="text-xs text-slate-400 font-bold">يرجى اختيار نوع التسليم وتأكيد الأرقام المالية:</p>
+            </div>
+
+            {/* Option 1: Full Delivery */}
+            <div className="bg-emerald-950/20 border border-emerald-500/20 rounded-xl p-4 space-y-3">
+              <div className="flex justify-between items-center">
+                <span className="text-xs font-black text-emerald-400">1. تسليم كلي</span>
+                <span className="text-xs font-mono font-bold text-slate-300">{deliveryChoiceOrder.totalCOD || deliveryChoiceOrder.price || 0} ج.م</span>
+              </div>
+              <p className="text-[10px] text-slate-400 leading-relaxed">
+                يتم تأكيد استلام كامل المبلغ وكتابة كامل القيمة {deliveryChoiceOrder.totalCOD || deliveryChoiceOrder.price || 0} ج.م في كاش المندوب.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  const tracking = deliveryChoiceOrder.tracking;
+                  const originalCOD = Number(deliveryChoiceOrder.totalCOD || deliveryChoiceOrder.price || 0);
+                  setDeliveryChoiceOrder(null);
+                  triggerStatusUpdate(tracking, "تم التسليم", "", "", "", false, originalCOD);
+                }}
+                className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-slate-950 font-black text-xs rounded-lg transition-all"
+              >
+                تأكيد تسليم كلي ({deliveryChoiceOrder.totalCOD || deliveryChoiceOrder.price || 0} ج.م)
+              </button>
+            </div>
+
+            {/* Option 2: Partial Delivery */}
+            <div className="bg-amber-950/20 border border-amber-500/20 rounded-xl p-4 space-y-3">
+              <div className="flex justify-between items-center">
+                <span className="text-xs font-black text-amber-400">2. تسليم جزئي (معلق للجرد)</span>
+                <span className="text-[10px] text-amber-500 font-bold">يتطلب إدخال الكاش الفعلي ✍️</span>
+              </div>
+              <p className="text-[10px] text-slate-400 leading-relaxed">
+                في حالة رفض العميل لبعض محتويات الشحنة، يتم استلام جزء من الكاش، وتحويل الباقي لمرتجع جزئي معلق للجرد بالمستودع.
+              </p>
+              
+              <div className="space-y-1">
+                <label className="text-[10px] text-indigo-300 font-black block">الكاش الفعلي المحصل من العميل (ج.م) *</label>
+                <input
+                  type="number"
+                  placeholder="مثال: 150"
+                  value={partialAmountInput}
+                  onChange={(e) => setPartialAmountInput(e.target.value)}
+                  className="w-full bg-slate-950 text-slate-100 border border-amber-500/30 rounded-lg px-3 py-2 text-xs font-mono text-center outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <button
+                type="button"
+                disabled={isSubmitPartialLoading}
+                onClick={async () => {
+                  const tracking = deliveryChoiceOrder.tracking;
+                  const cleanCOD = Number(deliveryChoiceOrder.totalCOD || deliveryChoiceOrder.price || 0);
+                  const pAmount = Number(partialAmountInput);
+
+                  if (isNaN(pAmount) || pAmount <= 0) {
+                    alert("⚠️ الرجاء إدخال مبلغ صحيح (أكبر من الصفر) للتسليم الجزئي");
+                    return;
+                  }
+                  if (pAmount >= cleanCOD) {
+                    alert(`⚠️ للتسليم الجزئي، يجب أن يكون المبلغ المدخل أقل من المبلغ الإجمالي (${cleanCOD} ج.م). إذا تم استلام المبلغ بالكامل يرجى اختيار [تسليم كلي].`);
+                    return;
+                  }
+
+                  setIsSubmitPartialLoading(true);
+                  try {
+                    await triggerStatusUpdate(tracking, "تسليم جزئي - معلق للجرد", "", "", "", false, pAmount);
+                    setDeliveryChoiceOrder(null);
+                    setPartialAmountInput("");
+                  } catch (err) {
+                    console.error(err);
+                  } finally {
+                    setIsSubmitPartialLoading(false);
+                  }
+                }}
+                className="w-full py-2.5 bg-gradient-to-r from-amber-500 to-orange-600 text-slate-950 font-black text-xs rounded-lg cursor-pointer hover:opacity-90 active:scale-98 transition-all flex items-center justify-center gap-2"
+              >
+                {isSubmitPartialLoading ? (
+                  <Loader2 size={12} className="animate-spin text-slate-950" />
+                ) : (
+                  <span>🔒 تأكيد التسليم الجزئي وتحويل {partialAmountInput || "0"} ج.م للعهدة</span>
+                )}
+              </button>
+            </div>
+
+            <div className="text-center pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setDeliveryChoiceOrder(null);
+                  setPartialAmountInput("");
+                }}
+                className="text-[11px] font-bold text-slate-500 hover:text-slate-300"
+              >
+                تراجع وإغلاق النافذة
               </button>
             </div>
           </div>

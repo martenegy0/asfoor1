@@ -1501,9 +1501,24 @@ app.post("/api", async (req: Request, res: Response) => {
             if (oldStatus === "مرتجع" || oldStatus === "مرتجع جديد") {
               order.status = "مرتجع بالمستودع";
               order.courierSignature = `${order.courier} (توقيع تصفية المرتجع الميداني ✍️)`;
-            } else if (oldStatus === "تسليم جزئي" || oldStatus === "مرتجع جزئي") {
+            } else if (oldStatus === "تسليم جزئي" || oldStatus === "مرتجع جزئي" || oldStatus === "تسليم جزئي - معلق للجرد") {
               order.status = "مرتجع جزئي بالمستودع";
+              order.returnReason = "مرتجع جزئي متبقي";
+              order.returnSubStatus = "بضاعة متبقية من تسليم جزئي";
               order.courierSignature = `${order.courier} (توقيع تصفية المرتجع الجزئي ✍️)`;
+
+              // ويقوم السيستم تلقائياً بترحيل المبلغ المستلم الفعلي فقط للخزنة المركزية
+              const actualCash = Number(order.actualReceivedCash || order.partialAmount || order.totalCOD || 0);
+              if (actualCash > 0) {
+                db.cashbox.push({
+                  date: nowCairoStr,
+                  desc: `تحصيل تصفية تسليم جزئي للشحنة رقم: ${order.tracking}`,
+                  type: "استلام عهدة مندوب",
+                  amount: actualCash,
+                  ref: courier,
+                  addedBy: currentUser
+                });
+              }
             } else if (oldStatus === "مؤجل" || oldStatus === "Delayed" || oldStatus === "مؤجل من المندوب" || oldStatus === "مؤجل بناءً على طلب العميل") {
               order.status = "مؤجل بالمستودع";
               order.courierSignature = `${order.courier} (توقيع تصفية المؤجل ✍️)`;
@@ -1515,6 +1530,13 @@ app.post("/api", async (req: Request, res: Response) => {
             } else {
               // Keep status exactly as is
             }
+
+            // Apply settlement flags for delivered or partial delivery orders
+            if (oldStatus === "تم التسليم" || oldStatus === "تم التسليم بنجاح" || oldStatus === "تم التسليم (ناجح كاش)" || oldStatus === "تسليم جزئي" || oldStatus === "تسليم جزئي - معلق للجرد") {
+              order.isSettled = true;
+              order.is_settled = "true";
+            }
+
             order.courier = "";
             order.commission = 0;
             order.updatedAt = nowCairoStr;
@@ -2261,7 +2283,7 @@ app.post("/api", async (req: Request, res: Response) => {
 
         // Agent Restrictions:
         if (isAgent) {
-          const agentAllowedStatuses = ["تم التسليم", "تسليم جزئي", "مرتجع", "مؤجل", "لا يوجد رد"];
+          const agentAllowedStatuses = ["تم التسليم", "تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع", "مؤجل", "لا يوجد رد", "العميل رد وجاري التسليم"];
           if (!agentAllowedStatuses.includes(status)) {
             return err(res, "غير مسموح للمندوب باختيار هذه الحالة");
           }
@@ -2393,11 +2415,12 @@ app.post("/api", async (req: Request, res: Response) => {
             }
           }
 
-          if (status === "تسليم جزئي") {
+          if (status === "تسليم جزئي" || status === "تسليم جزئي - معلق للجرد") {
             order.delivDate = now();
             const pAm = Number(partialAmount || order.totalCOD || 0);
             order.totalCOD = pAm;
             order.partialAmount = pAm;
+            order.actualReceivedCash = pAm;
             order.returnQueueStatus = "مرتجع جزئي بالمستودع";
             order.isPartial = true;
 
@@ -2428,6 +2451,16 @@ app.post("/api", async (req: Request, res: Response) => {
                 amount: supplierShare,
                 desc: `حقوق توريد أوردر تسليم جزئي: ${order.tracking} (المبلغ المحصل للشركة ${pAm} - شحن الشركة ${order.shipPrice})`
               });
+            }
+          }
+
+          if (status === "العميل رد وجاري التسليم") {
+            order.customerConfirmed = "true";
+          }
+
+          if (status === "مؤجل" || status === "مؤجل بالمستودع" || status === "Delayed") {
+            if (!order.firstPostponedDate) {
+              order.firstPostponedDate = now();
             }
           }
 
@@ -3306,9 +3339,24 @@ app.post("/api", async (req: Request, res: Response) => {
             if (oldStatus === "مرتجع" || oldStatus === "مرتجع جديد") {
               order.status = "مرتجع بالمستودع";
               order.courierSignature = `${order.courier} (توقيع تصفية المرتجع الميداني ✍️)`;
-            } else if (oldStatus === "تسليم جزئي" || oldStatus === "مرتجع جزئي") {
+            } else if (oldStatus === "تسليم جزئي" || oldStatus === "مرتجع جزئي" || oldStatus === "تسليم جزئي - معلق للجرد") {
               order.status = "مرتجع جزئي بالمستودع";
+              order.returnReason = "مرتجع جزئي متبقي";
+              order.returnSubStatus = "بضاعة متبقية من تسليم جزئي";
               order.courierSignature = `${order.courier} (توقيع تصفية المرتجع الجزئي ✍️)`;
+              
+              // ويقوم السيستم تلقائياً بترحيل المبلغ المستلم الفعلي فقط للخزنة المركزية
+              const actualCash = Number(order.actualReceivedCash || order.partialAmount || order.totalCOD || 0);
+              if (actualCash > 0) {
+                db.cashbox.push({
+                  date: nowCairoStr,
+                  desc: `تحصيل تصفية تسليم جزئي للشحنة رقم: ${order.tracking}`,
+                  type: "استلام عهدة مندوب",
+                  amount: actualCash,
+                  ref: courier,
+                  addedBy: currentUser
+                });
+              }
             } else if (oldStatus === "مؤجل" || oldStatus === "Delayed" || oldStatus === "مؤجل من المندوب" || oldStatus === "مؤجل بناءً على طلب العميل") {
               order.status = "مؤجل بالمستودع";
               order.courierSignature = `${order.courier} (توقيع تصفية المؤجل ✍️)`;
@@ -3320,6 +3368,13 @@ app.post("/api", async (req: Request, res: Response) => {
             } else {
               // Keep status exactly as is
             }
+
+            // Apply settlement flags for delivered or partial delivery orders
+            if (oldStatus === "تم التسليم" || oldStatus === "تم التسليم بنجاح" || oldStatus === "تم التسليم (ناجح كاش)" || oldStatus === "تسليم جزئي" || oldStatus === "تسليم جزئي - معلق للجرد") {
+              order.isSettled = true;
+              order.is_settled = "true";
+            }
+
             order.courier = "";
             order.commission = 0;
             order.updatedAt = nowCairoStr;
@@ -3574,7 +3629,7 @@ app.post("/api", async (req: Request, res: Response) => {
 
         const datesSet = new Set<string>();
         for (const o of ordersList) {
-          if ((o.status === "تم التسليم" || o.status === "تسليم جزئي") && o.delivDate) {
+          if ((o.status === "تم التسليم" || o.status === "تسليم جزئي" || o.status === "تسليم جزئي - معلق للجرد") && o.delivDate) {
             datesSet.add(o.delivDate.substring(0, 10));
           }
           if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) && o.retDate) {
@@ -3596,7 +3651,7 @@ app.post("/api", async (req: Request, res: Response) => {
         const dailyEarnings = sortedDates.map(dStr => {
           const isToday = dStr === todayDate;
 
-          const deliveredList = ordersList.filter((o: any) => (o.status === "تم التسليم" || o.status === "تسليم جزئي") && o.delivDate && o.delivDate.substring(0, 10) === dStr);
+          const deliveredList = ordersList.filter((o: any) => (o.status === "تم التسليم" || o.status === "تسليم جزئي" || o.status === "تسليم جزئي - معلق للجرد") && o.delivDate && o.delivDate.substring(0, 10) === dStr);
           const returnedList = ordersList.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) && o.retDate && o.retDate.substring(0, 10) === dStr);
           
           const deliveredDay = deliveredList.length;

@@ -704,7 +704,7 @@ function updateStatus(sheets, d) {
   }
 
   if (isAgent) {
-    const allowed = ["تم التسليم", "تم التسليم بنجاح", "مؤجل", "مؤجل بناءً على طلب العميل", "لا يوجد رد", "مرتجع"];
+    const allowed = ["تم التسليم", "تم التسليم بنجاح", "تسليم جزئي", "تسليم جزئي - معلق للجرد", "العميل رد وجاري التسليم", "مؤجل", "مؤجل بناءً على طلب العميل", "لا يوجد رد", "مرتجع"];
     if (!allowed.includes(status)) {
       return { ok: false, error: "Unauthorized Action: غير مسموح للمندوب باختيار هذه الحالة" };
     }
@@ -853,9 +853,67 @@ function updateStatus(sheets, d) {
       desc: `عمولة تسليم الأوردر والتحصيل للأوردر: ${tracking}`
     });
 
-    // يتم ترحيلها كعهدة معلقة حتى التوريد والإنهاء الفعلي يدوياً من المشرف
-    // تم إلغاء التسجيل التلقائي هنا تماشيًا مع فصل كاش الشارع
-    // appendToSheet(sheets.cashbox, ["date", "desc", "type", "amount", "ref", "addedBy"], { ... });
+    const ledgerData = getTableData(sheets.supplierLedger);
+    const dupLedger = ledgerData.find(l => l.tracking === tracking && (l.type === "أوردر مستلم" || l.type === "تسليم"));
+    if (!dupLedger) {
+      const supplierShare = Number(order.prodPrice || 0) - Number(order.shipPrice || 0);
+      appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
+        supplier: order.supplier,
+        date: now(),
+        type: "أوردر مستلم",
+        tracking: tracking,
+        amount: supplierShare,
+        desc: `حقوق أوردر تم تسليمه: ${tracking} (سعر المنتج ${order.prodPrice} - شحن الشركة ${order.shipPrice})`
+      });
+    }
+  }
+
+  if (status === "تسليم جزئي" || status === "تسليم جزئي - معلق للجرد") {
+    updateObj.delivDate = now();
+    const pAm = Number(d.partialAmount || order.totalCOD || 0);
+    updateObj.totalCOD = pAm;
+    updateObj.partialAmount = pAm;
+    updateObj.actualReceivedCash = pAm;
+    updateObj.returnQueueStatus = "مرتجع جزئي بالمستودع";
+    updateObj.isPartial = true;
+
+    const couriers = getTableData(sheets.couriers);
+    const courierProfile = couriers.find(c => c.name === order.courier);
+    const commVal = courierProfile ? Number(courierProfile.commission || 25) : 25;
+    updateObj.commission = commVal;
+
+    appendToSheet(sheets.courierLedger, ["courier", "date", "type", "tracking", "amount", "desc"], {
+      courier: order.courier,
+      date: now(),
+      type: "تسليم جزئي",
+      tracking: tracking,
+      amount: commVal,
+      desc: `عمولة تسليم جزئي للأوردر: ${tracking} (المبلغ الفعلي المستلم: ${pAm} ج.م)`
+    });
+
+    const ledgerData = getTableData(sheets.supplierLedger);
+    const dupLedger = ledgerData.find(l => l.tracking === tracking && (l.type === "أوردر مستلم" || l.type === "تسليم" || l.type === "أوردر مستلم جزئي"));
+    if (!dupLedger) {
+      const supplierShare = pAm - Number(order.shipPrice || 0);
+      appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
+        supplier: order.supplier,
+        date: now(),
+        type: "أوردر مستلم جزئي",
+        tracking: tracking,
+        amount: supplierShare,
+        desc: `حقوق توريد أوردر تسليم جزئي: ${tracking} (المبلغ المحصل للشركة ${pAm} - شحن الشركة ${order.shipPrice})`
+      });
+    }
+  }
+
+  if (status === "العميل رد وجاري التسليم") {
+    updateObj.customerConfirmed = "true";
+  }
+
+  if (status === "مؤجل" || status === "مؤجل بالمستودع") {
+    if (!order.firstPostponedDate) {
+      updateObj.firstPostponedDate = now();
+    }
   }
 
   // إتمام الحفظ والتعديل

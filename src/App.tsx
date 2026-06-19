@@ -10,6 +10,7 @@ import Inputs from "./components/Inputs";
 import DailyClosing from "./components/DailyClosing";
 import SuppliersManagement from "./components/SuppliersManagement";
 import OpsRoom from "./components/OpsRoom";
+import ArchivePortal from "./components/ArchivePortal";
 
 export default function App() {
   const [token, setToken] = useState("");
@@ -789,13 +790,23 @@ export default function App() {
           <button
             onClick={() => setActiveTab("suppliers")}
             className={`px-5 py-4 text-xs font-black cursor-pointer transition-all border-b-2 flex items-center gap-1.5 whitespace-nowrap ${
-              activeTab === "suppliers" ? "text-amber-500 border-amber-500" : "text-slate-400 border-transparent hover:text-slate-200"
+              activeTab === "suppliers" ? "text-amber-500 border-amber-505 border-amber-500" : "text-slate-400 border-transparent hover:text-slate-200"
             }`}
           >
             <Users size={14} />
             <span>كشف حساب وإدارة الموردين</span>
           </button>
         )}
+
+        <button
+          onClick={() => setActiveTab("archive")}
+          className={`px-5 py-4 text-xs font-black cursor-pointer transition-all border-b-2 flex items-center gap-1.5 whitespace-nowrap ${
+            activeTab === "archive" ? "text-amber-500 border-amber-500" : "text-slate-400 border-transparent hover:text-slate-200"
+          }`}
+        >
+          <span>🗄️</span>
+          <span>الأرشيف المركزي</span>
+        </button>
       </nav>
 
       {/* Main Pages router contents switcher */}
@@ -1249,6 +1260,15 @@ export default function App() {
         )}
         {activeTab === "suppliers" && showSuppliersPageTab && (
           <SuppliersManagement token={token} role={role} orders={orders} user={username} />
+        )}
+        {activeTab === "archive" && (
+          <ArchivePortal
+            token={token}
+            role={role}
+            username={username}
+            orders={orders}
+            onRefresh={() => refreshAllData()}
+          />
         )}
       </main>
 
