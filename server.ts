@@ -1091,6 +1091,7 @@ app.post("/api", async (req: Request, res: Response) => {
     // 🌐 Modern Google Sheets Integration Proxy Gateway
     if (process.env.GOOGLE_SCRIPT_URL && process.env.GOOGLE_SCRIPT_URL.trim() !== "" && process.env.GOOGLE_SCRIPT_URL.startsWith("http")) {
       const gscriptUrl = process.env.GOOGLE_SCRIPT_URL.trim();
+      try {
 
       // 1. Handle "login" action securely against Google Sheets
       if (d.action === "login") {
@@ -1121,9 +1122,11 @@ app.post("/api", async (req: Request, res: Response) => {
             return ok(res, { user: user.name, role: user.role, token, perms: user.perms || "كاملة" });
           } else {
             console.warn("Google Sheets getUsers returned non-ok. Falling back to local authentication.");
+            throw new Error("Fallback local authentication");
           }
         } catch (authErr: any) {
           console.warn("Google Sheets Auth Proxy error. Falling back to local authentication:", authErr);
+          throw authErr;
         }
       }
 
@@ -1476,6 +1479,69 @@ app.post("/api", async (req: Request, res: Response) => {
         return ok(res, { ok: true, msg: "تم ترحيل وحفظ التقرير اليومي بنجاح وجاري المزامنة في الخلفية", background: true });
       }
 
+      if (d.action === "settleCourierOrders") {
+        const { courier } = d;
+        if (!courier) return err(res, "المندوب غير محدد");
+
+        // 1. Invalidate caches
+        READ_CACHE.clear();
+        ACTIVE_FETCHES.clear();
+
+        // 2. Perform optimistic local database write
+        const db = readDB();
+        let settledCount = 0;
+        const nowCairoStr = now();
+
+        db.orders.forEach((order: any) => {
+          if (order.courier && order.courier.toString().trim().toLowerCase() === courier.toString().trim().toLowerCase()) {
+            const oldStatus = order.status;
+            order.lastCourier = order.courier;
+            order.lastCommission = order.commission;
+
+            if (oldStatus === "مرتجع" || oldStatus === "مرتجع جديد") {
+              order.status = "مرتجع بالمستودع";
+              order.courierSignature = `${order.courier} (توقيع تصفية المرتجع الميداني ✍️)`;
+            } else if (oldStatus === "تسليم جزئي" || oldStatus === "مرتجع جزئي") {
+              order.status = "مرتجع جزئي بالمستودع";
+              order.courierSignature = `${order.courier} (توقيع تصفية المرتجع الجزئي ✍️)`;
+            } else if (oldStatus === "مؤجل" || oldStatus === "Delayed" || oldStatus === "مؤجل من المندوب" || oldStatus === "مؤجل بناءً على طلب العميل") {
+              order.status = "مؤجل بالمستودع";
+              order.courierSignature = `${order.courier} (توقيع تصفية المؤجل ✍️)`;
+            } else if (oldStatus === "لا يوجد رد" || oldStatus === "العميل لا يرد" || oldStatus === "No Answer" || oldStatus === "العميل لم يقم بالرد") {
+              order.status = "لا يوجد رد بالمستودع";
+              order.courierSignature = `${order.courier} (توقيع تصفية عدم الرد ✍️)`;
+            } else if (oldStatus === "تم التسليم" || oldStatus === "تم التسليم بنجاح" || oldStatus === "تم التسليم (ناجح كاش)") {
+              // Status remains as is
+            } else {
+              // Keep status exactly as is
+            }
+            order.courier = "";
+            order.commission = 0;
+            order.updatedAt = nowCairoStr;
+
+            if (!db.statusHistory) db.statusHistory = [];
+            db.statusHistory.push({
+              tracking: order.tracking,
+              oldStatus: oldStatus,
+              newStatus: order.status,
+              updatedBy: currentUser,
+              dateTime: nowCairoStr
+            });
+
+            settledCount++;
+          }
+        });
+
+        writeDB(db);
+
+        // 3. Queue Google Sheets write in background and return fast response
+        executeProxyRequest(gscriptUrl, payloadToSheet).catch((syncErr) => {
+          console.error("Async Google Sheets synchronization for settleCourierOrders failed:", syncErr);
+        });
+
+        return ok(res, { settled: settledCount, msg: `تم سحب وتصفية ${settledCount} شحنة للمستودع وتبرئة المندوب بنجاح ✓` });
+      }
+
       if (["getSupplierLedger", "supplierAccounts", "supplierDashboard"].includes(d.action)) {
         try {
           // Fetch raw orders and ledger from Google Sheets proxy using cached helpers.
@@ -1488,12 +1554,30 @@ app.post("/api", async (req: Request, res: Response) => {
             currentUser,
             currentRole
           });
+          if (resOrders && resOrders.ok === false) {
+            return err(res, resOrders.error || "فشل سحب قائمة طلبات الموردين من سكريبت جوجل شيت");
+          }
+
           const resLedger = await executeProxyRequest(gscriptUrl, {
             action: "getSupplierLedger",
             token: "14014",
             currentUser,
             currentRole
           });
+          if (resLedger && resLedger.ok === false) {
+            return err(res, resLedger.error || "فشل سحب القيود المالية للموردين من سكريبت جوجل شيت");
+          }
+
+          console.log("DEBUG_SUPPLIERS: resOrders ok?", resOrders?.ok, "orders length:", resOrders?.orders?.length);
+          console.log("DEBUG_SUPPLIERS: resLedger ok?", resLedger?.ok, "ledger length:", resLedger?.ledger?.length);
+          if (resOrders?.orders && resOrders.orders.length > 0) {
+            console.log("DEBUG_SUPPLIERS Sample Order Keys:", Object.keys(resOrders.orders[0]));
+            console.log("DEBUG_SUPPLIERS Sample Order Suppliers:", resOrders.orders.slice(0, 5).map((o: any) => getOrderSupplier(o)));
+          }
+          if (resLedger?.ledger && resLedger.ledger.length > 0) {
+            console.log("DEBUG_SUPPLIERS Sample Ledger Keys:", Object.keys(resLedger.ledger[0]));
+            console.log("DEBUG_SUPPLIERS Sample Ledger Suppliers:", resLedger.ledger.slice(0, 5).map((l: any) => l.supplier || l["المورد"]));
+          }
 
           const mockDb = {
             orders: resOrders.orders || [],
@@ -1549,6 +1633,9 @@ app.post("/api", async (req: Request, res: Response) => {
                 currentUser,
                 currentRole
               });
+              if (resSuppliers && resSuppliers.ok === false) {
+                return err(res, resSuppliers.error || "فشل سحب كشف الموردين المسجلين من سكريبت جوجل شيت");
+              }
               const registeredNames = (resSuppliers.suppliers || []).map((s: any) => s.name).filter(Boolean);
               const orderNames = (mockDb.orders || []).map((o: any) => getOrderSupplier(o)).filter(Boolean);
               allSuppliers = Array.from(new Set([...registeredNames, ...orderNames]));
@@ -1777,6 +1864,9 @@ app.post("/api", async (req: Request, res: Response) => {
         return res.json(resData);
       } catch (proxyError: any) {
         console.warn("Google Sheets proxy failed or timed out. Falling back to local database routing:", proxyError?.message || proxyError);
+      }
+      } catch (globalProxyError: any) {
+        console.warn("Global Google Sheets proxy gateway caught exception. Falling back to local:", globalProxyError?.message || globalProxyError);
       }
     }
 
@@ -3213,29 +3303,25 @@ app.post("/api", async (req: Request, res: Response) => {
             order.lastCommission = order.commission;
             
             // Apply strict status transitions on warehouse settlement
-            if (oldStatus === "مرتجع") {
+            if (oldStatus === "مرتجع" || oldStatus === "مرتجع جديد") {
               order.status = "مرتجع بالمستودع";
               order.courierSignature = `${order.courier} (توقيع تصفية المرتجع الميداني ✍️)`;
-              order.courier = "";
-              order.commission = 0;
-            } else if (oldStatus === "تسليم جزئي") {
+            } else if (oldStatus === "تسليم جزئي" || oldStatus === "مرتجع جزئي") {
               order.status = "مرتجع جزئي بالمستودع";
               order.courierSignature = `${order.courier} (توقيع تصفية المرتجع الجزئي ✍️)`;
-              order.courier = "";
-              order.commission = 0;
-            } else if (oldStatus === "مؤجل") {
-              order.status = "مؤجل"; // remains مؤجل
-              order.courier = "";
-              order.commission = 0;
+            } else if (oldStatus === "مؤجل" || oldStatus === "Delayed" || oldStatus === "مؤجل من المندوب" || oldStatus === "مؤجل بناءً على طلب العميل") {
+              order.status = "مؤجل بالمستودع";
+              order.courierSignature = `${order.courier} (توقيع تصفية المؤجل ✍️)`;
+            } else if (oldStatus === "لا يوجد رد" || oldStatus === "العميل لا يرد" || oldStatus === "No Answer" || oldStatus === "العميل لم يقم بالرد") {
+              order.status = "لا يوجد رد بالمستودع";
+              order.courierSignature = `${order.courier} (توقيع تصفية عدم الرد ✍️)`;
             } else if (oldStatus === "تم التسليم" || oldStatus === "تم التسليم بنجاح" || oldStatus === "تم التسليم (ناجح كاش)") {
-              order.courier = "";
-              order.commission = 0;
+              // Status remains as is
             } else {
-              order.status = "جديد";
-              order.courier = "";
-              order.commission = 0;
+              // Keep status exactly as is
             }
-            
+            order.courier = "";
+            order.commission = 0;
             order.updatedAt = nowCairoStr;
             
             if (!db.statusHistory) db.statusHistory = [];
@@ -3659,7 +3745,7 @@ app.post("/api", async (req: Request, res: Response) => {
 
         let balance = 0;
         const sortedEntries = [...db.cashbox].map((item: any) => {
-          const isDeposit = ["وارد", "تحصيل مندوب", "إيداع خزنة direct", "إيداع", "استلام عهدة مندوب"].includes(item.type);
+          const isDeposit = ["وارد", "تحصيل مندوب", "إيداع خزنة direct", "إيداع", "استلام عهدة مندوب", "إيداع بالخزنة"].includes(item.type);
           balance += isDeposit ? Number(item.amount) : -Number(item.amount);
           return { ...item, balance };
         });

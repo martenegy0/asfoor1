@@ -304,7 +304,7 @@ function getTableData(sheet) {
   const lastRow = sheet.getLastRow();
   if (lastRow <= 1) return [];
   const lastCol = sheet.getLastColumn();
-  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(h => h.trim());
+  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(function(h) { return h ? h.toString().trim() : ""; });
   const rows = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
   
   return rows.map(row => {
@@ -405,9 +405,11 @@ function getHeaderIndex(sheet, headerName) {
 }
 
 function updateRowByObject(sheet, rowIndex, obj) {
-  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => h.trim());
+  const lastCol = sheet.getLastColumn();
+  if (lastCol <= 0) return;
+  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(function(h) { return h ? h.toString().trim() : ""; });
   headers.forEach((h, colIdx) => {
-    if (obj[h] !== undefined) {
+    if (h && obj[h] !== undefined) {
       sheet.getRange(rowIndex, colIdx + 1).setValue(obj[h]);
     }
   });
@@ -495,7 +497,8 @@ function addOrder(sheets, d) {
     }
   }
 
-  const headers = sheets.orders.getRange(1, 1, 1, sheets.orders.getLastColumn()).getValues()[0].map(h => h.trim());
+  const lastCol = sheets.orders.getLastColumn();
+  const headers = sheets.orders.getRange(1, 1, 1, lastCol > 0 ? lastCol : 1).getValues()[0].map(function(h) { return h ? h.toString().trim() : ""; });
   appendToSheet(sheets.orders, headers, newOrder);
 
   // Record Supplier Ledger
@@ -524,7 +527,8 @@ function addBulk(sheets, d) {
   const list = d.orders;
   if (!list || !list.length) return { ok: false, error: "لا توجد أوردرات للرفع" };
 
-  const headers = sheets.orders.getRange(1, 1, 1, sheets.orders.getLastColumn()).getValues()[0].map(h => h.trim());
+  const lastCol = sheets.orders.getLastColumn();
+  const headers = sheets.orders.getRange(1, 1, 1, lastCol > 0 ? lastCol : 1).getValues()[0].map(function(h) { return h ? h.toString().trim() : ""; });
   let addedCount = 0;
   
   // Cache current last row to avoid reading getLastRow inside loop
@@ -2046,11 +2050,19 @@ function getStatusHistory(sheets, d) {
 
 function getCashbox(sheets) {
   const list = getTableData(sheets.cashbox);
-  const inSum = list.filter(c => ["تحصيل مندوب", "إيداع خزنة direct", "إيداع", "استلام عهدة مندوب"].includes(c.type)).reduce((sum, item) => sum + Number(item.amount || 0), 0);
-  const outSum = list.filter(c => ["صرف مورد", "دفعة للمورد", "مصروفات"].includes(c.type) || c.type.startsWith("سداد") || c.type === "صرف").reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const inSum = list.filter(function(c) {
+    var t = c.type ? c.type.toString().trim() : "";
+    return ["وارد", "تحصيل مندوب", "إيداع خزنة direct", "إيداع", "استلام عهدة مندوب", "إيداع بالخزنة"].indexOf(t) !== -1;
+  }).reduce(function(sum, item) { return sum + Number(item.amount || 0); }, 0);
+  
+  const outSum = list.filter(function(c) {
+    var t = c.type ? c.type.toString().trim() : "";
+    return ["صادر", "صرف مورد", "دفعة للمورد", "مصروفات", "سحب من الخزنة", "صرف"].indexOf(t) !== -1 || t.indexOf("سداد") === 0;
+  }).reduce(function(sum, item) { return sum + Number(item.amount || 0); }, 0);
+  
   const balance = inSum - outSum;
 
-  return { ok: true, entries: list.reverse(), balance };
+  return { ok: true, entries: list.reverse(), balance: balance };
 }
 
 function addCashbox(sheets, d) {
@@ -2383,7 +2395,7 @@ function settleCourierOrders(sheets, d) {
     const lastCol = sheet.getLastColumn();
     const dataRange = sheet.getRange(1, 1, lastRow, lastCol);
     const data = dataRange.getValues();
-    const headers = data[0].map(function(h) { return h.toString().trim(); });
+    const headers = data[0].map(function(h) { return h ? h.toString().trim() : ""; });
 
     const trackingIdx = headers.indexOf("tracking");
     const courierIdx = headers.indexOf("courier");
@@ -2415,23 +2427,31 @@ function settleCourierOrders(sheets, d) {
         if (lastCourierIdx !== -1) updateObj["lastCourier"] = rowCourier;
         if (lastCommissionIdx !== -1) updateObj["lastCommission"] = oldCommission;
 
-        let nextStatus = "جديد";
-        if (oldStatus === "مرتجع") {
+        let nextStatus = oldStatus;
+        if (oldStatus === "مرتجع" || oldStatus === "مرتجع جديد") {
           nextStatus = "مرتجع بالمستودع";
           if (courierSignatureIdx !== -1) {
             updateObj["courierSignature"] = rowCourier + " (توقيع تصفية المرتجع الميداني ✍️)";
           }
-        } else if (oldStatus === "تسليم جزئي") {
+        } else if (oldStatus === "تسليم جزئي" || oldStatus === "مرتجع جزئي") {
           nextStatus = "مرتجع جزئي بالمستودع";
           if (courierSignatureIdx !== -1) {
             updateObj["courierSignature"] = rowCourier + " (توقيع تصفية المرتجع الجزئي ✍️)";
           }
-        } else if (oldStatus === "مؤجل") {
-          nextStatus = "مؤجل";
+        } else if (oldStatus === "مؤجل" || oldStatus === "Delayed" || oldStatus === "مؤجل من المندوب" || oldStatus === "مؤجل بناءً على طلب العميل") {
+          nextStatus = "مؤجل بالمستودع";
+          if (courierSignatureIdx !== -1) {
+            updateObj["courierSignature"] = rowCourier + " (توقيع تصفية المؤجل ✍️)";
+          }
+        } else if (oldStatus === "لا يوجد رد" || oldStatus === "العميل لا يرد" || oldStatus === "No Answer" || oldStatus === "العميل لم يقم بالرد") {
+          nextStatus = "لا يوجد رد بالمستودع";
+          if (courierSignatureIdx !== -1) {
+            updateObj["courierSignature"] = rowCourier + " (توقيع تصفية عدم الرد ✍️)";
+          }
         } else if (oldStatus === "تم التسليم" || oldStatus === "تم التسليم بنجاح" || oldStatus === "تم التسليم (ناجح كاش)") {
           nextStatus = oldStatus;
         } else {
-          nextStatus = "جديد";
+          nextStatus = oldStatus;
         }
 
         updateObj["status"] = nextStatus;

@@ -456,8 +456,10 @@ export default function Orders({ token, role, username, orders, setOrders, couri
           if (!isRet) return false;
         }
 
+        const hasSearch = !!search.trim();
+
         // Exclude delayed / unanswered hold-ups from the main "all" (الكل) tab list globally (do not hide from courier)
-        if (!isAgent && activeFilter === "all" && ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)) {
+        if (!hasSearch && !isAgent && activeFilter === "all" && ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)) {
           return false;
         }
 
@@ -475,37 +477,40 @@ export default function Orders({ token, role, username, orders, setOrders, couri
           }
         }
 
-        // Operational Daily Report Mode (groups New, Assigned, Pending, Coordinating statuses)
-        if (showOperationalReport) {
-          const status = (o.status || "").toString().trim();
-          const isOperational = ["جديد", "تم الإسناد", "مسند", "تم الاسناد", "مؤجل", "لا يوجد رد", "العميل لم يقم بالرد", "تم رد العميل وجاري التنسيق", "العميل رد وجاري التسليم"].includes(status) || status.includes("رد وجاري");
-          if (!isOperational) return false;
-        } else if (activeFilter !== "all") {
-          // Logistic Status Categorization & Fallback mapping
-          const status = (o.status || "").toString().trim();
-          if (activeFilter === "جديد" && status !== "جديد") return false;
-          if (activeFilter === "مسند" && !["تم الإسناد", "مسند", "تم الاسناد"].includes(status)) return false;
-          if (activeFilter === "خارج للتسليم" && !["خارج مع المندوب", "خارج للتسليم", "خارج للتوصيل", "مع المندوب"].includes(status)) return false;
-          if (activeFilter === "تم التسليم" && !["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي"].includes(status)) return false;
-          if (activeFilter === "العميل رد وجاري التسليم" && !["تم رد العميل وجاري التنسيق", "العميل رد وجاري التسليم", "تم رد العميل وجاري التنسيق"].includes(status) && !status.includes("رد وجاري")) return false;
-          if (activeFilter === "مرتجع بالمستودع" && !["مرتجع بالمستودع", "مرتجع", "مرتجع جديد", "مرتجع جاري تسليمه للمكتب"].includes(status)) return false;
-          if (activeFilter === "تم تسليم المرتجع للمورد" && !["تم تسليم المرتجع للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "جاري الرجوع للمورد"].includes(status)) return false;
-          if (activeFilter === "مؤجل" && status !== "مؤجل") return false;
-          if (activeFilter === "لا يوجد رد" && !["لا يوجد رد", "العميل لم يقم بالرد"].includes(status)) return false;
-          
-          // Non-standard fallback filter matching
-          if (!["جديد", "مسند", "خارج للتسليم", "تم التسليم", "العميل رد وجاري التسليم", "مرتجع بالمستودع", "تم تسليم المرتجع للمورد", "مؤجل", "لا يوجد رد"].includes(activeFilter)) {
-            if (status !== activeFilter) return false;
+        // Only apply status filters and date filters if NO search pattern is entered
+        if (!hasSearch) {
+          // Operational Daily Report Mode (groups New, Assigned, Pending, Coordinating statuses)
+          if (showOperationalReport) {
+            const status = (o.status || "").toString().trim();
+            const isOperational = ["جديد", "تم الإسناد", "مسند", "تم الاسناد", "مؤجل", "لا يوجد رد", "العميل لم يقم بالرد", "تم رد العميل وجاري التنسيق", "العميل رد وجاري التسليم"].includes(status) || status.includes("رد وجاري");
+            if (!isOperational) return false;
+          } else if (activeFilter !== "all") {
+            // Logistic Status Categorization & Fallback mapping
+            const status = (o.status || "").toString().trim();
+            if (activeFilter === "جديد" && status !== "جديد") return false;
+            if (activeFilter === "مسند" && !["تم الإسناد", "مسند", "تم الاسناد"].includes(status)) return false;
+            if (activeFilter === "خارج للتسليم" && !["خارج مع المندوب", "خارج للتسليم", "خارج للتوصيل", "مع المندوب"].includes(status)) return false;
+            if (activeFilter === "تم التسليم" && !["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي"].includes(status)) return false;
+            if (activeFilter === "العميل رد وجاري التسليم" && !["تم رد العميل وجاري التنسيق", "العميل رد وجاري التسليم", "تم رد العميل وجاري التنسيق"].includes(status) && !status.includes("رد وجاري")) return false;
+            if (activeFilter === "مرتجع بالمستودع" && !["مرتجع بالمستودع", "مرتجع", "مرتجع جديد", "مرتجع جاري تسليمه للمكتب"].includes(status)) return false;
+            if (activeFilter === "تم تسليم المرتجع للمورد" && !["تم تسليم المرتجع للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "جاري الرجوع للمورد"].includes(status)) return false;
+            if (activeFilter === "مؤجل" && status !== "مؤجل") return false;
+            if (activeFilter === "لا يوجد رد" && !["لا يوجد رد", "العميل لم يقم بالرد"].includes(status)) return false;
+            
+            // Non-standard fallback filter matching
+            if (!["جديد", "مسند", "خارج للتسليم", "تم التسليم", "العميل رد وجاري التسليم", "مرتجع بالمستودع", "تم تسليم المرتجع للمورد", "مؤجل", "لا يوجد رد"].includes(activeFilter)) {
+              if (status !== activeFilter) return false;
+            }
+          }
+
+          // Dynamic Date Filter - Filter by orderDate (or fallback to createdAt) matching selectedDateYMD (do not hide from courier view to capture complete custody)
+          if (!isAgent && selectedDate !== "all") {
+            const orderDayStr = normalizeDateToYMD(o.orderDate || o.createdAt);
+            if (orderDayStr !== selectedDate) return false;
           }
         }
 
-        // Dynamic Date Filter - Filter by orderDate (or fallback to createdAt) matching selectedDateYMD (do not hide from courier view to capture complete custody)
-        if (!isAgent && selectedDate !== "all") {
-          const orderDayStr = normalizeDateToYMD(o.orderDate || o.createdAt);
-          if (orderDayStr !== selectedDate) return false;
-        }
-
-        if (search.trim()) {
+        if (hasSearch) {
           const q = search.toLowerCase().trim();
           return [
             o.tracking,
@@ -513,6 +518,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
             o.supplier,
             o.courier,
             o.phone,
+            o.phone2,
             o.gov,
             o.region,
             o.address,

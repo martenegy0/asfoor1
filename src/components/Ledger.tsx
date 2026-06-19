@@ -51,10 +51,10 @@ export default function Ledger({ token, role, user }: LedgerProps) {
   async function fetchResourceLists() {
     if (isFinancial || role === "مشرف") {
       try {
-        const resSuppliers = await apiCall("getSuppliers", token);
-        if (resSuppliers.ok && resSuppliers.suppliers.length > 0) {
-          setAllSuppliers(resSuppliers.suppliers);
-          if (!selectedSupplier) setSelectedSupplier(resSuppliers.suppliers[0].name);
+        const resSuppliers = await apiCall("supplierAccounts", token);
+        if (resSuppliers.ok && resSuppliers.accounts && resSuppliers.accounts.length > 0) {
+          setAllSuppliers(resSuppliers.accounts);
+          if (!selectedSupplier) setSelectedSupplier(resSuppliers.accounts[0].name);
         }
         const resCouriers = await apiCall("getCouriers", token);
         if (resCouriers.ok && resCouriers.couriers.length > 0) {
