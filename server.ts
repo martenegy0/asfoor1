@@ -1478,23 +1478,21 @@ app.post("/api", async (req: Request, res: Response) => {
 
       if (["getSupplierLedger", "supplierAccounts", "supplierDashboard"].includes(d.action)) {
         try {
-          const isSup = isSupplierRole(currentRole);
-          const targetSupplier = isSup ? currentUser : (d.supplier || "");
-
-          // Fetch raw orders and ledger from Google Sheets proxy using cached helpers
+          // Fetch raw orders and ledger from Google Sheets proxy using cached helpers.
+          // We omit the "supplier" parameter here so Google Sheets returns the entire list.
+          // This allows us to perform robust, Arabic-normalization-safe filtering server-side
+          // which standardizes characters like أ/إ/آ->ا, ي/ى->ي, ة->ه and is completely immune to spelling variations.
           const resOrders = await executeProxyRequest(gscriptUrl, {
             action: "getOrders",
             token: "14014",
             currentUser,
-            currentRole,
-            supplier: targetSupplier
+            currentRole
           });
           const resLedger = await executeProxyRequest(gscriptUrl, {
             action: "getSupplierLedger",
             token: "14014",
             currentUser,
-            currentRole,
-            supplier: targetSupplier
+            currentRole
           });
 
           const mockDb = {
