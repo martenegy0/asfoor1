@@ -61,7 +61,8 @@ function doPost(e) {
     "addOrder", "addBulk", "updateStatus", "updateOrder", "deleteOrder", 
     "bulkUpdate", "updateOrdersStatusBulk", "addSupplierPayment", 
     "addCourierAdjustment", "addCashbox", "addExpense", "addUser", 
-    "registerUser", "updateUser", "updateCourier", "addDailyClosing"
+    "registerUser", "updateUser", "updateCourier", "addDailyClosing",
+    "settleCourierOrders"
   ];
   
   var isWrite = writeActions.indexOf(action) !== -1;
@@ -133,6 +134,9 @@ function doPost(e) {
         break;
       case "addCourierAdjustment":
         result = addCourierAdjustment(sheets, requestData);
+        break;
+      case "settleCourierOrders":
+        result = settleCourierOrders(sheets, requestData);
         break;
       case "statusHistory":
         result = getStatusHistory(sheets, requestData);
@@ -2362,4 +2366,98 @@ function updateCourier(sheets, d) {
   }
 
   return { ok: true, msg: "تم تحديث وحفظ بيانات المندوب بنجاح بفولدر السيستم" };
+}
+
+function settleCourierOrders(sheets, d) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+
+  try {
+    const { courier, currentUser } = d;
+    if (!courier) return { ok: false, error: "المندوب غير محدد" };
+
+    const sheet = sheets.orders;
+    const lastRow = sheet.getLastRow();
+    if (lastRow <= 1) return { ok: true, msg: "لا توجد أوردرات للتحديث", settled: 0 };
+
+    const lastCol = sheet.getLastColumn();
+    const dataRange = sheet.getRange(1, 1, lastRow, lastCol);
+    const data = dataRange.getValues();
+    const headers = data[0].map(function(h) { return h.toString().trim(); });
+
+    const trackingIdx = headers.indexOf("tracking");
+    const courierIdx = headers.indexOf("courier");
+    const statusIdx = headers.indexOf("status");
+    const commissionIdx = headers.indexOf("commission");
+    const lastCourierIdx = headers.indexOf("lastCourier");
+    const lastCommissionIdx = headers.indexOf("lastCommission");
+    const courierSignatureIdx = headers.indexOf("courierSignature");
+    const updatedAtIdx = headers.indexOf("updatedAt");
+
+    if (trackingIdx === -1 || courierIdx === -1 || statusIdx === -1) {
+      return { ok: false, error: "فشل التحقق: حقول الورقة غير مكتملة" };
+    }
+
+    let settledCount = 0;
+    const nowCairoStr = now();
+    const searchCourier = courier.toString().trim().toLowerCase();
+
+    for (let r = 1; r < data.length; r++) {
+      const rowCourier = data[r][courierIdx] ? data[r][courierIdx].toString().trim() : "";
+      if (rowCourier.toLowerCase() === searchCourier) {
+        const trackingVal = data[r][trackingIdx] ? data[r][trackingIdx].toString().trim() : "";
+        const oldStatus = data[r][statusIdx] ? data[r][statusIdx].toString().trim() : "";
+        const oldCommission = data[r][commissionIdx] ? Number(data[r][commissionIdx] || 0) : 0;
+
+        const rowIndex = r + 1;
+        const updateObj = {};
+
+        if (lastCourierIdx !== -1) updateObj["lastCourier"] = rowCourier;
+        if (lastCommissionIdx !== -1) updateObj["lastCommission"] = oldCommission;
+
+        let nextStatus = "جديد";
+        if (oldStatus === "مرتجع") {
+          nextStatus = "مرتجع بالمستودع";
+          if (courierSignatureIdx !== -1) {
+            updateObj["courierSignature"] = rowCourier + " (توقيع تصفية المرتجع الميداني ✍️)";
+          }
+        } else if (oldStatus === "تسليم جزئي") {
+          nextStatus = "مرتجع جزئي بالمستودع";
+          if (courierSignatureIdx !== -1) {
+            updateObj["courierSignature"] = rowCourier + " (توقيع تصفية المرتجع الجزئي ✍️)";
+          }
+        } else if (oldStatus === "مؤجل") {
+          nextStatus = "مؤجل";
+        } else if (oldStatus === "تم التسليم" || oldStatus === "تم التسليم بنجاح" || oldStatus === "تم التسليم (ناجح كاش)") {
+          nextStatus = oldStatus;
+        } else {
+          nextStatus = "جديد";
+        }
+
+        updateObj["status"] = nextStatus;
+        updateObj["courier"] = "";
+        if (commissionIdx !== -1) updateObj["commission"] = 0;
+        if (updatedAtIdx !== -1) updateObj["updatedAt"] = nowCairoStr;
+
+        updateRowByObject(sheet, rowIndex, updateObj);
+
+        appendToSheet(sheets.statusHistory, ["tracking", "oldStatus", "newStatus", "updatedBy", "dateTime"], {
+          tracking: trackingVal,
+          oldStatus: oldStatus,
+          newStatus: nextStatus,
+          updatedBy: currentUser || "إدارة",
+          dateTime: nowCairoStr
+        });
+
+        settledCount++;
+      }
+    }
+
+    return { ok: true, settled: settledCount, msg: "تم سحب وتصفية " + settledCount + " شحنة للمستودع وتبرئة المندوب بنجاح ✓" };
+
+  } catch (e) {
+    return { ok: false, error: "خطأ في سكريبت جوجل شيت أثناء التسوية: " + e.toString() };
+  } finally {
+    lock.releaseLock();
+  }
 }

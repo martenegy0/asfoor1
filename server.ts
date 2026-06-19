@@ -656,11 +656,11 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
   });
 
   const paymentsValue = cashPayments.reduce((sum: number, l: any) => {
-    return sum - Number(l.amount || 0);
+    return sum + Math.abs(Number(l.amount || 0));
   }, 0);
 
   const reverseAdjustmentsValue = reverseAdjustments.reduce((sum: number, l: any) => {
-    return sum - Number(l.amount || 0);
+    return sum + Math.abs(Number(l.amount || 0));
   }, 0);
 
   // 5. Calculate outstanding balance: Outstanding = TotalGoodsUploaded - ReturnsDeliveredValue - paymentsValue - reverseAdjustmentsValue
@@ -973,19 +973,29 @@ function getCacheKey(payload: any): string {
   return JSON.stringify(keyObj);
 }
 
-async function fetchWithTimeout(url: string, options: any = {}, timeoutMs = 30000): Promise<any> {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, {
-      ...options,
-      signal: controller.signal
-    });
-    clearTimeout(id);
-    return response;
-  } catch (err) {
-    clearTimeout(id);
-    throw err;
+async function fetchWithTimeout(url: string, options: any = {}, timeoutMs = 30000, retries = 3): Promise<any> {
+  const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal
+      });
+      clearTimeout(id);
+      return response;
+    } catch (err: any) {
+      clearTimeout(id);
+      const isLastAttempt = attempt === retries;
+      const isAbort = err.name === 'AbortError';
+      console.warn(`[Proxy Fetch] Attempt ${attempt} failed for ${url} (Action: ${options.body ? JSON.parse(options.body).action : 'N/A'}): ${err.message || err}`);
+      if (isLastAttempt) {
+        throw err;
+      }
+      const waitTime = isAbort ? 1500 : 500 * attempt;
+      await delay(waitTime);
+    }
   }
 }
 
@@ -994,7 +1004,7 @@ async function executeProxyRequest(gscriptUrl: string, payload: any): Promise<an
     "addOrder", "addBulk", "updateStatus", "updateOrder", "deleteOrder", "bulkUpdate", "updateOrdersStatusBulk",
     "addSupplierPayment", "addCourierAdjustment", "addCashbox", "addExpense",
     "addUser", "registerUser", "updateUser", "addDailyClosing", "updateCourier",
-    "archiveOrder"
+    "archiveOrder", "settleCourierOrders"
   ].includes(payload.action);
 
   if (isWrite) {
@@ -1875,8 +1885,8 @@ app.post("/api", async (req: Request, res: Response) => {
       // ADD ORDER
       // ─────────────────────────────────────────────────────────────
       case "addOrder": {
-        // Create order: Allowed for Admin and Supplier only
-        if (currentRole !== "مدير" && currentRole !== "مورد") {
+        // Create order: Allowed for Admin, Supervisor, Operations, and Supplier
+        if (currentRole !== "مدير" && currentRole !== "مشرف" && currentRole !== "موظف عمليات" && currentRole !== "مورد") {
           return err(res, "ليس لديك صلاحية إضافة أوردرات");
         }
 
@@ -1988,7 +1998,7 @@ app.post("/api", async (req: Request, res: Response) => {
       // BULK UPLOAD EXCEL / CSV
       // ─────────────────────────────────────────────────────────────
       case "addBulk": {
-        if (!["مدير", "مشرف"].includes(currentRole) && !isSupplierRole(currentRole)) {
+        if (!["مدير", "مشرف", "موظف عمليات"].includes(currentRole) && !isSupplierRole(currentRole)) {
           return err(res, "ليس لديك صلاحية رفع طلبات جماعية");
         }
 
@@ -3109,7 +3119,16 @@ app.post("/api", async (req: Request, res: Response) => {
         } else {
           const registeredNames = (db.suppliers || []).map((s: any) => s.name).filter(Boolean);
           const orderNames = (db.orders || []).map((o: any) => getOrderSupplier(o)).filter(Boolean);
-          allSuppliers = Array.from(new Set([...registeredNames, ...orderNames]));
+          const combined = [...registeredNames, ...orderNames];
+          const seen = new Set<string>();
+          allSuppliers = [];
+          for (const name of combined) {
+            const norm = normalizeArabic(name);
+            if (!seen.has(norm)) {
+              seen.add(norm);
+              allSuppliers.push(name);
+            }
+          }
         }
 
         const accountsList = allSuppliers.map((supName: any) => {

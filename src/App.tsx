@@ -572,7 +572,7 @@ export default function App() {
   const showOpsRoomTab = role === "مدير";
   const showFinanceTabs = role === "مدير" || role === "محاسب";
   const showUsersTab = role === "مدير";
-  const showAddInputTab = role === "مدير" || isSupplierState;
+  const showAddInputTab = role === "مدير" || role === "مشرف" || role === "موظف عمليات" || isSupplierState;
   const showLedgerAccountingTab = isSupplierState || isAgentState || role === "مدير" || role === "محاسب";
   const showCouriersProfileTab = role === "مدير" || role === "محاسب" || role === "مشرف";
   const showSuppliersPageTab = role === "مدير" || role === "محاسب" || role === "مشرف";
