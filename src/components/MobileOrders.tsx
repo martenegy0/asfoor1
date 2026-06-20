@@ -172,6 +172,8 @@ interface MobileOrdersProps {
   toWAUrl: (phone: any, msg: string) => string;
   setReturnedSelectOpen: (val: boolean) => void;
   setSelectedReturnOrder: (val: any) => void;
+  setDeliveryChoiceOrder: (val: any) => void;
+  setPartialAmountInput: (val: string) => void;
 }
 
 export default function MobileOrders({
@@ -205,9 +207,13 @@ export default function MobileOrders({
   getOrderWAMessage,
   toWAUrl,
   setReturnedSelectOpen,
-  setSelectedReturnOrder
+  setSelectedReturnOrder,
+  setDeliveryChoiceOrder,
+  setPartialAmountInput
 }: MobileOrdersProps) {
   const [mobileDrawerOrder, setMobileDrawerOrder] = useState<any | null>(null);
+  const isSupplier = (role || "").toString().trim() === "مورد" || (role || "").toString().trim().includes("مورد");
+  const isReturnsOfficer = (role || "").toString().trim() === "مسؤول مرتجعات" || (role || "").toString().trim().includes("مرتجعات");
   const [barcodeScannerOpen, setBarcodeScannerOpen] = useState<boolean>(false);
   const [displayLimit, setDisplayLimit] = useState<number>(25);
   const [expandedOrder, setExpandedOrder] = useState<string | null>(null);
@@ -545,41 +551,67 @@ export default function MobileOrders({
                       </div>
 
                       {/* [تحديث الحالة المفتوحة] selection dropdown */}
-                      <div className="pt-2 bg-slate-950/40 p-2.5 rounded-xl border border-white/4 space-y-1">
-                        <label className="block text-[10px] text-slate-400 font-extrabold text-right">⚡ تحديث الحالة المفتوحة:</label>
-                        <select
-                          value={o.status}
-                          onChange={(e) => {
-                            const newStatus = e.target.value;
-                            if (newStatus === "مرتجع") {
-                              setSelectedReturnOrder(o);
-                              setReturnedSelectOpen(true);
-                            } else {
-                              triggerStatusUpdate(o.tracking, newStatus);
-                            }
-                          }}
-                          className="w-full bg-slate-950 text-amber-400 border border-white/8 rounded-lg px-2.5 py-2 text-xs font-black font-sans cursor-pointer focus:border-amber-500 focus:ring-1 focus:ring-amber-500/20 outline-none"
-                        >
-                          <option value="" disabled>اختر التحديث السريع...</option>
-                          <option value="تم التسليم">✅ تم التسليم والتحصيل</option>
-                          <option value="خارج مع المندوب">🚚 خارج للتوصيل</option>
-                          <option value="مرتجع">↩️ تسجيل كمرتجع</option>
-                          <option value="مؤجل">⏳ تأجيل الأوردر</option>
-                          <option value="لا يوجد رد">📵 لا يوجد رد</option>
-                          <option value="جديد">🔄 إرجاع إلى جديد</option>
-                        </select>
-                      </div>
+                      {isReturnsOfficer && (
+                        <div className="pt-2 bg-emerald-950/20 p-2.5 rounded-xl border border-emerald-500/20 space-y-1.5 text-right" dir="rtl">
+                          <div className="flex justify-between items-center pb-0.5">
+                            <span className="text-[10px] text-emerald-400 font-extrabold">🚨 إجراء حصري لمسؤول المرتجعات:</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (confirm(`هل أنت متأكد من تسليم هذا المرتجع للمورد (${o.supplier || "غير معروف"}) وتصفية حسابه الصافي التراكمي؟`)) {
+                                triggerStatusUpdate(o.tracking, "تم تسليمه للمورد");
+                              }
+                            }}
+                            className="w-full flex items-center justify-center gap-1.5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-slate-950 text-xs font-black rounded-lg cursor-pointer transition-colors"
+                          >
+                            <span>🤝 تم تسليم المرتجع للمورد</span>
+                          </button>
+                        </div>
+                      )}
 
-                      {/* Fallback Drawer Trigger */}
-                      <div className="flex justify-end pt-1">
-                        <button
-                          type="button"
-                          onClick={() => setMobileDrawerOrder(o)}
-                          className="text-[10px] text-slate-400 hover:text-white underline font-bold"
-                        >
-                          فتح لوحة العمليات الشاملة ⚙️
-                        </button>
-                      </div>
+                      {!isSupplier && (
+                        <>
+                          <div className="pt-2 bg-slate-950/40 p-2.5 rounded-xl border border-white/4 space-y-1">
+                            <label className="block text-[10px] text-slate-400 font-extrabold text-right">⚡ تحديث الحالة المفتوحة:</label>
+                            <select
+                              value={o.status}
+                              onChange={(e) => {
+                                const newStatus = e.target.value;
+                                if (newStatus === "مرتجع") {
+                                  setSelectedReturnOrder(o);
+                                  setReturnedSelectOpen(true);
+                                } else if (newStatus === "تم التسليم") {
+                                  setDeliveryChoiceOrder(o);
+                                  setPartialAmountInput("");
+                                } else {
+                                  triggerStatusUpdate(o.tracking, newStatus);
+                                }
+                              }}
+                              className="w-full bg-slate-950 text-amber-400 border border-white/8 rounded-lg px-2.5 py-2 text-xs font-black font-sans cursor-pointer focus:border-amber-500 focus:ring-1 focus:ring-amber-500/20 outline-none"
+                            >
+                              <option value="" disabled>اختر التحديث السريع...</option>
+                              <option value="تم التسليم">✅ تم التسليم والتحصيل</option>
+                              <option value="خارج مع المندوب">🚚 خارج للتوصيل</option>
+                              <option value="مرتجع">↩️ تسجيل كمرتجع</option>
+                              <option value="مؤجل">⏳ تأجيل الأوردر</option>
+                              <option value="لا يوجد رد">📵 لا يوجد رد</option>
+                              <option value="جديد">🔄 إرجاع إلى جديد</option>
+                            </select>
+                          </div>
+
+                          {/* Fallback Drawer Trigger */}
+                          <div className="flex justify-end pt-1">
+                            <button
+                              type="button"
+                              onClick={() => setMobileDrawerOrder(o)}
+                              className="text-[10px] text-slate-400 hover:text-white underline font-bold"
+                            >
+                              فتح لوحة العمليات الشاملة ⚙️
+                            </button>
+                          </div>
+                        </>
+                      )}
                     </div>
                   )}
                 </div>
@@ -663,7 +695,8 @@ export default function MobileOrders({
                   
                   <button
                     onClick={() => {
-                      triggerStatusUpdate(mobileDrawerOrder.tracking, "تم التسليم");
+                      setDeliveryChoiceOrder(mobileDrawerOrder);
+                      setPartialAmountInput("");
                       setMobileDrawerOrder(null);
                     }}
                     className="py-2.5 bg-emerald-600 hover:bg-emerald-700 text-slate-950 font-black text-xs rounded-xl cursor-pointer text-center"

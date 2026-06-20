@@ -200,7 +200,19 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       return !isS;
     });
 
-    if (isAgent || isReturnsOfficer || isOps) {
+    if (isReturnsOfficer) {
+      return orders.filter((o: any) => {
+        const isHandedOver = ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status);
+        if (isHandedOver) {
+          const updateDateYMD = o.updatedAt ? normalizeDateToYMD(o.updatedAt) : o.retDate ? normalizeDateToYMD(o.retDate) : "";
+          return updateDateYMD === todayDateStr;
+        }
+        const isTargetStatus = ["مرتجع بالمستودع", "تسليم جزئي", "مرتجع", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "جاري الرجوع للمورد"].includes(o.status);
+        return isTargetStatus;
+      });
+    }
+
+    if (isAgent || isOps) {
       return activeUnsettledOrders.filter((o: any) => {
         const orderDateYMD = normalizeDateToYMD(o.orderDate || o.createdAt);
         const updateDateYMD = o.updatedAt ? normalizeDateToYMD(o.updatedAt) : "";
@@ -465,7 +477,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
         } else if (isSupplier) {
           if (!o.supplier || o.supplier.toString().trim().toLowerCase() !== username.trim().toLowerCase()) return false;
         } else if (isReturnsOfficer) {
-          const isRet = ["مرتجع", "التسليم للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع بالمستودع"].includes(o.status) || o.returnQueueStatus;
+          const isRet = ["مرتجع", "التسليم للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد", "تم تسليمه للمورد", "مرتجع بالمستودع", "تسليم جزئي"].includes(o.status) || o.returnQueueStatus;
           if (!isRet) return false;
         }
 
@@ -1692,6 +1704,26 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                   <span className="text-xs font-black">الدورة المستندية والخطوات اللوجستية للمرتجع:</span>
                 </div>
                 
+                {/* Exclusive returns clerk action button */}
+                <div className="bg-emerald-950/20 border border-emerald-500/20 p-2.5 rounded-lg space-y-1.5 text-right">
+                  <div className="flex justify-between items-center">
+                    <span className="text-[10px] text-emerald-400 font-extrabold">🚨 إجراء حصري لمسؤول المرتجعات:</span>
+                    <span className="text-[9px] text-emerald-500 font-medium">(خروج من العهدة تصفية تامة)</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (confirm(`هل أنت متأكد من تسليم هذا المرتجع للمورد (${o.supplier || "غير معروف"}) وتصفية حسابه الصافي التراكمي؟`)) {
+                        triggerStatusUpdate(o.tracking, "تم تسليمه للمورد");
+                      }
+                    }}
+                    disabled={pendingTrackings.has(o.tracking)}
+                    className="w-full flex items-center justify-center gap-2 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 text-xs font-black rounded-lg cursor-pointer transition-colors"
+                  >
+                    <span>🤝 تم تسليم المرتجع للمورد</span>
+                  </button>
+                </div>
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <div className="flex flex-col gap-1">
                     <span className="text-[10px] text-slate-400 font-bold">ملاحظات ووصاية المرتجع:</span>
@@ -1921,6 +1953,8 @@ export default function Orders({ token, role, username, orders, setOrders, couri
         toWAUrl={toWAUrl}
         setReturnedSelectOpen={setReturnedSelectOpen}
         setSelectedReturnOrder={setSelectedReturnOrder}
+        setDeliveryChoiceOrder={setDeliveryChoiceOrder}
+        setPartialAmountInput={setPartialAmountInput}
       />
 
       {/* 🖥️ Desktop Interface (visible on hidden md:block) */}
@@ -3071,6 +3105,26 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                           <span className="text-xs font-black">الدورة المستندية والخطوات اللوجستية للمرتجع:</span>
                         </div>
                         
+                        {/* Exclusive returns clerk action button */}
+                        <div className="bg-emerald-950/20 border border-emerald-500/20 p-2.5 rounded-lg space-y-1.5 text-right">
+                          <div className="flex justify-between items-center">
+                            <span className="text-[10px] text-emerald-400 font-extrabold">🚨 إجراء حصري لمسؤول المرتجعات:</span>
+                            <span className="text-[9px] text-emerald-500 font-medium">(خروج من العهدة تصفية تامة)</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (confirm(`هل أنت متأكد من تسليم هذا المرتجع للمورد (${o.supplier || "غير معروف"}) وتصفية حسابه الصافي التراكمي؟`)) {
+                                triggerStatusUpdate(o.tracking, "تم تسليمه للمورد");
+                              }
+                            }}
+                            disabled={pendingTrackings.has(o.tracking)}
+                            className="w-full flex items-center justify-center gap-2 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 text-xs font-black rounded-lg cursor-pointer transition-colors"
+                          >
+                            <span>🤝 تم تسليم المرتجع للمورد</span>
+                          </button>
+                        </div>
+
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                           <div className="flex flex-col gap-1">
                             <span className="text-[10px] text-slate-400 font-bold">ملاحظات ووصاية المرتجع:</span>
@@ -3157,7 +3211,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       </div>
 
       {/* --- MODAL 1: RETURN SHIPPING SELECTION POPUP (Third Point Fix!) --- */}
-      {returnedSelectOpen && selectedReturnOrder && (
+      {returnedSelectOpen && selectedReturnOrder && !isSupplier && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end md:items-center justify-center p-4">
           <div className="bg-slate-900 border border-white/8 p-6 rounded-t-2xl md:rounded-2xl w-full max-w-[420px] text-right space-y-4">
             <h3 className="text-sm font-black text-rose-450 border-b border-white/6 pb-2">
@@ -3442,7 +3496,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       )}
 
       {/* --- MODAL 5: NEW ENHANCED COURIER DELIVERED FLOW (FULL OR PARTIAL DELIVERY) --- */}
-      {deliveryChoiceOrder && (
+      {deliveryChoiceOrder && !isSupplier && (
         <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-50 flex items-center justify-center p-4 animate-fadeIn" dir="rtl">
           <div className="bg-slate-900 border border-emerald-500/30 p-6 rounded-2xl w-full max-w-[460px] text-right space-y-5 shadow-2xl relative">
             <button

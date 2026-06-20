@@ -253,9 +253,9 @@ export default function OpsRoom({ token, role, username, orders, couriers, onRef
             filteredCouriers.map(c => {
               const riderOrders = getCourierDailyOrders(c.name, selectedDate);
               const totalCount = riderOrders.length;
-              const deliveredCount = riderOrders.filter(o => o.status === "تم التسليم").length;
-              const returnedCount = riderOrders.filter(o => ["مرتجع", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "التسليم للمورد"].includes(o.status)).length;
-              const activeCount = riderOrders.filter(o => ["خارج مع المندوب", "تم الإسناد"].includes(o.status)).length;
+              const deliveredCount = riderOrders.filter(o => ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي"].includes(o.status)).length;
+              const returnedCount = riderOrders.filter(o => ["مرتجع", "مرتجع جديد", "مرتجع بالمستودع", "تم تسليم المرتجع للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "جاري الرجوع للمورد", "التسليم للمورد", "تم تسليمه للمورد", "مرتجع تم تسليمه للمورد", "مرتجع والعميل دفع الشحن"].includes(o.status)).length;
+              const activeCount = riderOrders.filter(o => ["خارج مع المندوب", "تم الإسناد", "مسند", "تم الاسناد", "العميل رد وجاري التسليم", "تم رد العميل وجاري التنسيق", "خارج للتسليم", "خارج للتوصيل", "مع المندوب"].includes(o.status)).length;
               
               const productsValue = riderOrders.reduce((sum, o) => {
                 return sum + (Number(o.totalCOD || 0) || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0)));
@@ -296,7 +296,7 @@ export default function OpsRoom({ token, role, username, orders, couriers, onRef
                         <div className="bg-slate-900/40 p-1.5 rounded border border-white/2">
                           <div className="text-[8px] font-bold text-amber-500">📋 مسند</div>
                           <div className="text-[11px] font-mono font-black text-slate-200 mt-0.5">
-                            {riderOrders.filter(o => ["تم الإسناد", "مسند", "تم الاسناد"].includes(o.status)).length}
+                            {riderOrders.filter(o => ["تم الإسناد", "مسند", "تم الاسناد", "العميل رد وجاري التسليم", "تم رد العميل وجاري التنسيق"].includes(o.status)).length}
                           </div>
                         </div>
                         <div className="bg-slate-900/40 p-1.5 rounded border border-white/2">
@@ -320,13 +320,13 @@ export default function OpsRoom({ token, role, username, orders, couriers, onRef
                         <div className="bg-slate-900/40 p-1.5 rounded border border-white/2">
                           <div className="text-[8px] font-bold text-indigo-400">⏳ مؤجل</div>
                           <div className="text-[11px] font-mono font-black text-slate-200 mt-0.5">
-                            {riderOrders.filter(o => o.status === "مؤجل").length}
+                            {riderOrders.filter(o => ["مؤجل", "مؤجل بالمستودع"].includes(o.status)).length}
                           </div>
                         </div>
                         <div className="bg-slate-900/40 p-1.5 rounded border border-white/2">
                           <div className="text-[8px] font-bold text-rose-550">📵 لا يرد</div>
                           <div className="text-[11px] font-mono font-black text-slate-200 mt-0.5">
-                            {riderOrders.filter(o => ["لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)).length}
+                            {riderOrders.filter(o => ["لا يوجد رد", "العميل لم يقم بالرد", "العميل لا يرد", "لا يوجد رد بالمستودع"].includes(o.status)).length}
                           </div>
                         </div>
                         <div className="bg-amber-950/20 p-1.5 rounded border border-amber-500/10">

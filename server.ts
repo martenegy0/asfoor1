@@ -1549,17 +1549,9 @@ app.post("/api", async (req: Request, res: Response) => {
               // Keep status exactly as is
             }
 
-            // Apply settlement flags for delivered or partial delivery orders
-            const isSuccessfullyClosed = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي"].includes(oldStatus);
-            if (isSuccessfullyClosed) {
-              order.isSettled = true;
-              order.is_settled = "true";
-              // Protect courier and commission so they are preserved for cumulative earnings reporting
-            } else {
-              // Complete returns, delays or no answers: clear courier to place orders back on shelves for re-assignment
-              order.courier = "";
-              order.commission = 0;
-            }
+            // Protect courier and commission completely so they are preserved for cumulative reporting and archive tracking
+            order.isSettled = true;
+            order.is_settled = "true";
             order.updatedAt = nowCairoStr;
 
             if (!db.statusHistory) db.statusHistory = [];
@@ -2264,8 +2256,9 @@ app.post("/api", async (req: Request, res: Response) => {
       // UPDATE ORDER STATUS (Workflow Controls)
       // ─────────────────────────────────────────────────────────────
       case "updateStatus": {
-        const { tracking, status, returnShippingType, notes, delivDate, partialAmount, customerConfirmed } = d;
-        if (!tracking || !status) return err(res, "معاملات مفقودة");
+        const { tracking, status: rawStatus, returnShippingType, notes, delivDate, partialAmount, customerConfirmed } = d;
+        if (!tracking || !rawStatus) return err(res, "معاملات مفقودة");
+        let status = rawStatus;
 
         const sc = tracking.toString().trim().toUpperCase();
         const order = db.orders.find((o: any) => {
@@ -2325,10 +2318,14 @@ app.post("/api", async (req: Request, res: Response) => {
 
         // Returns Officer Control
         if (isReturnsOfficer) {
-          const returnsOfficerAllowed = ["مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد", "جاري الرجوع للمورد", "جديد"];
+          const returnsOfficerAllowed = ["مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد", "تم تسليمه للمورد", "جاري الرجوع للمورد", "جديد"];
           if (!returnsOfficerAllowed.includes(status)) {
             return err(res, "مسؤول المرتجعات يمكنه فقط تعيين حالات المرتجعات وتحديث مسارها");
           }
+        }
+
+        if (status === "تم تسليمه للمورد") {
+          status = "تم تسليم المرتجع للمورد";
         }
 
         // Handle Return Logic (مرتجع)
@@ -2750,10 +2747,11 @@ app.post("/api", async (req: Request, res: Response) => {
         if (status === "تم التسليم بنجاح") status = "تم التسليم";
         if (status === "مؤجل بناءً على طلب العميل") status = "مؤجل";
         if (status === "تم تسليم المرتجع للمورد وتصفية حسابه") status = "تم تسليم المرتجع للمورد";
+        if (status === "تم تسليمه للمورد") status = "تم تسليم المرتجع للمورد";
 
         // Enforce role-based allowed status boundaries
         if (currentRole === "مسؤول مرتجعات") {
-          const returnsOfficerAllowed = ["مرتجع جديد", "مرتجع جاري تسليمه للمكتب", "جاري الرجوع للمورد", "تم تسليم المرتجع للمورد", "جديد"];
+          const returnsOfficerAllowed = ["مرتجع جديد", "مرتجع جاري تسليمه للمكتب", "جاري الرجوع للمورد", "تم تسليم المرتجع للمورد", "تم تسليمه للمورد", "جديد"];
           if (status && !returnsOfficerAllowed.includes(status)) {
             return err(res, "Unauthorized Action: مسؤول المرتجعات يمتلك صلاحية تعديل حالات المرتجعات المكتبية فقط");
           }
@@ -3391,17 +3389,9 @@ app.post("/api", async (req: Request, res: Response) => {
               // Keep status exactly as is
             }
 
-            // Apply settlement flags for delivered or partial delivery orders
-            const isSuccessfullyClosed = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي"].includes(oldStatus);
-            if (isSuccessfullyClosed) {
-              order.isSettled = true;
-              order.is_settled = "true";
-              // Protect courier and commission so they are preserved for cumulative earnings reporting
-            } else {
-              // Complete returns, delays or no answers: clear courier to place orders back on shelves for re-assignment
-              order.courier = "";
-              order.commission = 0;
-            }
+            // Protect courier and commission completely so they are preserved for cumulative reporting and archive tracking
+            order.isSettled = true;
+            order.is_settled = "true";
             order.updatedAt = nowCairoStr;
             
             if (!db.statusHistory) db.statusHistory = [];
