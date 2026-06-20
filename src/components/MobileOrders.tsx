@@ -212,6 +212,13 @@ export default function MobileOrders({
   const [displayLimit, setDisplayLimit] = useState<number>(25);
   const [expandedOrder, setExpandedOrder] = useState<string | null>(null);
 
+  useEffect(() => {
+    // Automatically lift restricted date filters on mobile to guarantee immediate, complete active orders loading without manual search
+    if (selectedDate !== "all") {
+      setSelectedDate("all");
+    }
+  }, []);
+
   const toggleSelect = (tracking: string) => {
     setSelected((prev) => {
       const next = new Set(prev);

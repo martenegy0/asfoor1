@@ -471,27 +471,6 @@ export default function Orders({ token, role, username, orders, setOrders, couri
 
         const hasSearch = !!search.trim();
 
-        if (hasSearch) {
-          const q = search.toLowerCase().trim();
-          return [
-            o.tracking,
-            o.supplier,
-            o.courier,
-            o.customer,
-            o.phone,
-            o.phone2,
-            o.gov,
-            o.region,
-            o.address,
-            o.notes,
-            o.status,
-            o.returnQueueStatus
-          ]
-            .join(" ")
-            .toLowerCase()
-            .includes(q);
-        }
-
         // Exclude delayed / unanswered hold-ups from the main "all" (الكل) tab list globally (do not hide from courier)
         if (!isAgent && activeFilter === "all" && ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)) {
           return false;
