@@ -1002,6 +1002,21 @@ async function fetchWithTimeout(url: string, options: any = {}, timeoutMs = 3000
   }
 }
 
+async function parseResponseJson(response: any, actionName: string): Promise<any> {
+  const text = await response.text();
+  const trimmed = text.trim();
+  if (trimmed.startsWith("<!DOCTYPE") || trimmed.startsWith("<html") || trimmed.startsWith("<htm")) {
+    console.warn(`[Proxy Fetch Error] Received HTML instead of JSON for action (${actionName}). Sample content: ${trimmed.substring(0, 150)}`);
+    throw new Error(`خادم جوجل شيتس أرجع صفحة ويب HTML بدلاً من JSON (قد يكون بسبب خطأ بالسكريبت أو انتهاء صلاحيات الخادم أو مشكلة بالصلاحيات).`);
+  }
+  try {
+    return JSON.parse(trimmed);
+  } catch (parseErr: any) {
+    console.warn(`[Proxy Fetch Error] Parse failure for action (${actionName}):`, trimmed.substring(0, 150));
+    throw new Error(`فشل تحليل استجابة جوجل شيت كـ JSON: ${parseErr.message}`);
+  }
+}
+
 async function executeProxyRequest(gscriptUrl: string, payload: any): Promise<any> {
   const isWrite = [
     "addOrder", "addBulk", "updateStatus", "updateOrder", "deleteOrder", "bulkUpdate", "updateOrdersStatusBulk",
@@ -1019,7 +1034,7 @@ async function executeProxyRequest(gscriptUrl: string, payload: any): Promise<an
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
-    return await response.json();
+    return await parseResponseJson(response, payload.action);
   }
 
   const cacheKey = getCacheKey(payload);
@@ -1039,10 +1054,10 @@ async function executeProxyRequest(gscriptUrl: string, payload: any): Promise<an
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload)
           });
-          const freshData = await response.json();
+          const freshData = await parseResponseJson(response, payload.action);
           READ_CACHE.set(cacheKey, { data: freshData, timestamp: Date.now() });
         } catch (bgErr) {
-          console.error("Background cache refresh failed for:", payload.action, bgErr);
+          console.warn("Background cache refresh skipped/failed for:", payload.action, bgErr instanceof Error ? bgErr.message : bgErr);
         }
       })();
       // Do not await the background promise: let it complete in the background!
@@ -1066,7 +1081,7 @@ async function executeProxyRequest(gscriptUrl: string, payload: any): Promise<an
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
-      const data = await response.json();
+      const data = await parseResponseJson(response, payload.action);
       READ_CACHE.set(cacheKey, { data, timestamp: Date.now() });
       return data;
     } catch (err) {
@@ -1107,7 +1122,7 @@ app.post("/api", async (req: Request, res: Response) => {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ action: "getUsers", token: "14014" })
           });
-          const resData = await response.json();
+          const resData = await parseResponseJson(response, "getUsers");
           if (resData.ok && resData.users) {
             let user = resData.users.find(
               (u: any) => u.name?.toString().trim() === name.trim() && u.pass?.toString().trim() === pass.trim()
