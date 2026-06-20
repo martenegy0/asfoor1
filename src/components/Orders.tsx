@@ -500,16 +500,16 @@ export default function Orders({ token, role, username, orders, setOrders, couri
           const status = (o.status || "").toString().trim();
           if (activeFilter === "جديد" && status !== "جديد") return false;
           if (activeFilter === "مسند" && !["تم الإسناد", "مسند", "تم الاسناد"].includes(status)) return false;
-          if (activeFilter === "خارج للتسليم" && !["خارج مع المندوب", "خارج للتسليم", "خارج للتوصيل", "مع المندوب"].includes(status)) return false;
-          if (activeFilter === "تم التسليم" && !["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي", "تسليم جزئي - معلق للجرد"].includes(status)) return false;
-          if (activeFilter === "العميل رد وجاري التسليم" && !["تم رد العميل وجاري التنسيق", "العميل رد وجاري التسليم", "تم رد العميل وجاري التنسيق"].includes(status) && !status.includes("رد وجاري")) return false;
-          if (activeFilter === "مرتجع بالمستودع" && !["مرتجع بالمستودع", "مرتجع", "مرتجع جديد", "مرتجع جاري تسليمه للمكتب"].includes(status)) return false;
-          if (activeFilter === "تم تسليم المرتجع للمورد" && !["تم تسليم المرتجع للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "جاري الرجوع للمورد"].includes(status)) return false;
+          if (activeFilter === "العميل رد وجاري التسليم" && !["تم رد العميل وجاري التنسيق", "العميل رد وجاري التسليم"].includes(status) && !status.includes("رد وجاري")) return false;
+          if (activeFilter === "تم التسليم" && !["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(status)) return false;
+          if (activeFilter === "تسليم جزئي" && !["تسليم جزئي", "تسليم جزئي - معلق للجرد"].includes(status)) return false;
           if (activeFilter === "مؤجل" && status !== "مؤجل") return false;
-          if (activeFilter === "لا يوجد رد" && !["لا يوجد رد", "العميل لم يقم بالرد"].includes(status)) return false;
+          if (activeFilter === "العميل لا يرد" && !["لا يوجد رد", "العميل لم يقم بالرد", "العميل لا يرد"].includes(status)) return false;
+          if (activeFilter === "مرتجع بالمستودع" && !["مرتجع بالمستودع", "مرتجع", "مرتجع جديد", "مرتجع جاري تسليمه للمكتب"].includes(status)) return false;
+          if (activeFilter === "تم تسليمه للمورد" && !["تم تسليم المرتجع للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "جاري الرجوع للمورد", "التسليم للمورد", "تم تسليمه للمورد"].includes(status)) return false;
           
           // Non-standard fallback filter matching
-          if (!["جديد", "مسند", "خارج للتسليم", "تم التسليم", "العميل رد وجاري التسليم", "مرتجع بالمستودع", "تم تسليم المرتجع للمورد", "مؤجل", "لا يوجد رد"].includes(activeFilter)) {
+          if (!["جديد", "مسند", "العميل رد وجاري التسليم", "تم التسليم", "تسليم جزئي", "مؤجل", "العميل لا يرد", "مرتجع بالمستودع", "تم تسليمه للمورد"].includes(activeFilter)) {
             if (status !== activeFilter) return false;
           }
         }
@@ -603,26 +603,26 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       all: dayOrders.length,
       "جديد": 0,
       "مسند": 0,
-      "خارج للتسليم": 0,
-      "تم التسليم": 0,
       "العميل رد وجاري التسليم": 0,
-      "مرتجع بالمستودع": 0,
-      "تم تسليم المرتجع للمورد": 0,
+      "تم التسليم": 0,
+      "تسليم جزئي": 0,
       "مؤجل": 0,
-      "لا يوجد رد": 0
+      "العميل لا يرد": 0,
+      "مرتجع بالمستودع": 0,
+      "تم تسليمه للمورد": 0
     };
 
     dayOrders.forEach((o) => {
       const status = (o.status || "").toString().trim();
       if (status === "جديد") counts["جديد"]++;
       else if (["تم الإسناد", "مسند", "تم الاسناد"].includes(status)) counts["مسند"]++;
-      else if (["خارج مع المندوب", "خارج للتسليم", "خارج للتوصيل", "مع المندوب"].includes(status)) counts["خارج للتسليم"]++;
-      else if (["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي"].includes(status)) counts["تم التسليم"]++;
       else if (["تم رد العميل وجاري التنسيق", "العميل رد وجاري التسليم"].includes(status) || status.includes("رد وجاري")) counts["العميل رد وجاري التسليم"]++;
-      else if (["مرتجع بالمستودع", "مرتجع", "مرتجع جديد", "مرتجع جاري تسليمه للمكتب"].includes(status)) counts["مرتجع بالمستودع"]++;
-      else if (["تم تسليم المرتجع للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "جاري الرجوع للمورد", "التسليم للمورد"].includes(status)) counts["تم تسليم المرتجع للمورد"]++;
+      else if (["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(status)) counts["تم التسليم"]++;
+      else if (["تسليم جزئي", "تسليم جزئي - معلق للجرد"].includes(status)) counts["تسليم جزئي"]++;
       else if (status === "مؤجل") counts["مؤجل"]++;
-      else if (["لا يوجد رد", "العميل لم يقم بالرد"].includes(status)) counts["لا يوجد رد"]++;
+      else if (["لا يوجد رد", "العميل لم يقم بالرد", "العميل لا يرد"].includes(status)) counts["العميل لا يرد"]++;
+      else if (["مرتجع بالمستودع", "مرتجع", "مرتجع جديد", "مرتجع جاري تسليمه للمكتب"].includes(status)) counts["مرتجع بالمستودع"]++;
+      else if (["تم تسليم المرتجع للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "جاري الرجوع للمورد", "التسليم للمورد", "تم تسليمه للمورد"].includes(status)) counts["تم تسليمه للمورد"]++;
     });
 
     return counts;
@@ -2066,13 +2066,13 @@ export default function Orders({ token, role, username, orders, setOrders, couri
           { key: "all", label: "الكل" },
           { key: "جديد", label: "🆕 جديد" },
           { key: "مسند", label: "📋 مسند" },
-          { key: "خارج للتسليم", label: "🚚 خارج للتسليم" },
-          { key: "تم التسليم", label: "✅ تم التسليم" },
           { key: "العميل رد وجاري التسليم", label: "📞 لرد وجاري" },
-          { key: "مرتجع بالمستودع", label: "📦 بالمنشأ/المكتب" },
-          { key: "تم تسليم المرتجع للمورد", label: "↩ تسليم للمورد" },
+          { key: "تم التسليم", label: "✅ تم التسليم" },
+          { key: "تسليم جزئي", label: "📦 تسليم جزئي" },
           { key: "مؤجل", label: "⏳ مؤجل" },
-          { key: "لا يوجد رد", label: "📵 لا يوجد رد" }
+          { key: "العميل لا يرد", label: "📵 العميل لا يرد" },
+          { key: "مرتجع بالمستودع", label: "📦 بالمنشأ/المكتب" },
+          { key: "تم تسليمه للمورد", label: "↩️ تسليم للمورد" }
         ].map((f) => (
           <button
             key={f.key}

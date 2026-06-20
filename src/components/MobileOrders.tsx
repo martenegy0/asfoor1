@@ -326,12 +326,13 @@ export default function MobileOrders({
               { key: "all", label: "الكل" },
               { key: "جديد", label: "🆕 جديد" },
               { key: "مسند", label: "📋 مسند" },
-              { key: "خارج للتسليم", label: "🚚 خارج للتسليم" },
+              { key: "العميل رد وجاري التسليم", label: "📞 لرد وجاري" },
               { key: "تم التسليم", label: "✅ تم التسليم" },
-              { key: "مرتجع بالمستودع", label: "📦 بالمنشأ/المكتب" },
-              { key: "تم تسليم المرتجع للمورد", label: "↩ تسليم للمورد" },
+              { key: "تسليم جزئي", label: "📦 تسليم جزئي" },
               { key: "مؤجل", label: "⏳ مؤجل" },
-              { key: "لا يوجد رد", label: "📵 لا يرد" }
+              { key: "العميل لا يرد", label: "📵 العميل لا يرد" },
+              { key: "مرتجع بالمستودع", label: "📦 بالمنشأ/المكتب" },
+              { key: "تم تسليمه للمورد", label: "↩️ تسليم للمورد" }
             ];
             
             const filterWithCounts = rawFilters.map(f => ({
@@ -429,62 +430,46 @@ export default function MobileOrders({
                 cardBgClass = "bg-emerald-950/10";
               } else if (statusType.includes("مرتجع")) {
                 cardBorderStyle = "border-r-4 border-r-red-500";
-                cardBgClass = "bg-red-950/15";
-              } else if (statusType === "جديد") {
-                cardBorderStyle = "border-r-4 border-r-blue-500";
-                cardBgClass = "bg-blue-950/10";
               }
 
               return (
                 <div
                   key={o.tracking}
                   onClick={() => setExpandedOrder(isExpanded ? null : o.tracking)}
-                  className={`border rounded-xl p-3.5 transition-all cursor-pointer ${cardBgClass} ${cardBorderStyle} ${
-                    isSel ? "ring-1 ring-amber-500 border-amber-500" : "border-white/6"
-                  } hover:border-amber-500/30`}
+                  className={`border ${cardBorderStyle} ${cardBgClass} rounded-2xl p-3.5 transition-all duration-200 cursor-pointer text-right flex flex-col gap-2.5 hover:border-amber-500/30 relative overflow-hidden`}
                   id={`mobile_order_card_${o.tracking}`}
                 >
-                  {/* Closed representation / Outer Layout */}
-                  <div className="flex items-center justify-between pb-2 border-b border-white/4">
-                    <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-                      {canSelectBulk && (
-                        <input
-                          type="checkbox"
-                          checked={isSel}
-                          onChange={() => toggleSelect(o.tracking)}
-                          className="w-4 h-4 rounded border-white/10 bg-slate-950 text-amber-505 accent-amber-500 cursor-pointer"
-                        />
-                      )}
-                      <span className="text-xs font-black text-amber-500 font-mono">{o.tracking}</span>
+                  <div className="space-y-2">
+                    {/* First Line: tracking and customer name */}
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                        {canSelectBulk && (
+                          <input
+                            type="checkbox"
+                            checked={isSel}
+                            onChange={() => toggleSelect(o.tracking)}
+                            className="w-4.5 h-4.5 rounded border-white/10 bg-slate-950 text-amber-505 accent-amber-500 cursor-pointer"
+                          />
+                        )}
+                        <span className="text-sm font-black text-amber-500 font-mono tracking-tight">{o.tracking}</span>
+                        <span className="text-white/40 text-xs">|</span>
+                        <span className="text-sm font-black text-slate-100 truncate max-w-[140px] xs:max-w-[180px]">{o.customer || "بدون اسم عميل"}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className={`text-[9.5px] font-black px-2 py-0.5 rounded-full ${getBadgeStyle(o.status)}`}>
+                          {o.status}
+                        </span>
+                        {isExpanded ? <ChevronUp size={14} className="text-slate-400" /> : <ChevronDown size={14} className="text-slate-400" />}
+                      </div>
                     </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className={`text-[9.5px] font-bold px-2 py-0.5 rounded-full ${getBadgeStyle(o.status)}`}>
-                        {o.status}
-                      </span>
-                      {isExpanded ? <ChevronUp size={14} className="text-slate-400" /> : <ChevronDown size={14} className="text-slate-400" />}
-                    </div>
-                  </div>
 
-                  {/* High-density grid information (All required in the blueprint) */}
-                  <div className="grid grid-cols-2 gap-x-2 gap-y-1.5 py-2.5 text-[11px] text-slate-300">
-                    <div>
-                      <span className="text-[9px] text-slate-500 block font-bold">المورد</span>
-                      <span className="font-extrabold text-slate-200 truncate block">{o.supplier || "مورد عام"}</span>
-                    </div>
-                    <div>
-                      <span className="text-[9px] text-slate-500 block font-bold">المحافظة / المنطقة</span>
-                      <span className="font-black text-slate-100 truncate block">{o.gov} · {o.region}</span>
-                    </div>
-                    <div>
-                      <span className="text-[9px] text-slate-500 block font-bold">المندوب المسؤول</span>
-                      <span className="font-extrabold text-teal-400 truncate block">
-                        {o.courier ? `👤 ${o.courier}` : <span className="text-red-400 font-bold">لم يسند بعد ⚠️</span>}
-                      </span>
-                    </div>
-                    <div className="text-left font-mono">
-                      <span className="text-[9px] text-slate-500 block font-semibold">صافي الحساب بالجنيه</span>
-                      <span className="text-xs font-black text-emerald-400 text-left block">
-                        {(totalCODValue || 0).toLocaleString("ar")} ج.م
+                    {/* Second Line: supplier, region, price */}
+                    <div className="flex items-center justify-between text-xs text-slate-400 font-sans">
+                      <p className="truncate max-w-[180px] font-extrabold text-slate-350">
+                        🏢 {o.supplier || "مورد عام"} <span className="text-white/20">|</span> 📍 {o.gov} · {o.region}
+                      </p>
+                      <span className="font-mono text-emerald-400 font-black shrink-0 text-left">
+                        💰 {(totalCODValue || 0).toLocaleString("ar")} ج.م
                       </span>
                     </div>
                   </div>
