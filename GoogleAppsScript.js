@@ -2463,6 +2463,8 @@ function settleCourierOrders(sheets, d) {
     const lastCommissionIdx = headers.indexOf("lastCommission");
     const courierSignatureIdx = headers.indexOf("courierSignature");
     const updatedAtIdx = headers.indexOf("updatedAt");
+    const isSettledIdx = headers.indexOf("isSettled");
+    const is_settledIdx = headers.indexOf("is_settled");
 
     if (trackingIdx === -1 || courierIdx === -1 || statusIdx === -1) {
       return { ok: false, error: "فشل التحقق: حقول الورقة غير مكتملة" };
@@ -2513,8 +2515,14 @@ function settleCourierOrders(sheets, d) {
         }
 
         updateObj["status"] = nextStatus;
-        updateObj["courier"] = "";
-        if (commissionIdx !== -1) updateObj["commission"] = 0;
+        var isSuccessfullyClosed = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي"].indexOf(oldStatus) !== -1;
+        if (isSuccessfullyClosed) {
+          if (isSettledIdx !== -1) updateObj["isSettled"] = "true";
+          if (is_settledIdx !== -1) updateObj["is_settled"] = "true";
+        } else {
+          updateObj["courier"] = "";
+          if (commissionIdx !== -1) updateObj["commission"] = 0;
+        }
         if (updatedAtIdx !== -1) updateObj["updatedAt"] = nowCairoStr;
 
         updateRowByObject(sheet, rowIndex, updateObj);

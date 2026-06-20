@@ -549,6 +549,7 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
       stats: {
         totalOrdersCount: 0,
         totalGoodsUploaded: 0,
+        totalCOD: 0,
         deliveredOrdersCount: 0,
         deliveredOrdersValue: 0,
         returnsDeliveredCount: 0,
@@ -663,8 +664,9 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
     return sum + Math.abs(Number(l.amount || 0));
   }, 0);
 
-  // 5. Calculate outstanding balance: Outstanding = TotalGoodsUploaded - ReturnsDeliveredValue - paymentsValue - reverseAdjustmentsValue
-  const outstanding = totalGoodsUploaded - returnsDeliveredValue - paymentsValue - reverseAdjustmentsValue;
+  // 5. Calculate outstanding balance based on the approved formula: Net Balance = Total COD - Total Delivered back to Supplier - (Outgoing Cash Payments + Adjustments)
+  const totalCOD = supplierOrders.reduce((sum: number, o: any) => sum + getOrderFinancials(o).totalCOD, 0);
+  const outstanding = totalCOD - returnsDeliveredValue - (paymentsValue + reverseAdjustmentsValue);
 
   // Build the ledger entries list
   const entries: any[] = [];
@@ -741,6 +743,7 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
     stats: {
       totalOrdersCount,
       totalGoodsUploaded,
+      totalCOD,
       deliveredOrdersCount,
       deliveredOrdersValue,
       returnsDeliveredCount,
@@ -1532,13 +1535,16 @@ app.post("/api", async (req: Request, res: Response) => {
             }
 
             // Apply settlement flags for delivered or partial delivery orders
-            if (oldStatus === "تم التسليم" || oldStatus === "تم التسليم بنجاح" || oldStatus === "تم التسليم (ناجح كاش)" || oldStatus === "تسليم جزئي" || oldStatus === "تسليم جزئي - معلق للجرد") {
+            const isSuccessfullyClosed = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي"].includes(oldStatus);
+            if (isSuccessfullyClosed) {
               order.isSettled = true;
               order.is_settled = "true";
+              // Protect courier and commission so they are preserved for cumulative earnings reporting
+            } else {
+              // Complete returns, delays or no answers: clear courier to place orders back on shelves for re-assignment
+              order.courier = "";
+              order.commission = 0;
             }
-
-            order.courier = "";
-            order.commission = 0;
             order.updatedAt = nowCairoStr;
 
             if (!db.statusHistory) db.statusHistory = [];
@@ -1573,8 +1579,8 @@ app.post("/api", async (req: Request, res: Response) => {
           const resOrders = await executeProxyRequest(gscriptUrl, {
             action: "getOrders",
             token: "14014",
-            currentUser,
-            currentRole
+            currentUser: "SystemAdmin",
+            currentRole: "مدير"
           });
           if (resOrders && resOrders.ok === false) {
             return err(res, resOrders.error || "فشل سحب قائمة طلبات الموردين من سكريبت جوجل شيت");
@@ -1583,8 +1589,8 @@ app.post("/api", async (req: Request, res: Response) => {
           const resLedger = await executeProxyRequest(gscriptUrl, {
             action: "getSupplierLedger",
             token: "14014",
-            currentUser,
-            currentRole
+            currentUser: "SystemAdmin",
+            currentRole: "مدير"
           });
           if (resLedger && resLedger.ok === false) {
             return err(res, resLedger.error || "فشل سحب القيود المالية للموردين من سكريبت جوجل شيت");
@@ -1652,8 +1658,8 @@ app.post("/api", async (req: Request, res: Response) => {
               const resSuppliers = await executeProxyRequest(gscriptUrl, {
                 action: "getSuppliers",
                 token: "14014",
-                currentUser,
-                currentRole
+                currentUser: "SystemAdmin",
+                currentRole: "مدير"
               });
               if (resSuppliers && resSuppliers.ok === false) {
                 return err(res, resSuppliers.error || "فشل سحب كشف الموردين المسجلين من سكريبت جوجل شيت");
@@ -1668,7 +1674,7 @@ app.post("/api", async (req: Request, res: Response) => {
               const unified = getSupplierUnifiedLedger(mockDb, sup);
               return {
                 name: sup,
-                totalCOD: unified.stats.totalGoodsUploaded,
+                totalCOD: unified.stats.totalCOD,
                 returnsDelivered: unified.stats.returnsDeliveredValue,
                 adjustments: unified.stats.reverseAdjustmentsValue,
                 payments: unified.stats.paymentsValue,
@@ -3099,7 +3105,8 @@ app.post("/api", async (req: Request, res: Response) => {
           const oSupplier = getOrderSupplier(o);
           const oCourier = getOrderCourier(o);
 
-          const isClosed = ["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(oStatus);
+          const isSettled = o.isSettled === true || o.isSettled === "true" || o.is_settled === "true" || o.is_settled === true;
+          const isClosed = ["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(oStatus) || isSettled;
           const isAssigned = oCourier && oCourier !== "";
           if (isAssigned && !isClosed) {
             stats.assignedPending++;
@@ -3257,7 +3264,7 @@ app.post("/api", async (req: Request, res: Response) => {
           const unified = getSupplierUnifiedLedger(db, sup);
           return {
             name: sup,
-            totalCOD: unified.stats.totalGoodsUploaded,
+            totalCOD: unified.stats.totalCOD,
             returnsDelivered: unified.stats.returnsDeliveredValue,
             adjustments: unified.stats.reverseAdjustmentsValue,
             payments: unified.stats.paymentsValue,
@@ -3370,13 +3377,16 @@ app.post("/api", async (req: Request, res: Response) => {
             }
 
             // Apply settlement flags for delivered or partial delivery orders
-            if (oldStatus === "تم التسليم" || oldStatus === "تم التسليم بنجاح" || oldStatus === "تم التسليم (ناجح كاش)" || oldStatus === "تسليم جزئي" || oldStatus === "تسليم جزئي - معلق للجرد") {
+            const isSuccessfullyClosed = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي"].includes(oldStatus);
+            if (isSuccessfullyClosed) {
               order.isSettled = true;
               order.is_settled = "true";
+              // Protect courier and commission so they are preserved for cumulative earnings reporting
+            } else {
+              // Complete returns, delays or no answers: clear courier to place orders back on shelves for re-assignment
+              order.courier = "";
+              order.commission = 0;
             }
-
-            order.courier = "";
-            order.commission = 0;
             order.updatedAt = nowCairoStr;
             
             if (!db.statusHistory) db.statusHistory = [];

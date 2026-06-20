@@ -1,6 +1,7 @@
 import React, { useState, useRef } from "react";
 import { Search, MapPin, Phone, MessageSquare, Check, Truck, User, Calendar, Trash2, Edit3, ShieldAlert, ArrowLeftRight, Download, FileSpreadsheet, Upload, Loader2, XCircle } from "lucide-react";
 import { apiCall, toWA, toWAUrl, getOrderWAMessage, getTodayDateStr, normalizeDateToYMD } from "../utils";
+import MobileOrders from "./MobileOrders";
 
 interface OrdersProps {
   token: string;
@@ -230,6 +231,8 @@ export default function Orders({ token, role, username, orders, setOrders, couri
   const todayCommissions = todayDeliveredCount * rawCommission;
 
   const [search, setSearch] = useState("");
+  const [mobileDrawerOrder, setMobileDrawerOrder] = useState<any | null>(null);
+  const [barcodeScannerOpen, setBarcodeScannerOpen] = useState<boolean>(false);
   const [activeFilter, setActiveFilter] = useState("all");
   const [selectedDate, setSelectedDate] = useState<string>(getTodayDateStr());
   const [selectedSupplierFilter, setSelectedSupplierFilter] = useState<string>("");
@@ -1785,10 +1788,161 @@ export default function Orders({ token, role, username, orders, setOrders, couri
     );
   };
 
+  const renderCompactMobileCard = (o: any) => {
+    const isSel = selected.has(o.tracking);
+    const statusType = (o.status || "").toString();
+    const totalCODValue = o.totalCOD !== undefined ? o.totalCOD : (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
+
+    let cardBorderStyle = "border-slate-800";
+    let cardBgClass = "bg-slate-900/90";
+
+    if (statusType === "العميل رد وجاري التسليم") {
+      cardBorderStyle = "border-r-4 border-r-lime-400 border-lime-500/30";
+      cardBgClass = "bg-lime-950/15 border-lime-400/50 shadow-md";
+    } else if (statusType === "لا يوجد رد") {
+      cardBorderStyle = "border-r-4 border-r-rose-500 border-rose-500/30";
+      cardBgClass = "bg-rose-950/15 border-rose-600/50 animate-pulse";
+    } else if (o.customerConfirmed === "true" || o.customerConfirmed === true) {
+      cardBorderStyle = "border-r-4 border-r-emerald-500 border-emerald-500/30";
+      cardBgClass = "bg-emerald-950/15";
+    } else if (statusType === "تم التسليم" || statusType === "تسليم جزئي - معلق للجرد") {
+      cardBorderStyle = "border-r-4 border-r-emerald-500";
+      cardBgClass = "bg-emerald-950/10";
+    } else if (statusType.includes("مرتجع")) {
+      cardBorderStyle = "border-r-4 border-r-red-500";
+      cardBgClass = "bg-red-950/15";
+    } else if (statusType === "جديد") {
+      cardBorderStyle = "border-r-4 border-r-blue-500";
+      cardBgClass = "bg-blue-950/10";
+    }
+
+    return (
+      <div
+        key={o.tracking}
+        className={`border rounded-xl p-3.5 mb-3 transition-all ${cardBgClass} ${cardBorderStyle} ${
+          isSel ? "ring-1 ring-amber-500" : ""
+        }`}
+      >
+        <div className="flex items-center justify-between pb-2 border-b border-white/4">
+          <div className="flex items-center gap-1.5">
+            {canSelectBulk && (
+              <input
+                type="checkbox"
+                checked={isSel}
+                onChange={() => toggleSelect(o.tracking)}
+                className="w-3.5 h-3.5 rounded border-white/10 bg-slate-950 text-amber-500 accent-amber-500 cursor-pointer"
+              />
+            )}
+            <span className="text-xs font-black text-amber-500 font-mono">{o.tracking}</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className={`text-[9.5px] font-bold px-2 py-0.5 rounded-full ${getBadgeStyle(o.status)}`}>
+              {o.status}
+            </span>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-x-2 gap-y-1 py-1.5 text-[11px] text-slate-300">
+          <div>
+            <span className="text-[9px] text-slate-500 block">العميل</span>
+            <span className="font-extrabold text-slate-200">{o.customer || "مجهول الاسم"}</span>
+          </div>
+          <div>
+            <span className="text-[9px] text-slate-500 block">المحافظة / المنطقة</span>
+            <span className="font-black text-slate-100 truncate block">{o.gov} · {o.region}</span>
+          </div>
+          <div>
+            <span className="text-[9px] text-slate-500 block">المندوب</span>
+            <span className="font-bold text-indigo-400 truncate block">
+              {o.courier ? `👤 ${o.courier}` : <span className="text-red-400 font-bold">لم يسند ⚠️</span>}
+            </span>
+          </div>
+          <div className="text-left">
+            <span className="text-[9px] text-slate-500 block">الصافي المالي</span>
+            <span className="text-xs font-black text-emerald-402 text-emerald-400 font-mono">
+              {totalCODValue.toLocaleString("ar")} ج.م
+            </span>
+          </div>
+        </div>
+
+        <div className="border-t border-white/4 pt-1.5 flex items-center justify-between gap-1.5">
+          <div className="flex items-center gap-1">
+            {o.phone && (() => {
+              const rawPhone = o.phone.toString().trim();
+              const formattedPhone = rawPhone.startsWith('0') ? rawPhone : '0' + rawPhone;
+              return (
+                <>
+                  <a
+                    href={`tel:${formattedPhone}`}
+                    className="p-1.5 bg-slate-950 hover:bg-slate-850 text-blue-400 rounded-lg border border-white/6 flex items-center justify-center cursor-pointer"
+                  >
+                    <Phone size={11} />
+                  </a>
+                  <a
+                    href={toWAUrl(o.phone, getOrderWAMessage(o))}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="p-1.5 bg-slate-950 hover:bg-slate-850 text-emerald-400 rounded-lg border border-white/6 flex items-center justify-center cursor-pointer"
+                  >
+                    <MessageSquare size={11} />
+                  </a>
+                </>
+              );
+            })()}
+          </div>
+          
+          <button
+            onClick={() => setMobileDrawerOrder(o)}
+            className="px-3 py-1 bg-gradient-to-r from-amber-500 to-yellow-500 text-slate-950 font-black text-[10px] rounded-lg cursor-pointer flex items-center gap-0.5"
+          >
+            <span>🛠️ إجراء سريع</span>
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="font-sans text-right select-none space-y-4">
-      {/* Search and select buttons */}
-      <div className="flex bg-[#070d1a] px-4 py-3 border-b border-white/6 items-center flex-wrap gap-3">
+      {/* 📱 Mobile Interface (visible on block md:hidden) */}
+      <MobileOrders
+        orders={orders}
+        setOrders={setOrders || (() => {})}
+        token={token}
+        role={role}
+        isAdmin={isAdmin}
+        isSuper={isSuper}
+        isOps={isOps}
+        isAgent={isAgent}
+        canManage={canManage}
+        canSelectBulk={canSelectBulk}
+        canReconcile={canReconcile}
+        visibleOrders={visibleOrders}
+        statusCounts={statusCounts}
+        couriers={couriers}
+        search={search}
+        setSearch={setSearch}
+        activeFilter={activeFilter}
+        setActiveFilter={setActiveFilter}
+        selectedDate={selectedDate}
+        setSelectedDate={setSelectedDate}
+        selectedSupplierFilter={selectedSupplierFilter}
+        setSelectedSupplierFilter={setSelectedSupplierFilter}
+        triggerStatusUpdate={triggerStatusUpdate}
+        onRefresh={onRefresh}
+        selected={selected}
+        setSelected={setSelected}
+        getBadgeStyle={getBadgeStyle}
+        getOrderWAMessage={getOrderWAMessage}
+        toWAUrl={toWAUrl}
+        setReturnedSelectOpen={setReturnedSelectOpen}
+        setSelectedReturnOrder={setSelectedReturnOrder}
+      />
+
+      {/* 🖥️ Desktop Interface (visible on hidden md:block) */}
+      <div className="hidden md:block space-y-4">
+        {/* Search and select buttons */}
+        <div className="flex bg-[#070d1a] px-4 py-3 border-b border-white/6 items-center flex-wrap gap-3">
         <div className="relative flex-1 min-w-[200px]">
           <input
             type="text"
@@ -3016,6 +3170,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
           })}
         </div>
       )}
+      </div>
 
       {/* --- MODAL 1: RETURN SHIPPING SELECTION POPUP (Third Point Fix!) --- */}
       {returnedSelectOpen && selectedReturnOrder && (

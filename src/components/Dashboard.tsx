@@ -61,7 +61,7 @@ export default function Dashboard({
   const [settleSuccess, setSettleSuccess] = useState(false);
 
   // Drilldown Modal Statuses
-  const [activeDrilldown, setActiveDrilldown] = useState<"street" | "warehouse" | null>(null);
+  const [activeDrilldown, setActiveDrilldown] = useState<"street" | "warehouse" | "active_operational" | "supplier_returns" | null>(null);
   const [selectedCourierBag, setSelectedCourierBag] = useState<string | null>(null);
 
   // Fast Coordination Panel Statuses
@@ -112,7 +112,11 @@ export default function Dashboard({
         remainingStock: 0,
         remainingStockValue: 0,
         marketPendingCount: 0,
-        marketPendingValue: 0
+        marketPendingValue: 0,
+        activeOperationalStockCount: 0,
+        activeOperationalStockValue: 0,
+        supplierReturnStockCount: 0,
+        supplierReturnStockValue: 0
       };
 
       const courierStats: { [name: string]: { total: number; delivered: number; returned: number; cod: number } } = {};
@@ -132,12 +136,33 @@ export default function Dashboard({
           "مرتجع تم تسليمه للمورد",
           "التسليم للمورد",
           "تم تسليم المرتجع للمورد وتصفية حسابه",
-          "تسليم المرتجع للمورد",
-          "مرتجع بالمستودع",
-          "بالمستودع"
+          "تسليم المرتجع للمورد"
         ];
         const isHandedOverToSupplier = deliveredToSupplierPatterns.some(p => statusStr.includes(p));
         const isDelivered = statusStr === "تم التسليم" || statusStr === "تم التسليم بنجاح";
+
+        const isSettled = o.isSettled === true || o.isSettled === "true" || o.is_settled === "true" || o.is_settled === true;
+
+        // Active Operational Stock Calculation (جديد + مؤجل + العميل لا يرد)
+        const isNew = statusStr === "جديد";
+        const isDelayedInWh = ["مؤجل", "مؤجل بالمستودع", "مؤجل من المندوب", "مؤجل بناءً على طلب العميل", "Delayed"].includes(statusStr) || statusStr.startsWith("مؤجل") || statusStr.startsWith("Delayed");
+        const isNoAnswerInWh = ["لا يوجد رد", "العميل لا يرد", "No Answer", "العميل لم يقم بالرد", "لا يوجد رد بالمستودع"].includes(statusStr) || statusStr.includes("لا يرد") || statusStr.includes("لا يوجد رد") || statusStr.includes("عدم الرد") || statusStr.includes("غير متاح");
+        const isOperationalStock = isNew || isDelayedInWh || isNoAnswerInWh;
+
+        // Supplier Return Stock Calculation (مرتجع بالمستودع + مرتجع جزئي)
+        const isTotalReturnInWh = ["مرتجع بالمستودع", "مرتجع", "مرتجع جديد", "جاهز للتسليم للمورد", "جاري تجهيز المرتجع"].includes(statusStr) || (statusStr.includes("مرتجع") && !statusStr.includes("جزئي"));
+        const isPartialReturnInWh = ["مرتجع جزئي", "تسليم جزئي", "مرتجع جزئي بالمستودع", "تسليم جزئي بالمستودع", "تسليم جزئي - معلق للجرد"].includes(statusStr) || statusStr.includes("جزئي");
+        const isSupplierReturnStock = isTotalReturnInWh || isPartialReturnInWh;
+
+        if (isOperationalStock && !o.isArchived && statusStr !== "مؤرشف" && !o.isClosed && !isSettled) {
+          dStats.activeOperationalStockCount++;
+          dStats.activeOperationalStockValue += Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0)));
+        }
+
+        if (isSupplierReturnStock && !isHandedOverToSupplier && !o.isArchived && statusStr !== "مؤرشف" && !isSettled) {
+          dStats.supplierReturnStockCount++;
+          dStats.supplierReturnStockValue += Number(o.prodPrice || 0); // product net price
+        }
 
         // Warehouse stock metrics: not delivered to customer AND not returned to supplier/archived
         if (!isDelivered && !isHandedOverToSupplier && statusStr !== "مؤرشف" && !o.isArchived) {
@@ -305,7 +330,7 @@ export default function Dashboard({
     );
   }
 
-  const s = stats || { total: 0, todayTotal: 0, delivered: 0, returned: 0, pending: 0, active: 0, assignedPending: 0, totalCOD: 0, todayCOD: 0, profit: 0, rate: 0, remainingStock: 0, remainingStockValue: 0, marketPendingCount: 0, marketPendingValue: 0 };
+  const s = stats || { total: 0, todayTotal: 0, delivered: 0, returned: 0, pending: 0, active: 0, assignedPending: 0, totalCOD: 0, todayCOD: 0, profit: 0, rate: 0, remainingStock: 0, remainingStockValue: 0, marketPendingCount: 0, marketPendingValue: 0, activeOperationalStockCount: 0, activeOperationalStockValue: 0, supplierReturnStockCount: 0, supplierReturnStockValue: 0 };
 
   const getRateColor = (r: number) => {
     if (r >= 75) return "text-emerald-400 bg-emerald-950/20 border border-emerald-950/30";
@@ -441,6 +466,38 @@ export default function Dashboard({
     
     // Unassigned or returned to warehouse
     return !o.courier || ["جديد", "مرتجع بالمستودع", "مؤجل بالمستودع", "لا يوجد رد بالمستودع", "مرتجع جزئي بالمستودع"].includes(stat);
+  });
+
+  // 3. Active Operational Stock Orders List
+  const activeOperationalStockOrders = allOrders.filter(o => {
+    if (o.isClosed || o.isArchived) return false;
+    const isSettled = o.isSettled === true || o.isSettled === "true" || o.is_settled === "true" || o.is_settled === true;
+    if (isSettled) return false;
+    const stat = (o.status || "").toString().trim();
+    const isNew = stat === "جديد";
+    const isDelayedInWh = ["مؤجل", "مؤجل بالمستودع", "مؤجل من المندوب", "مؤجل بناءً على طلب العميل", "Delayed"].includes(stat) || stat.startsWith("مؤجل") || stat.startsWith("Delayed");
+    const isNoAnswerInWh = ["لا يوجد رد", "العميل لا يرد", "No Answer", "العميل لم يقم بالرد", "لا يوجد رد بالمستودع"].includes(stat) || stat.includes("لا يرد") || stat.includes("لا يوجد رد") || stat.includes("عدم الرد") || stat.includes("غير متاح");
+    return isNew || isDelayedInWh || isNoAnswerInWh;
+  });
+
+  // 4. Supplier Return Stock Orders List
+  const supplierReturnStockOrders = allOrders.filter(o => {
+    const isSettled = o.isSettled === true || o.isSettled === "true" || o.is_settled === "true" || o.is_settled === true;
+    if (isSettled) return false;
+    const stat = (o.status || "").toString().trim();
+    const deliveredToSupplierPatterns = [
+      "تم تسليم المرتجع للمورد",
+      "مرتجع تم تسليمه للمورد",
+      "التسليم للمورد",
+      "تم تسليم المرتجع للمورد وتصفية حسابه",
+      "تسليم المرتجع للمورد"
+    ];
+    const isHandedOverToSupplier = deliveredToSupplierPatterns.some(p => stat.includes(p));
+    if (isHandedOverToSupplier || stat === "مؤرشف" || o.isArchived) return false;
+
+    const isTotalReturnInWh = ["مرتجع بالمستودع", "مرتجع", "مرتجع جديد", "جاهز للتسليم للمورد", "جاري تجهيز المرتجع"].includes(stat) || (stat.includes("مرتجع") && !stat.includes("جزئي"));
+    const isPartialReturnInWh = ["مرتجع جزئي", "تسليم جزئي", "مرتجع جزئي بالمستودع", "تسليم جزئي بالمستودع", "تسليم جزئي - معلق للجرد"].includes(stat) || stat.includes("جزئي");
+    return isTotalReturnInWh || isPartialReturnInWh;
   });
 
   // -------------------------------------------------------------
@@ -598,7 +655,7 @@ export default function Dashboard({
           </div>
 
           {/* Interactive Metric Cards Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
             
             {/* Card 1: Today's Orders */}
             <div 
@@ -613,32 +670,61 @@ export default function Dashboard({
               <p className="text-[10px] text-slate-400 font-bold mt-1">إجمالي الحالات التي سُجلت بالمكتب والشارع اليوم</p>
             </div>
 
-            {/* Card 2: Remaining Warehouse Stock (Clickable!) */}
+            {/* Card 2a: Active Operational Stock */}
             <div 
-              id="card-warehouse-stock"
+              id="card-active-operational-stock"
               onClick={() => {
                 setModalSearch("");
-                setActiveDrilldown("warehouse");
+                setActiveDrilldown("active_operational");
               }}
               className="bg-slate-900 border border-white/5 hover:border-orange-500/30 rounded-2xl p-6 relative overflow-hidden flex flex-col justify-between min-h-[143px] transition-all cursor-pointer group hover:scale-[1.02] active:scale-95 duration-200 hover:shadow-xl hover:shadow-orange-950/5"
-              title="اضغط لتفقد قائمة البضائع بالمستودع وجردها"
+              title="اضغط لتفقد قائمة المخزون التشغيلي وجرده"
             >
               <div className="absolute top-2 left-2 text-orange-500/5 group-hover:text-orange-500/10 transition-colors">
                 <Package size={52} />
               </div>
               <div>
                 <div className="text-3xl font-black text-orange-500 font-mono flex items-baseline gap-1">
-                  <span>{s.remainingStock}</span> 
-                  <span className="text-xs font-bold text-slate-400">طلب</span>
+                  <span>{s.activeOperationalStockCount ?? 0}</span> 
+                  <span className="text-xs font-bold text-slate-450 text-slate-400">طلب</span>
                 </div>
-                <div className="text-[11px] font-black text-slate-200 mt-1 uppercase tracking-wider flex items-center gap-1">
-                  <span>المخزون المتبقي بالمستودع</span>
+                <div className="text-[11px] font-black text-slate-200 mt-1 uppercase tracking-wider flex items-center gap-1 font-sans">
+                  <span>المخزون التشغيلي للتشغيل</span>
                   <span className="text-[8px] px-1 bg-orange-950 text-orange-400 rounded">افحص 🔍</span>
                 </div>
               </div>
               <div className="border-t border-white/5 pt-2 mt-2 flex justify-between items-center">
-                <div className="text-[9px] font-extrabold text-slate-450 text-slate-400">القيمة الفورية للبضائع</div>
-                <div className="text-xs font-black text-emerald-400 font-mono">{(s.remainingStockValue || 0).toLocaleString("ar")} ج.م</div>
+                <div className="text-[9px] font-extrabold text-slate-400">القيمة الفورية للبضائع</div>
+                <div className="text-xs font-black text-emerald-400 font-mono">{(s.activeOperationalStockValue || 0).toLocaleString("ar")} ج.م</div>
+              </div>
+            </div>
+
+            {/* Card 2b: Supplier Return Stock */}
+            <div 
+              id="card-supplier-returns-stock"
+              onClick={() => {
+                setModalSearch("");
+                setActiveDrilldown("supplier_returns");
+              }}
+              className="bg-slate-900 border border-white/5 hover:border-rose-500/30 rounded-2xl p-6 relative overflow-hidden flex flex-col justify-between min-h-[143px] transition-all cursor-pointer group hover:scale-[1.02] active:scale-95 duration-200 hover:shadow-xl hover:shadow-rose-950/5"
+              title="اضغط لتفقد قائمة عهدة المرتجعات بالمكتب"
+            >
+              <div className="absolute top-2 left-2 text-rose-500/5 group-hover:text-rose-500/10 transition-colors">
+                <RefreshCw size={52} className="rotate-12" />
+              </div>
+              <div>
+                <div className="text-3xl font-black text-rose-450 font-mono flex items-baseline gap-1">
+                  <span>{s.supplierReturnStockCount ?? 0}</span> 
+                  <span className="text-xs font-bold text-slate-450 text-slate-400">طلب</span>
+                </div>
+                <div className="text-[11px] font-black text-slate-200 mt-1 uppercase tracking-wider flex items-center gap-1 font-sans">
+                  <span>عهدة المرتجعات بالمكتب</span>
+                  <span className="text-[8px] px-1 bg-rose-950 text-rose-400 rounded">افحص 🔍</span>
+                </div>
+              </div>
+              <div className="border-t border-white/5 pt-2 mt-2 flex justify-between items-center">
+                <div className="text-[9px] font-extrabold text-slate-400">قيمة المرتجعات الراكدة</div>
+                <div className="text-xs font-black text-rose-400 font-mono">{(s.supplierReturnStockValue || 0).toLocaleString("ar")} ج.م</div>
               </div>
             </div>
 
@@ -1111,6 +1197,16 @@ export default function Dashboard({
                         <Truck className="text-blue-400" size={16} />
                         <span>كشف الأوردرات النشطة بالشارع حالياً مع المناديب (Street Custody)</span>
                       </>
+                    ) : activeDrilldown === "active_operational" ? (
+                      <>
+                        <Package className="text-orange-400" size={16} />
+                        <span>كشف المخزون التشغيلي للتشغيل (Active Operational Stock)</span>
+                      </>
+                    ) : activeDrilldown === "supplier_returns" ? (
+                      <>
+                        <RefreshCw className="text-rose-400" size={16} />
+                        <span>كشف عهدة المرتجعات بالمكتب (Supplier Return Stock)</span>
+                      </>
                     ) : (
                       <>
                         <Package className="text-orange-400" size={16} />
@@ -1121,6 +1217,10 @@ export default function Dashboard({
                   <p className="text-[10px] text-slate-400 font-medium mt-1">
                     {activeDrilldown === "street" 
                       ? `تم العثور على ${streetCustodyOrders.length} أوردرات نشطة لم يتأكد قفل تصفيتها بعد.` 
+                      : activeDrilldown === "active_operational"
+                      ? `تم العثور على ${activeOperationalStockOrders.length} أوردرات نشطة بالمستودع لفرزها وإعادة جدولتها.`
+                      : activeDrilldown === "supplier_returns"
+                      ? `تم العثور على ${supplierReturnStockOrders.length} أوردرات مرتجعة وبواقي تسليم جزئي منتظرة للموردين.`
                       : `تم العثور على ${warehouseOrders.length} أوردرات في ذمة الرفوف داخل المستودع.`}
                   </p>
                 </div>
@@ -1152,7 +1252,11 @@ export default function Dashboard({
               {/* Table Data inside Modal */}
               <div className="flex-1 overflow-y-auto p-4">
                 {(() => {
-                  const items = activeDrilldown === "street" ? streetCustodyOrders : warehouseOrders;
+                  const items = 
+                    activeDrilldown === "street" ? streetCustodyOrders :
+                    activeDrilldown === "active_operational" ? activeOperationalStockOrders :
+                    activeDrilldown === "supplier_returns" ? supplierReturnStockOrders :
+                    warehouseOrders;
                   const filtered = items.filter(o => {
                     if (!modalSearch.trim()) return true;
                     const q = modalSearch.toLowerCase().trim();
