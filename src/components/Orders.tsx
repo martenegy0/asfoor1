@@ -601,10 +601,15 @@ export default function Orders({ token, role, username, orders, setOrders, couri
   const statusCounts = React.useMemo(() => {
     // We filter by selected date AND chosen supplier (if any) to get exact count!
     const dayOrders = roleFilteredOrders.filter((o) => {
-      // Date filter
+      // Date filter (do not hide active/unsettled custody from courier)
       if (selectedDate !== "all") {
-        const orderDayStr = normalizeDateToYMD(o.orderDate || o.createdAt);
-        if (orderDayStr !== selectedDate) return false;
+        const isClosedStatus = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع والعميل دفع الشحن", "مرتجع مدفوع الشحن"].includes(o.status);
+        if (isAgent && !isClosedStatus) {
+          // Bypassed date filter for active custody
+        } else {
+          const orderDayStr = normalizeDateToYMD(o.orderDate || o.createdAt);
+          if (orderDayStr !== selectedDate) return false;
+        }
       }
       // Supplier filter
       if (selectedSupplierFilter) {
@@ -642,7 +647,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
     });
 
     return counts;
-  }, [roleFilteredOrders, selectedDate, selectedSupplierFilter]);
+  }, [roleFilteredOrders, selectedDate, selectedSupplierFilter, isAgent]);
 
   // Real-time metrics for selected supplier on specified date
   const selectedSupplierStats = React.useMemo(() => {

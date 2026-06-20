@@ -283,31 +283,87 @@ export default function OpsRoom({ token, role, username, orders, couriers, onRef
                       </div>
                     </div>
 
-                    {/* Stats mini bar */}
-                    <div className="grid grid-cols-3 gap-2 text-center py-2 bg-slate-950 rounded-xl border border-white/4">
-                      <div>
-                        <div className="text-[9px] font-bold text-slate-500">حمل الشارع</div>
-                        <div className="text-xs font-mono font-black text-amber-500 mt-0.5">{totalCount}</div>
-                      </div>
-                      <div>
-                        <div className="text-[9px] font-bold text-slate-500">مسلّم</div>
-                        <div className="text-xs font-mono font-black text-emerald-400 mt-0.5">{deliveredCount}</div>
-                      </div>
-                      <div>
-                        <div className="text-[9px] font-bold text-slate-500">قيد الشحن</div>
-                        <div className="text-xs font-mono font-black text-blue-400 mt-0.5">{activeCount}</div>
+                    {/* 7-Status High Density Grid */}
+                    <div className="space-y-2">
+                      <span className="text-[10px] text-slate-500 font-extrabold block text-right">📊 توزيع حالات الأوردرات الـ 28:</span>
+                      <div className="grid grid-cols-4 gap-1.5 text-center bg-slate-950/70 p-2.5 rounded-xl border border-white/4">
+                        <div className="bg-slate-900/40 p-1.5 rounded border border-white/2">
+                          <div className="text-[8px] font-bold text-blue-400">🆕 جديد</div>
+                          <div className="text-[11px] font-mono font-black text-slate-200 mt-0.5">
+                            {riderOrders.filter(o => o.status === "جديد").length}
+                          </div>
+                        </div>
+                        <div className="bg-slate-900/40 p-1.5 rounded border border-white/2">
+                          <div className="text-[8px] font-bold text-amber-500">📋 مسند</div>
+                          <div className="text-[11px] font-mono font-black text-slate-200 mt-0.5">
+                            {riderOrders.filter(o => ["تم الإسناد", "مسند", "تم الاسناد"].includes(o.status)).length}
+                          </div>
+                        </div>
+                        <div className="bg-slate-900/40 p-1.5 rounded border border-white/2">
+                          <div className="text-[8px] font-bold text-teal-400">🚚 خارج</div>
+                          <div className="text-[11px] font-mono font-black text-slate-200 mt-0.5">
+                            {riderOrders.filter(o => ["خارج مع المندوب", "خارج للتسليم", "خارج للتوصيل", "مع المندوب"].includes(o.status)).length}
+                          </div>
+                        </div>
+                        <div className="bg-slate-900/40 p-1.5 rounded border border-white/2">
+                          <div className="text-[8px] font-bold text-emerald-400">✅ مسلّم</div>
+                          <div className="text-[11px] font-mono font-black text-emerald-400 mt-0.5">
+                            {deliveredCount}
+                          </div>
+                        </div>
+                        <div className="bg-slate-900/40 p-1.5 rounded border border-white/2">
+                          <div className="text-[8px] font-bold text-red-400">📦 مرتجع</div>
+                          <div className="text-[11px] font-mono font-black text-slate-200 mt-0.5">
+                            {returnedCount}
+                          </div>
+                        </div>
+                        <div className="bg-slate-900/40 p-1.5 rounded border border-white/2">
+                          <div className="text-[8px] font-bold text-indigo-400">⏳ مؤجل</div>
+                          <div className="text-[11px] font-mono font-black text-slate-200 mt-0.5">
+                            {riderOrders.filter(o => o.status === "مؤجل").length}
+                          </div>
+                        </div>
+                        <div className="bg-slate-900/40 p-1.5 rounded border border-white/2">
+                          <div className="text-[8px] font-bold text-rose-550">📵 لا يرد</div>
+                          <div className="text-[11px] font-mono font-black text-slate-200 mt-0.5">
+                            {riderOrders.filter(o => ["لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)).length}
+                          </div>
+                        </div>
+                        <div className="bg-amber-950/20 p-1.5 rounded border border-amber-500/10">
+                          <div className="text-[8px] font-black text-amber-500">💼 إجمالي</div>
+                          <div className="text-[11px] font-mono font-black text-amber-500 mt-0.5">
+                            {totalCount}
+                          </div>
+                        </div>
                       </div>
                     </div>
 
                     {/* Financial stats */}
-                    <div className="space-y-2 text-[11px] font-bold">
-                      <div className="flex justify-between items-center text-slate-400">
-                        <span className="text-slate-200 font-mono">{productsValue.toLocaleString()} ج.م</span>
-                        <span>إجمالي قيمة الكاش المتنقل:</span>
-                      </div>
+                    <div className="space-y-2 text-[11px] font-bold bg-slate-950 p-3 rounded-xl border border-white/4">
+                      {/* Calculated actual cash strictly */}
+                      {(() => {
+                        const deliveredOrdersList = riderOrders.filter(o => ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي"].includes(o.status));
+                        const actualCash = deliveredOrdersList.reduce((sum, o) => {
+                          const cod = Number(o.totalCOD || 0) || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
+                          return sum + cod;
+                        }, 0);
+
+                        return (
+                          <>
+                            <div className="flex justify-between items-center text-slate-400">
+                              <span className="text-slate-200 font-mono text-emerald-400">{actualCash.toLocaleString("ar")} ج.م</span>
+                              <span>💵 الكاش الفعلي بالعهدة:</span>
+                            </div>
+                            <div className="flex justify-between items-center text-slate-400">
+                              <span className="text-slate-400 font-mono">{productsValue.toLocaleString("ar")} ج.م</span>
+                              <span>📦 قيمة إجمالي العهود الحالية:</span>
+                            </div>
+                          </>
+                        );
+                      })()}
                       
                       {/* Success rate progress bar */}
-                      <div className="space-y-1">
+                      <div className="space-y-1 border-t border-white/4 pt-2">
                         <div className="flex justify-between items-center">
                           <span className="font-mono text-emerald-400 text-[10px]">{successRate}%</span>
                           <span className="text-slate-500 text-[10px]">معدل إنجاز اليوم:</span>

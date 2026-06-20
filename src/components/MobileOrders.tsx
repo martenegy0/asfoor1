@@ -1,5 +1,5 @@
 import React, { useState, useRef, useMemo, useEffect } from "react";
-import { Phone, MessageSquare, Search, Trash2 } from "lucide-react";
+import { Phone, MessageSquare, Search, Trash2, MapPin, ChevronDown, ChevronUp } from "lucide-react";
 import { apiCall } from "../utils";
 
 interface SearchableCourierSelectProps {
@@ -210,6 +210,7 @@ export default function MobileOrders({
   const [mobileDrawerOrder, setMobileDrawerOrder] = useState<any | null>(null);
   const [barcodeScannerOpen, setBarcodeScannerOpen] = useState<boolean>(false);
   const [displayLimit, setDisplayLimit] = useState<number>(25);
+  const [expandedOrder, setExpandedOrder] = useState<string | null>(null);
 
   const toggleSelect = (tracking: string) => {
     setSelected((prev) => {
@@ -313,42 +314,60 @@ export default function MobileOrders({
           style={{ WebkitOverflowScrolling: "touch" }}
           id="mobile_horizontal_filter_scroll"
         >
-          {[
-            { key: "all", label: "الكل" },
-            { key: "جديد", label: "🆕 جديد" },
-            { key: "مسند", label: "📋 مسند" },
-            { key: "خارج للتسليم", label: "🚚 خارج للتسليم" },
-            { key: "تم التسليم", label: "✅ تم التسليم" },
-            { key: "مرتجع بالمستودع", label: "📦 بالمنشأ/المكتب" },
-            { key: "تم تسليم المرتجع للمورد", label: "↩ تسليم للمورد" },
-            { key: "مؤجل", label: "⏳ مؤجل" },
-            { key: "لا يوجد رد", label: "📵 لا يرد" }
-          ].map((f) => {
-            const count = statusCounts[f.key] || 0;
-            const isSelected = activeFilter === f.key;
-            return (
-              <button
-                key={f.key}
-                onClick={() => {
-                  setActiveFilter(f.key);
-                  setSelected(new Set());
-                }}
-                className={`px-3.5 py-1.5 rounded-full text-xs font-black whitespace-nowrap transition-all border snap-start cursor-pointer flex items-center gap-1.5 shrink-0 ${
-                  isSelected
-                    ? "bg-amber-500 text-slate-950 border-amber-500 font-black shadow-lg shadow-amber-500/10 scale-95"
-                    : "bg-slate-900 border-white/6 text-slate-350 hover:text-white"
-                }`}
-                id={`mobile_filter_badge_${f.key}`}
-              >
-                <span>{f.label}</span>
-                <span className={`text-[9.5px] px-1.5 py-0.5 rounded-full font-mono font-black ${
-                  isSelected ? "bg-slate-950/20 text-slate-950" : "bg-slate-950 text-amber-400"
-                }`}>
-                  {count}
-                </span>
-              </button>
-            );
-          })}
+          {(() => {
+            const rawFilters = [
+              { key: "all", label: "الكل" },
+              { key: "جديد", label: "🆕 جديد" },
+              { key: "مسند", label: "📋 مسند" },
+              { key: "خارج للتسليم", label: "🚚 خارج للتسليم" },
+              { key: "تم التسليم", label: "✅ تم التسليم" },
+              { key: "مرتجع بالمستودع", label: "📦 بالمنشأ/المكتب" },
+              { key: "تم تسليم المرتجع للمورد", label: "↩ تسليم للمورد" },
+              { key: "مؤجل", label: "⏳ مؤجل" },
+              { key: "لا يوجد رد", label: "📵 لا يرد" }
+            ];
+            
+            const filterWithCounts = rawFilters.map(f => ({
+              ...f,
+              count: statusCounts[f.key] || 0
+            }));
+
+            // Filter out items with count === 0, but always keep activeFilter and "all" visible
+            const visibleFilters = filterWithCounts.filter(f => f.count > 0 || f.key === "all" || f.key === activeFilter);
+
+            // Sort filters: Keep "all" first, sort other filters by volume descending
+            const allFilter = visibleFilters.find(f => f.key === "all");
+            const otherFilters = visibleFilters.filter(f => f.key !== "all").sort((a, b) => b.count - a.count);
+            
+            const sortedFilters = allFilter ? [allFilter, ...otherFilters] : otherFilters;
+
+            return sortedFilters.map((f) => {
+              const count = f.count;
+              const isSelected = activeFilter === f.key;
+              return (
+                <button
+                  key={f.key}
+                  onClick={() => {
+                    setActiveFilter(f.key);
+                    setSelected(new Set());
+                  }}
+                  className={`px-3.5 py-1.5 rounded-full text-xs font-black whitespace-nowrap transition-all border snap-start cursor-pointer flex items-center gap-1.5 shrink-0 ${
+                    isSelected
+                      ? "bg-amber-500 text-slate-950 border-amber-500 font-black shadow-lg shadow-amber-500/10 scale-95"
+                      : "bg-slate-900 border-white/6 text-slate-350 hover:text-white"
+                  }`}
+                  id={`mobile_filter_badge_${f.key}`}
+                >
+                  <span>{f.label}</span>
+                  <span className={`text-[9.5px] px-1.5 py-0.5 rounded-full font-mono font-black ${
+                    isSelected ? "bg-slate-950/20 text-slate-950" : "bg-slate-950 text-amber-400"
+                  }`}>
+                    {count}
+                  </span>
+                </button>
+              );
+            });
+          })()}
         </div>
       </div>
 
@@ -384,6 +403,7 @@ export default function MobileOrders({
               const isSel = selected.has(o.tracking);
               const statusType = (o.status || "").toString();
               const totalCODValue = o.totalCOD !== undefined ? o.totalCOD : (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
+              const isExpanded = expandedOrder === o.tracking;
 
               let cardBorderStyle = "border-slate-850";
               let cardBgClass = "bg-slate-900/90";
@@ -411,13 +431,15 @@ export default function MobileOrders({
               return (
                 <div
                   key={o.tracking}
-                  className={`border rounded-xl p-3.5 transition-all ${cardBgClass} ${cardBorderStyle} ${
+                  onClick={() => setExpandedOrder(isExpanded ? null : o.tracking)}
+                  className={`border rounded-xl p-3.5 transition-all cursor-pointer ${cardBgClass} ${cardBorderStyle} ${
                     isSel ? "ring-1 ring-amber-500 border-amber-500" : "border-white/6"
-                  }`}
+                  } hover:border-amber-500/30`}
                   id={`mobile_order_card_${o.tracking}`}
                 >
+                  {/* Closed representation / Outer Layout */}
                   <div className="flex items-center justify-between pb-2 border-b border-white/4">
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
                       {canSelectBulk && (
                         <input
                           type="checkbox"
@@ -428,15 +450,19 @@ export default function MobileOrders({
                       )}
                       <span className="text-xs font-black text-amber-500 font-mono">{o.tracking}</span>
                     </div>
-                    <span className={`text-[9.5px] font-bold px-2 py-0.5 rounded-full ${getBadgeStyle(o.status)}`}>
-                      {o.status}
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span className={`text-[9.5px] font-bold px-2 py-0.5 rounded-full ${getBadgeStyle(o.status)}`}>
+                        {o.status}
+                      </span>
+                      {isExpanded ? <ChevronUp size={14} className="text-slate-400" /> : <ChevronDown size={14} className="text-slate-400" />}
+                    </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-x-2 gap-y-1 py-1.5 text-[11px] text-slate-300">
+                  {/* High-density grid information (All required in the blueprint) */}
+                  <div className="grid grid-cols-2 gap-x-2 gap-y-1.5 py-2.5 text-[11px] text-slate-300">
                     <div>
-                      <span className="text-[9px] text-slate-500 block font-bold">العميل</span>
-                      <span className="font-extrabold text-slate-200">{o.customer || "مجهول الاسم"}</span>
+                      <span className="text-[9px] text-slate-500 block font-bold">المورد</span>
+                      <span className="font-extrabold text-slate-200 truncate block">{o.supplier || "مورد عام"}</span>
                     </div>
                     <div>
                       <span className="text-[9px] text-slate-500 block font-bold">المحافظة / المنطقة</span>
@@ -448,47 +474,122 @@ export default function MobileOrders({
                         {o.courier ? `👤 ${o.courier}` : <span className="text-red-400 font-bold">لم يسند بعد ⚠️</span>}
                       </span>
                     </div>
-                    <div className="text-left">
-                      <span className="text-[9px] text-slate-500 block font-bold">الصافي المالي</span>
-                      <span className="text-xs font-black text-emerald-400 font-mono text-left block">
+                    <div className="text-left font-mono">
+                      <span className="text-[9px] text-slate-500 block font-semibold">صافي الحساب بالجنيه</span>
+                      <span className="text-xs font-black text-emerald-400 text-left block">
                         {(totalCODValue || 0).toLocaleString("ar")} ج.م
                       </span>
                     </div>
                   </div>
 
-                  <div className="border-t border-white/4 pt-2.5 flex items-center justify-between gap-1.5">
-                    <div className="flex items-center gap-1">
-                      {o.phone && (() => {
-                        const rawPhone = o.phone.toString().trim();
-                        const formattedPhone = rawPhone.startsWith("0") ? rawPhone : "0" + rawPhone;
-                        return (
-                          <>
-                            <a
-                              href={`tel:${formattedPhone}`}
-                              className="p-1.5 bg-slate-950 hover:bg-slate-850 text-blue-400 rounded-lg border border-white/6 flex items-center justify-center cursor-pointer"
-                            >
-                              <Phone size={11} />
-                            </a>
-                            <a
-                              href={toWAUrl(o.phone, getOrderWAMessage(o))}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="p-1.5 bg-slate-950 hover:bg-slate-850 text-emerald-400 rounded-lg border border-white/6 flex items-center justify-center cursor-pointer font-sans"
-                            >
-                              <MessageSquare size={11} />
-                            </a>
-                          </>
-                        );
-                      })()}
-                    </div>
-                    
-                    <button
-                      onClick={() => setMobileDrawerOrder(o)}
-                      className="px-3 py-1 bg-gradient-to-r from-amber-500 to-yellow-500 text-slate-950 font-black text-[10px] rounded-lg cursor-pointer flex items-center gap-0.5"
+                  {/* Expandable Accordion Body (Rendered smoothly) */}
+                  {isExpanded && (
+                    <div 
+                      className="border-t border-white/5 mt-2.5 pt-3 space-y-3 text-right" 
+                      onClick={(e) => e.stopPropagation()}
                     >
-                      <span>🛠️ إجراء عمليات</span>
-                    </button>
-                  </div>
+                      <div className="grid grid-cols-2 gap-2 text-xs bg-slate-950/60 p-2.5 rounded-lg border border-white/4">
+                        <div className="col-span-2 border-b border-white/4 pb-1">
+                          <span className="text-[9px] text-amber-400 font-black block">اسم العميل ورقم هاتفه</span>
+                          <span className="font-black text-slate-100 text-[11.5px] block">{o.customer || "مجهول الاسم"}</span>
+                          <span className="font-semibold text-slate-300 font-mono text-xs block mt-0.5">{o.phone || "—"}</span>
+                        </div>
+                        <div className="col-span-2 pt-1">
+                          <span className="text-[9px] text-emerald-400 font-black block">العنوان التفصيلي للتوصيل</span>
+                          <span className="font-medium text-slate-200 text-[11px] leading-relaxed block">{o.address || "غير مدرج"}</span>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2.5 text-[11px]">
+                        <div className="bg-slate-950/30 p-2 rounded-lg border border-white/4">
+                          <span className="text-[9px] text-slate-500 block font-bold">محتوى الشحنة / القطع</span>
+                          <span className="font-bold text-slate-300 block">{o.prodType || "—"}</span>
+                        </div>
+                        <div className="bg-slate-950/30 p-2 rounded-lg border border-white/4">
+                          <span className="text-[9px] text-slate-500 block font-bold">البيان وملاحظات المورد</span>
+                          <span className="font-extrabold text-slate-300 block">{o.notes || "—"}</span>
+                        </div>
+                      </div>
+
+                      {/* Immediate GPS Navigation and Action Tools inside expanded card */}
+                      <div className="flex items-center justify-between gap-1.5 pt-1.5">
+                        <div className="flex items-center gap-1.5">
+                          {o.phone && (() => {
+                            const rawPhone = o.phone.toString().trim();
+                            const formattedPhone = rawPhone.startsWith("0") ? rawPhone : "0" + rawPhone;
+                            return (
+                              <>
+                                <a
+                                  href={`tel:${formattedPhone}`}
+                                  className="px-3 py-1.5 bg-indigo-950 hover:bg-indigo-900 text-indigo-400 text-xs rounded-lg border border-indigo-550/20 flex items-center justify-center gap-1.5 cursor-pointer font-bold"
+                                >
+                                  <Phone size={12} />
+                                  <span>اتصال هاتفي</span>
+                                </a>
+                                <a
+                                  href={toWAUrl(o.phone, getOrderWAMessage(o))}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="px-3 py-1.5 bg-emerald-950 hover:bg-emerald-900 text-emerald-400 text-xs rounded-lg border border-emerald-550/20 flex items-center justify-center gap-1.5 cursor-pointer font-bold font-sans"
+                                >
+                                  <MessageSquare size={12} />
+                                  <span>واتساب</span>
+                                </a>
+                              </>
+                            );
+                          })()}
+
+                          {/* Map Action Button */}
+                          <a
+                            href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent([o.gov, o.region, o.address].filter(Boolean).join(" "))}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="px-3 py-1.5 bg-slate-950 hover:bg-slate-850 text-amber-400 text-xs rounded-lg border border-white/6 flex items-center justify-center gap-1.5 cursor-pointer font-bold"
+                          >
+                            <MapPin size={12} />
+                            <span>موقع العميل</span>
+                          </a>
+                        </div>
+                      </div>
+
+                      {/* [تحديث الحالة المفتوحة] selection dropdown */}
+                      <div className="pt-2 bg-slate-950/40 p-2.5 rounded-xl border border-white/4 space-y-1">
+                        <label className="block text-[10px] text-slate-400 font-extrabold text-right">⚡ تحديث الحالة المفتوحة:</label>
+                        <select
+                          value={o.status}
+                          onChange={(e) => {
+                            const newStatus = e.target.value;
+                            if (newStatus === "مرتجع") {
+                              setSelectedReturnOrder(o);
+                              setReturnedSelectOpen(true);
+                            } else {
+                              triggerStatusUpdate(o.tracking, newStatus);
+                            }
+                          }}
+                          className="w-full bg-slate-950 text-amber-400 border border-white/8 rounded-lg px-2.5 py-2 text-xs font-black font-sans cursor-pointer focus:border-amber-500 focus:ring-1 focus:ring-amber-500/20 outline-none"
+                        >
+                          <option value="" disabled>اختر التحديث السريع...</option>
+                          <option value="تم التسليم">✅ تم التسليم والتحصيل</option>
+                          <option value="خارج مع المندوب">🚚 خارج للتوصيل</option>
+                          <option value="مرتجع">↩️ تسجيل كمرتجع</option>
+                          <option value="مؤجل">⏳ تأجيل الأوردر</option>
+                          <option value="لا يوجد رد">📵 لا يوجد رد</option>
+                          <option value="جديد">🔄 إرجاع إلى جديد</option>
+                        </select>
+                      </div>
+
+                      {/* Fallback Drawer Trigger */}
+                      <div className="flex justify-end pt-1">
+                        <button
+                          type="button"
+                          onClick={() => setMobileDrawerOrder(o)}
+                          className="text-[10px] text-slate-400 hover:text-white underline font-bold"
+                        >
+                          فتح لوحة العمليات الشاملة ⚙️
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })}
