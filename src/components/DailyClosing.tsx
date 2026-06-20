@@ -291,6 +291,7 @@ export default function DailyClosing({ token, role, user, orders }: DailyClosing
                 "مرتجع", 
                 "التسليم للمورد", 
                 "تم تسليم المرتجع للمورد", 
+                "تم تسليمه للمورد", 
                 "مرتجع تم تسليمه للمورد", 
                 "تم تسليم المرتجع للمورد وتصفية حسابه",
                 "مرتجع والعميل دفع الشحن",
@@ -1044,13 +1045,13 @@ export default function DailyClosing({ token, role, user, orders }: DailyClosing
                     onClick={() => setDetailStatusFilter("returned")}
                     className={`px-3 py-1 text-[10px] font-bold rounded cursor-pointer ${detailStatusFilter === "returned" ? "bg-rose-600 text-white" : "bg-slate-900 text-slate-400"}`}
                   >
-                    المرتجعات ({detailOrders.filter(o => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length})
+                    المرتجعات ({detailOrders.filter(o => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "تم تسليمه للمورد"].includes(o.status) || (o.status || "").includes("مرتجع")).length})
                   </button>
                   <button
                     onClick={() => setDetailStatusFilter("other")}
                     className={`px-3 py-1 text-[10px] font-bold rounded cursor-pointer ${detailStatusFilter === "other" ? "bg-amber-600 text-slate-950" : "bg-slate-900 text-slate-400"}`}
                   >
-                    أخرى ({detailOrders.filter(o => o.status !== "تم التسليم" && !["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length})
+                    أخرى ({detailOrders.filter(o => o.status !== "تم التسليم" && !["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "تم تسليمه للمورد"].includes(o.status) && !(o.status || "").includes("مرتجع")).length})
                   </button>
                 </div>
               </div>
@@ -1083,8 +1084,8 @@ export default function DailyClosing({ token, role, user, orders }: DailyClosing
                       })
                       .filter(o => {
                         if (detailStatusFilter === "delivered") return o.status === "تم التسليم";
-                        if (detailStatusFilter === "returned") return ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status);
-                        if (detailStatusFilter === "other") return o.status !== "تم التسليم" && !["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status);
+                        if (detailStatusFilter === "returned") return ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "تم تسليمه للمورد"].includes(o.status) || (o.status || "").includes("مرتجع");
+                        if (detailStatusFilter === "other") return o.status !== "تم التسليم" && !["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "تم تسليمه للمورد"].includes(o.status) && !(o.status || "").includes("مرتجع");
                         return true;
                       })
                       .map((o, oidx) => (
@@ -1097,7 +1098,7 @@ export default function DailyClosing({ token, role, user, orders }: DailyClosing
                           <td className="p-2.5">
                             <span className={`px-1.5 py-0.5 rounded text-[9px] font-black ${
                               o.status === "تم التسليم" ? "bg-emerald-950/30 text-emerald-450 border border-emerald-900/40" :
-                              ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) ? "bg-red-950/30 text-rose-400 border border-red-900/40" :
+                              ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "تم تسليمه للمورد"].includes(o.status) || (o.status || "").includes("مرتجع") ? "bg-red-950/30 text-rose-400 border border-red-900/40" :
                               "bg-amber-950/20 text-amber-500 border border-amber-900/30"
                             }`}>
                               {o.status}

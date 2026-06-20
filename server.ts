@@ -2379,6 +2379,20 @@ app.post("/api", async (req: Request, res: Response) => {
           if (status === "تم تسليم المرتجع للمورد") {
             order.status = "تم تسليم المرتجع للمورد";
             order.retDate = now();
+
+            // Deduct the net price (product price without shipping) from the supplier ledger
+            const dupLedger = db.supplierLedger.find((l: any) => l.tracking === order.tracking && (l.type === "مرتجع" || l.type === "مرتجع تم تسليمه للمورد"));
+            if (!dupLedger) {
+              const financials = getOrderFinancials(order);
+              db.supplierLedger.push({
+                supplier: order.supplier,
+                date: now(),
+                type: "مرتجع تم تسليمه للمورد",
+                tracking: order.tracking,
+                amount: -Math.abs(Number(financials.prodPrice || 0)),
+                desc: `خصم قيمة المنتج لمرتجع تسلمه المورد: ${order.tracking} (بضاعة مرتجعة بدون شحن: -${financials.prodPrice} ج.م)`
+              });
+            }
           } else {
             order.status = status;
           }
@@ -2416,26 +2430,10 @@ app.post("/api", async (req: Request, res: Response) => {
             });
 
             // PREVENT AUTOMATIC COMPOUNDING IN CENTRAL CASHBOX - Held under Courier Custody (العهدة المعلقة مع المندوب)
-            // It will only enter the cashbox when the Supervisor settles the courier's account from the Ledger page.
-
-            // Credit the Supplier Ledger under the formula: Product_Price - Shipping_Price
-            const dupLedger = db.supplierLedger.find((l: any) => l.tracking === order.tracking && (l.type === "أوردر مستلم" || l.type === "تسليم"));
-            if (!dupLedger) {
-              const supplierShare = Number(order.prodPrice || 0) - Number(order.shipPrice || 0);
-              db.supplierLedger.push({
-                supplier: order.supplier,
-                date: now(),
-                type: "أوردر مستلم",
-                tracking: order.tracking,
-                amount: supplierShare,
-                desc: `حقوق أوردر تم تسليمه: ${order.tracking} (سعر المنتج ${order.prodPrice} - شحن الشركة ${order.shipPrice})`
-              });
-            }
           }
 
           if (status === "تسليم جزئي" || status === "تسليم جزئي - معلق للجرد") {
-            order.delivDate = now();
-            const pAm = Number(partialAmount || order.totalCOD || 0);
+            const pAm = Number(partialAmount || 0);
             order.totalCOD = pAm;
             order.partialAmount = pAm;
             order.actualReceivedCash = pAm;
@@ -2519,6 +2517,40 @@ app.post("/api", async (req: Request, res: Response) => {
 
         writeDB(db);
         return ok(res, { tracking: matchedTracking, status, msg: "تم تحديث حالة الأوردر بنجاح وتصفيته" });
+      }
+
+      // ─────────────────────────────────────────────────────────────
+      // DELETE ORDER (Admin Only)
+      // ─────────────────────────────────────────────────────────────
+      case "deleteOrder": {
+        if (currentRole !== "مدير") {
+          return err(res, "فقط المدير يمتلك صلاحية حذف الطلبات");
+        }
+
+        const { tracking } = d;
+        if (!tracking) return err(res, "معامل مفقود");
+
+        const index = db.orders.findIndex((x: any) => x.tracking === tracking);
+        if (index === -1) return err(res, "الأوردر غير موجود");
+
+        const order = db.orders[index];
+        db.orders.splice(index, 1);
+
+        // Record to statusHistory as deleted
+        db.statusHistory.push({
+          tracking,
+          oldStatus: order.status,
+          newStatus: "محذوف",
+          updatedBy: currentUser,
+          dateTime: now()
+        });
+
+        // Also purge any outstanding supplierLedger transactions to maintain real counts
+        db.supplierLedger = db.supplierLedger.filter((l: any) => l.tracking !== tracking);
+        db.courierLedger = db.courierLedger.filter((l: any) => l.tracking !== tracking);
+
+        writeDB(db);
+        return ok(res, { tracking, msg: "تم حذف الأوردر نهائياً" });
       }
 
       // ─────────────────────────────────────────────────────────────
@@ -2633,41 +2665,7 @@ app.post("/api", async (req: Request, res: Response) => {
         order.updatedAt = now();
 
         writeDB(db);
-        return ok(res, { tracking, msg: "تم تعديل بيانات الأوردر بنجاح" });
-      }
-
-      // ─────────────────────────────────────────────────────────────
-      // DELETE ORDER (Admin Only)
-      // ─────────────────────────────────────────────────────────────
-      case "deleteOrder": {
-        if (currentRole !== "مدير") {
-          return err(res, "فقط المدير يمتلك صلاحية حذف الطلبات");
-        }
-
-        const { tracking } = d;
-        if (!tracking) return err(res, "معامل مفقود");
-
-        const index = db.orders.findIndex((x: any) => x.tracking === tracking);
-        if (index === -1) return err(res, "الأوردر غير موجود");
-
-        const order = db.orders[index];
-        db.orders.splice(index, 1);
-
-        // Record to statusHistory as deleted
-        db.statusHistory.push({
-          tracking,
-          oldStatus: order.status,
-          newStatus: "محذوف",
-          updatedBy: currentUser,
-          dateTime: now()
-        });
-
-        // Also purge any outstanding supplierLedger transactions to maintain real counts
-        db.supplierLedger = db.supplierLedger.filter((l: any) => l.tracking !== tracking);
-        db.courierLedger = db.courierLedger.filter((l: any) => l.tracking !== tracking);
-
-        writeDB(db);
-        return ok(res, { tracking, msg: "تم حذف الأوردر نهائياً" });
+        return ok(res, { tracking, msg: "تم تحديث بيانات الأوردر بنجاح" });
       }
 
       // ─────────────────────────────────────────────────────────────

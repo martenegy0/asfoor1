@@ -133,6 +133,7 @@ export default function Dashboard({
         const statusStr = (o.status || "").toString().trim();
         const deliveredToSupplierPatterns = [
           "تم تسليم المرتجع للمورد",
+          "تم تسليمه للمورد",
           "مرتجع تم تسليمه للمورد",
           "التسليم للمورد",
           "تم تسليم المرتجع للمورد وتصفية حسابه",
