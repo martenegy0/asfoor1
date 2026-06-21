@@ -62,7 +62,7 @@ function doPost(e) {
     "bulkUpdate", "updateOrdersStatusBulk", "addSupplierPayment", 
     "addCourierAdjustment", "addCashbox", "addExpense", "addUser", 
     "registerUser", "updateUser", "updateCourier", "addDailyClosing",
-    "settleCourierOrders"
+    "settleCourierOrders", "settleSupplierDay"
   ];
   
   var isWrite = writeActions.indexOf(action) !== -1;
@@ -119,6 +119,9 @@ function doPost(e) {
         break;
       case "getSupplierLedger":
         result = getSupplierLedger(sheets, requestData);
+        break;
+      case "settleSupplierDay":
+        result = settleSupplierDay(sheets, requestData);
         break;
       case "supplierDashboard":
         result = getSupplierDashboard(sheets, requestData);
@@ -235,6 +238,7 @@ function initSheets() {
     cashbox: ["date", "desc", "type", "amount", "ref", "addedBy"],
     statusHistory: ["tracking", "oldStatus", "newStatus", "updatedBy", "dateTime"],
     supplierLedger: ["supplier", "date", "type", "tracking", "amount", "desc"],
+    supplierSettlements: ["supplier", "date", "status", "settledAt", "settledBy"],
     courierLedger: ["courier", "date", "type", "tracking", "amount", "desc"],
     auditLog: ["user", "type", "dateTime", "oldVal", "newVal", "reason"],
     dailyClosing: ["date", "deliveredCount", "returnedCount", "totalCOD", "shippingCost", "addedBy"]
@@ -251,6 +255,7 @@ function initSheets() {
     cashbox: ["الخزنة", "حركة الخزينة", "الخزينة", "cashbox"],
     statusHistory: ["سجل الحالات", "حالات الشحنات", "حالات الشحنة", "statusHistory"],
     supplierLedger: ["كشف حساب الموردين", "حساب الموردين", "supplierLedger"],
+    supplierSettlements: ["تصفية حسابات الموردين", "تصفية الموردين", "Supplier_Settlements", "supplierSettlements"],
     courierLedger: ["كشف حساب المناديب", "حساب المناديب", "حساب المندوبين", "courierLedger"],
     auditLog: ["سجل العمليات", "سجل التدقيق", "audit.log", "auditLog"],
     dailyClosing: ["التقفيل اليومي", "dailyClosing"]
@@ -262,6 +267,8 @@ function initSheets() {
     let fallbackName = key;
     if (key === "dailyClosing") {
       fallbackName = "التقفيل اليومي";
+    } else if (key === "supplierSettlements") {
+      fallbackName = "Supplier_Settlements";
     }
 
     // البحث المتقدم بالأسماء المتوقعة
@@ -1524,14 +1531,267 @@ function isSameSupplier(nameA, nameB) {
   return normAr(nameA) === normAr(nameB);
 }
 
+function normalizeDateStrAr(dateStr) {
+  if (!dateStr) return "";
+  var s = dateStr.toString().trim();
+  var m = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (m) {
+    var y = m[1];
+    var mn = m[2];
+    if (mn.length === 1) mn = "0" + mn;
+    var d = m[3];
+    if (d.length === 1) d = "0" + d;
+    return y + "-" + mn + "-" + d;
+  }
+  return s.split("T")[0];
+}
+
+function getSupplierLedgerData(sheets, d) {
+  var supplier = d.supplier;
+  if (!supplier) {
+    return { ok: false, error: "اسم المورد مطلوب" };
+  }
+
+  // 1. Get all orders (active + archived)
+  var orders = getTableData(sheets.orders) || [];
+  var archived = [];
+  try {
+    archived = getTableData(sheets.archivedOrders) || [];
+  } catch (e) {
+    // Ignore if archivedOrders sheet doesn't exist
+  }
+  var allOrders = orders.concat(archived);
+
+  // 2. Filter orders by supplier
+  var rawSupOrders = allOrders.filter(function(o) {
+    var oSup = o.supplier !== undefined ? o.supplier : (o["المورد"] !== undefined ? o["المورد"] : (o["اسم المورد"] !== undefined ? o["اسم المورد"] : (o["مورد"] !== undefined ? o["مورد"] : (o["merchant"] !== undefined ? o["merchant"] : (o["merchant_name"] !== undefined ? o["merchant_name"] : "")))));
+    return isSameSupplier(oSup, supplier);
+  });
+
+  // Dedup orders by tracking ID to ensure no double counting
+  var dedupedMap = {};
+  rawSupOrders.forEach(function(o) {
+    var track = (o.tracking || o["رقم التتبع"] || o["ID"] || "").toString().trim();
+    if (track) {
+      dedupedMap[track] = o;
+    } else {
+      dedupedMap["RAND-" + Math.random()] = o;
+    }
+  });
+  
+  var keys = Object.keys(dedupedMap);
+  var supplierOrders = [];
+  for (var k = 0; k < keys.length; k++) {
+    supplierOrders.push(dedupedMap[keys[k]]);
+  }
+
+  // 3. Fetch settled days from supplierSettlements sheet
+  var settlements = [];
+  try {
+    settlements = getTableData(sheets.supplierSettlements) || [];
+  } catch (e) {
+    // Soft fallback if sheet not fully synchronized yet
+  }
+  
+  var settledDaysSet = {};
+  settlements.forEach(function(s) {
+    var sSup = s.supplier || s["المورد"] || "";
+    if (isSameSupplier(sSup, supplier)) {
+      var sDate = normalizeDateStrAr(s.date || s["التاريخ"] || "");
+      if (sDate) {
+        settledDaysSet[sDate] = true;
+      }
+    }
+  });
+
+  // Also check supplierLedger for double entry settlements just in case
+  var ledgerEntries = [];
+  try {
+    ledgerEntries = getTableData(sheets.supplierLedger) || [];
+  } catch (e) {}
+  ledgerEntries.forEach(function(l) {
+    var lSup = l.supplier || l["المورد"] || "";
+    if (isSameSupplier(lSup, supplier)) {
+      var type = (l.type || l["النوع"] || "").toString().trim();
+      var tracking = (l.tracking || l["رقم التتبع"] || "").toString().trim();
+      if (type === "تصفية يومية" && tracking.indexOf("SETTLE-") === 0) {
+        var sDate = tracking.replace("SETTLE-", "").trim();
+        settledDaysSet[sDate] = true;
+      }
+    }
+  });
+
+  // 4. Group supplier orders by normalized date (orderDate)
+  var ordersByDay = {};
+  supplierOrders.forEach(function(o) {
+    var rawDate = o.orderDate || o.createdAt || o["تاريخ الطلب"] || "";
+    var normDate = normalizeDateStrAr(rawDate);
+    if (!normDate) return;
+    if (!ordersByDay[normDate]) {
+      ordersByDay[normDate] = [];
+    }
+    ordersByDay[normDate].push(o);
+  });
+
+  // 5. Compute metrics per day
+  var daysList = [];
+  var outstandingBalance = 0;
+
+  var dayDates = Object.keys(ordersByDay);
+  for (var i = 0; i < dayDates.length; i++) {
+    var dayDate = dayDates[i];
+    var dayOrders = ordersByDay[dayDate];
+
+    // A. Total COD or Work Value
+    var totalWorkValue = dayOrders.reduce(function(sum, o) {
+      return sum + getOrderFinancials(o).totalCOD;
+    }, 0);
+
+    // B. Delivered cash collected
+    var totalActualCollected = dayOrders.reduce(function(sum, o) {
+      var status = (o.status || "").toString().trim();
+      var isDelivered = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].indexOf(status) !== -1;
+      var isPartial = ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(status) !== -1;
+      
+      if (isDelivered) {
+        return sum + getOrderFinancials(o).totalCOD;
+      } else if (isPartial) {
+        var partialAm = Number(o.actualReceivedCash || o.partialAmount || o["المبلغ المحصل"] || 0);
+        return sum + (isNaN(partialAm) ? 0 : partialAm);
+      }
+      return sum;
+    }, 0);
+
+    // C. Returned items value delivered back to supplier
+    var returnedValueRefunded = dayOrders.reduce(function(sum, o) {
+      var status = (o.status || "").toString().trim();
+      var isReturnedDelivered = ["تم تسليم المرتجع للمورد", "تم تسليمه للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].indexOf(status) !== -1;
+      if (isReturnedDelivered) {
+        return sum + getOrderFinancials(o).prodPrice;
+      }
+      return sum;
+    }, 0);
+
+    // D. Return shipping fees
+    var returnShippingFees = dayOrders.reduce(function(sum, o) {
+      var status = (o.status || "").toString().trim();
+      var isReturned = (status.indexOf("مرتجع") !== -1 || status.indexOf("مرفوض") !== -1 || ["قيد المرتجع"].indexOf(status) !== -1);
+      if (isReturned) {
+        if (status === "مرتجع والعميل دفع الشحن") return sum;
+        return sum + getOrderFinancials(o).shipPrice;
+      }
+      return sum;
+    }, 0);
+
+    // E. Net dues = cash collected - return shipping fees
+    var netDues = totalActualCollected - returnShippingFees;
+
+    // F. Settle status
+    var isSettled = !!settledDaysSet[dayDate];
+    var statusLabel = isSettled ? "🟢 تم تصفية الكاش والمرتجع" : "🔴 معلق لم يصفى";
+
+    if (!isSettled) {
+      outstandingBalance += netDues;
+    }
+
+    daysList.push({
+      date: dayDate,
+      orderCount: dayOrders.length,
+      totalWorkValue: totalWorkValue,
+      totalActualCollected: totalActualCollected,
+      returnedValueRefunded: returnedValueRefunded,
+      returnShippingFees: returnShippingFees,
+      netDues: netDues,
+      isSettled: isSettled,
+      status: statusLabel,
+      orders: dayOrders.map(function(o) {
+        var fin = getOrderFinancials(o);
+        return {
+          tracking: o.tracking || o["رقم التتبع"] || "",
+          customer: o.customer || o["اسم العميل"] || "",
+          phone: o.phone || o["الهاتف"] || "",
+          status: o.status || "",
+          prodPrice: fin.prodPrice,
+          shipPrice: fin.shipPrice,
+          totalCOD: fin.totalCOD,
+          partialAmount: Number(o.actualReceivedCash || o.partialAmount || o["المبلغ المحصل"] || 0)
+        };
+      })
+    });
+  }
+
+  daysList.sort(function(a, b) {
+    return b.date.localeCompare(a.date);
+  });
+
+  return {
+    ok: true,
+    days: daysList,
+    outstandingBalance: Math.max(0, outstandingBalance)
+  };
+}
+
 function getSupplierLedger(sheets, d) {
-  const { supplier } = d;
-  const ledger = getTableData(sheets.supplierLedger);
+  var supplier = d.supplier;
+  var ledger = getTableData(sheets.supplierLedger);
+  var filtered = supplier ? ledger.filter(function(l) { return isSameSupplier(l.supplier, supplier); }) : ledger;
+  
   if (!supplier) {
     return { ok: true, ledger: ledger };
   }
-  const filtered = ledger.filter(l => isSameSupplier(l.supplier, supplier));
-  return { ok: true, ledger: filtered.reverse() };
+  
+  var dailyData = getSupplierLedgerData(sheets, d);
+  return { 
+    ok: true, 
+    ledger: filtered.reverse(),
+    balance: dailyData.outstandingBalance,
+    dailyLedger: dailyData
+  };
+}
+
+function settleSupplierDay(sheets, d) {
+  var supplier = d.supplier;
+  var dateStr = d.dateStr;
+  var currentUser = d.currentUser;
+  
+  if (!supplier || !dateStr) {
+    return { ok: false, error: "معلومات تصفية اليوم ناقصة" };
+  }
+
+  var settlements = [];
+  try {
+    settlements = getTableData(sheets.supplierSettlements) || [];
+  } catch (e) {}
+  
+  var isAlreadySettled = settlements.some(function(s) {
+    var sSup = s.supplier || s["المورد"] || "";
+    return isSameSupplier(sSup, supplier) && normalizeDateStrAr(s.date || s["التاريخ"]) === normalizeDateStrAr(dateStr);
+  });
+
+  if (isAlreadySettled) {
+    return { ok: true, msg: "هذا اليوم مصفى بالفعل بالشيت" };
+  }
+
+  // Append new settlement entry
+  appendToSheet(sheets.supplierSettlements, ["supplier", "date", "status", "settledAt", "settledBy"], {
+    supplier: supplier,
+    date: dateStr,
+    status: "مصفى ماليّاً",
+    settledAt: now(),
+    settledBy: currentUser || "إدارة الحسابات"
+  });
+
+  // Also write double entry to supplierLedger as settlement record (for general ledger sync)
+  appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
+    supplier: supplier,
+    date: dateStr,
+    type: "تصفية يومية",
+    tracking: "SETTLE-" + dateStr,
+    amount: 0,
+    desc: "🔐 [💵 تقفيل وتسليم كاش اليوم للمورد] - تم تصفية وقفل حساب اليوم تاريخ: " + dateStr + " بنجاح تصفية تامة✓"
+  });
+
+  return { ok: true, msg: "تم تسجيل تصفية اليوم وقفل حساب " + dateStr + " بنجاح" };
 }
 
 function getOrderFinancials(o) {

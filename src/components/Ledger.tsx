@@ -487,25 +487,25 @@ export default function Ledger({ token, role, user }: LedgerProps) {
                 <div className="bg-slate-950/80 border border-white/4 p-3 rounded-xl text-center">
                   <div className="text-[10px] font-black text-slate-400">إجمالي الأيام المعلقة</div>
                   <div className="text-lg font-mono font-bold text-red-300 mt-1">
-                    {dailyLedgers.days.filter((d: any) => d.status === "pending").length} يوم
+                    {dailyLedgers.days.filter((d: any) => !d.isSettled).length} يوم
                   </div>
                 </div>
                 <div className="bg-slate-950/80 border border-white/4 p-3 rounded-xl text-center">
                   <div className="text-[10px] font-black text-slate-400">إجمالي الأيام المصفاة</div>
                   <div className="text-lg font-mono font-bold text-emerald-400 mt-1">
-                    {dailyLedgers.days.filter((d: any) => d.status === "settled").length} يوم
+                    {dailyLedgers.days.filter((d: any) => d.isSettled).length} يوم
                   </div>
                 </div>
                 <div className="bg-slate-950/80 border border-white/4 p-3 rounded-xl text-center">
                   <div className="text-[10px] font-black text-slate-400">إجمالي قيمة الشغل المعلق</div>
                   <div className="text-lg font-mono font-bold text-slate-200 mt-1">
-                    {Number(dailyLedgers.days.reduce((acc: number, cur: any) => cur.status === "pending" ? acc + cur.totalWorkValue : acc, 0)).toLocaleString("ar")} ج.م
+                    {Number(dailyLedgers.days.reduce((acc: number, cur: any) => !cur.isSettled ? acc + cur.totalWorkValue : acc, 0)).toLocaleString("ar")} ج.م
                   </div>
                 </div>
                 <div className="bg-slate-950/80 border border-white/4 p-3 rounded-xl text-center">
                   <div className="text-[10px] font-black text-slate-400">إجمالي الكاش غير المصفى</div>
                   <div className="text-lg font-mono font-bold text-emerald-300 mt-1">
-                    {Number(dailyLedgers.days.reduce((acc: number, cur: any) => cur.status === "pending" ? acc + cur.totalActualCollected : acc, 0)).toLocaleString("ar")} ج.م
+                    {Number(dailyLedgers.days.reduce((acc: number, cur: any) => !cur.isSettled ? acc + cur.totalActualCollected : acc, 0)).toLocaleString("ar")} ج.م
                   </div>
                 </div>
               </div>
@@ -547,7 +547,7 @@ export default function Ledger({ token, role, user }: LedgerProps) {
                 {dailyLedgers.days
                   .filter((d: any) => !daySearchQuery || d.date.includes(daySearchQuery))
                   .map((day: any, idx: number) => {
-                    const isPending = day.status === "pending";
+                    const isPending = !day.isSettled;
                     return (
                       <div
                         key={idx}

@@ -3455,14 +3455,11 @@ app.post("/api", async (req: Request, res: Response) => {
         if (isGoogleScriptHealthy && scriptUrl && scriptUrl.startsWith("http")) {
           // Send to sheets
           executeProxyRequest(scriptUrl, {
-            action: "addSupplierPayment",
+            action: "settleSupplierDay",
             token: "14014",
             supplier: supplier,
-            amount: 0,
-            desc: `🔐 [💵 تقفيل وتسليم كاش اليوم للمورد] - تم تصفية وقفل حساب اليوم تاريخ: ${dateStr} بنجاح تصفية تامة✓`,
-            transactionType: "تصفية يومية", 
-            tracking: trackingId,
-            date: nowStr
+            dateStr: dateStr,
+            currentUser: currentUser
           }).catch(err => {
             console.error("Async sheets write failure for settleSupplierDay:", err);
           });
