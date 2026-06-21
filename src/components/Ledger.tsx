@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { PlusCircle, Wallet, FileText, ArrowUpRight, ArrowDownRight, Calendar, Filter, Users, ShieldAlert } from "lucide-react";
+import { PlusCircle, Wallet, FileText, ArrowUpRight, ArrowDownRight, Calendar, Filter, Users, ShieldAlert, Search, Eye, CheckCircle2, Clock, Loader2, ArrowLeft, Check, Shield } from "lucide-react";
 import { apiCall } from "../utils";
 
 interface LedgerProps {
@@ -27,7 +27,16 @@ export default function Ledger({ token, role, user }: LedgerProps) {
   const [payDesc, setPayDesc] = useState("");
   const [supplierTransType, setSupplierTransType] = useState<"payout" | "withdrawal">("payout");
   const [submittingLedger, setSubmittingLedger] = useState(false);
-  const [ledgerCache, setLedgerCache] = useState<Record<string, { subscribes: any[], liveBalance: number, stats: any }>>({});
+  const [ledgerCache, setLedgerCache] = useState<Record<string, { subscribes: any[], liveBalance: number, stats: any, dailyLedger?: any }>>({});
+
+  // --- New Daily Supplier Ledger States ---
+  const [dailyLedgers, setDailyLedger] = useState<any>(null);
+  const [daySearchQuery, setDaySearchQuery] = useState("");
+  const [selectedDayOrdersDetail, setSelectedDayOrdersDetail] = useState<any[] | null>(null);
+  const [selectedDayDate, setSelectedDayDate] = useState<string>("");
+  const [selectedDayStatus, setSelectedDayStatus] = useState<string>("");
+  const [settleDayProgress, setSettleDayProgress] = useState<string>("");
+  const [modalSearchFilter, setModalSearchFilter] = useState<string>("");
 
   // --- Courier Ledger States ---
   const [courierSummary, setCourierSummary] = useState<any>(null);
@@ -80,12 +89,14 @@ export default function Ledger({ token, role, user }: LedgerProps) {
       setSubscribes(cached.subscribes);
       setLiveBalance(cached.liveBalance);
       setSupplierStats(cached.stats);
+      setDailyLedger(cached.dailyLedger || null);
       setLoading(false); // No full screen blocker
     } else {
       // Clear data to prevent old figures from sticking
       setSubscribes([]);
       setLiveBalance(0);
       setSupplierStats(null);
+      setDailyLedger(null);
       setLoading(true);
     }
 
@@ -115,13 +126,15 @@ export default function Ledger({ token, role, user }: LedgerProps) {
           [targetSup]: {
             subscribes: finalEntries,
             liveBalance: actualBalance,
-            stats: stats
+            stats: stats,
+            dailyLedger: res.dailyLedger || null
           }
         }));
 
         setSubscribes(finalEntries);
         setLiveBalance(actualBalance);
         setSupplierStats(stats);
+        setDailyLedger(res.dailyLedger || null);
       } else {
         setFeedback(res.error || "خطأ أثناء تحميل كشف حساب المورد");
       }
@@ -129,6 +142,31 @@ export default function Ledger({ token, role, user }: LedgerProps) {
       setFeedback("حدث خطأ في الشبكة أثناء الاتصال بالخادم");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleSettleDay(dateStr: string) {
+    const targetSup = isSupplier ? user : selectedSupplier;
+    if (!targetSup) return;
+    if (!confirm(`هل أنت متأكد من تصفية وإقفال كاش تاريخ ${dateStr} للمورد (${targetSup}) وتسليمه كامل مستحقات هذا اليوم الحالية وتسجيل قفل المعاملة؟`)) {
+      return;
+    }
+    setSettleDayProgress(dateStr);
+    try {
+      const res = await apiCall("settleSupplierDay", token, {
+        supplier: targetSup,
+        dateStr: dateStr
+      });
+      if (res.ok) {
+        // Reload ledger
+        await loadSupplierLedger();
+      } else {
+        alert(res.error || "فشل تصفية اليوم");
+      }
+    } catch (err) {
+      alert("خطأ في الاتصال بالخادم أثناء التصفية");
+    } finally {
+      setSettleDayProgress("");
     }
   }
 
@@ -406,8 +444,8 @@ export default function Ledger({ token, role, user }: LedgerProps) {
         <div className="space-y-6">
           {/* Target Selector details for Financial staffs */}
           {isFinancial && (
-            <div className="flex items-center justify-between gap-4 bg-slate-900 border border-white/6 p-4 rounded-xl">
-              <span className="text-xs font-extrabold text-slate-400 whitespace-nowrap">اختر المورد المراد تسوية حسابه:</span>
+            <div className="flex items-center justify-between gap-4 bg-slate-900 border border-white/6 p-4 rounded-xl shadow-inner">
+              <span className="text-xs font-extrabold text-slate-400 whitespace-nowrap">اختر المورد المراد عرض حسابه بالأيام:</span>
               <select
                 value={selectedSupplier}
                 onChange={(e) => setSelectedSupplier(e.target.value)}
@@ -422,221 +460,188 @@ export default function Ledger({ token, role, user }: LedgerProps) {
             </div>
           )}
 
-          {/* 📦 5-Field Mirror Data Grid for Supplier Portal & Statement */}
-          {supplierStats ? (
-            <div className="space-y-6" id="supplier-mirror-grid">
-              {/* Main Top Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-                {/* 1. إجمالي الطلبات المرفوعة */}
-                <div className="bg-slate-900 border border-white/6 rounded-2xl p-4 space-y-2 text-right hover:border-amber-500/20 transition-all">
-                  <span className="text-[10px] font-black text-slate-400 block tracking-wider uppercase">📦  إجمالي المنتجات المرفوعة</span>
-                  <div className="text-xl font-mono font-black text-slate-100">
-                    {Number(supplierStats.totalGoodsUploaded || 0).toLocaleString("ar")} <span className="text-xs">ج.م</span>
-                  </div>
-                  <div className="text-[9.5px] text-amber-400 font-bold">
-                     عدد: {supplierStats.totalOrdersCount || 0} أوردر كلي (بضاعة فقط)
+          {/* Active Supplier Header Card / KPI Banners */}
+          <div className="bg-gradient-to-l from-slate-900 via-slate-950 to-slate-900 border-2 border-emerald-500/20 rounded-2xl p-6 text-center space-y-4 relative overflow-hidden shadow-xl">
+            <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/5 rounded-full blur-3xl"></div>
+            <div className="absolute top-3 left-3 text-emerald-500/10">
+              <Wallet size={64} />
+            </div>
+
+            <span className="px-3.5 py-1.5 bg-emerald-950/40 border border-emerald-900/40 text-emerald-400 text-[10.5px] font-black rounded-full uppercase tracking-wider inline-flex items-center gap-1.5">
+              <span>🏆 كشف الحساب التراكمي وتصفية كاش المورد</span>
+              <span className="inline-block w-1.5 h-1.5 bg-emerald-500 rounded-full animate-ping"></span>
+            </span>
+
+            <div className="text-4xl font-mono font-black text-emerald-400 tracking-tight">
+              {Number(liveBalance || 0).toLocaleString("ar")}{" "}
+              <span className="text-sm font-medium">جنيهاً مصرياً</span>
+            </div>
+
+            <p className="text-[11px] text-slate-400 leading-relaxed font-bold max-w-2xl mx-auto">
+              هذه القيمة تمثل مجموع مستحقات <span className="text-emerald-400">جميع الأيام المعلقة</span> (صافي مستحقات الأيام التي لم تصفى بعد)، وهي تتأثر تلقائياً بمجرد نقر المدير على زر التصفية اليومية.
+            </p>
+
+            {/* Quick Metrics */}
+            {dailyLedgers && (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 max-w-4xl mx-auto pt-2">
+                <div className="bg-slate-950/80 border border-white/4 p-3 rounded-xl text-center">
+                  <div className="text-[10px] font-black text-slate-400">إجمالي الأيام المعلقة</div>
+                  <div className="text-lg font-mono font-bold text-red-300 mt-1">
+                    {dailyLedgers.days.filter((d: any) => d.status === "pending").length} يوم
                   </div>
                 </div>
-
-                {/* 2. الطلبات المسلمة بنجاح */}
-                <div className="bg-slate-900 border border-white/6 rounded-2xl p-4 space-y-2 text-right hover:border-emerald-500/20 transition-all">
-                  <span className="text-[10px] font-black text-slate-400 block tracking-wider uppercase">🟢  الطلبات المسلمة بنجاح</span>
-                  <div className="text-xl font-mono font-black text-emerald-400">
-                    {Number(supplierStats.deliveredOrdersValue || 0).toLocaleString("ar")} <span className="text-xs">ج.م</span>
-                  </div>
-                  <div className="text-[9.5px] text-emerald-500 font-bold">
-                     عدد: {supplierStats.deliveredOrdersCount || 0} أوردر مسلّم
+                <div className="bg-slate-950/80 border border-white/4 p-3 rounded-xl text-center">
+                  <div className="text-[10px] font-black text-slate-400">إجمالي الأيام المصفاة</div>
+                  <div className="text-lg font-mono font-bold text-emerald-400 mt-1">
+                    {dailyLedgers.days.filter((d: any) => d.status === "settled").length} يوم
                   </div>
                 </div>
-
-                {/* 3. المرتجع المخصوم بالكامل */}
-                <div className="bg-slate-900 border border-white/6 rounded-2xl p-4 space-y-2 text-right hover:border-red-500/20 transition-all">
-                  <span className="text-[10px] font-black text-slate-400 block tracking-wider uppercase">🔴  المرتجع المعتمد المستلم</span>
-                  <div className="text-xl font-mono font-black text-red-400">
-                    {Number(supplierStats.returnsDeliveredValue || 0).toLocaleString("ar")} <span className="text-xs">ج.م</span>
-                  </div>
-                  <div className="text-[9.5px] text-red-500 font-bold">
-                     عدد: {supplierStats.returnsDeliveredCount || 0} أوردر مرتجع
+                <div className="bg-slate-950/80 border border-white/4 p-3 rounded-xl text-center">
+                  <div className="text-[10px] font-black text-slate-400">إجمالي قيمة الشغل المعلق</div>
+                  <div className="text-lg font-mono font-bold text-slate-200 mt-1">
+                    {Number(dailyLedgers.days.reduce((acc: number, cur: any) => cur.status === "pending" ? acc + cur.totalWorkValue : acc, 0)).toLocaleString("ar")} ج.م
                   </div>
                 </div>
-
-                {/* 4. كلي الدفعات المصروفة */}
-                <div className="bg-slate-900 border border-white/6 rounded-2xl p-4 space-y-2 text-right hover:border-cyan-500/20 transition-all">
-                  <span className="text-[10px] font-black text-slate-400 block tracking-wider uppercase">💵  إجمالي الدفعات النقدية</span>
-                  <div className="text-xl font-mono font-black text-cyan-400">
-                    {Number(supplierStats.paymentsValue || 0).toLocaleString("ar")} <span className="text-xs">ج.م</span>
-                  </div>
-                  <div className="text-[9.5px] text-cyan-500 font-bold">
-                     المسحوبات النقدية المباشرة
-                  </div>
-                </div>
-
-                {/* 5. التسويات العكسية والصفرية */}
-                <div className="bg-slate-900 border border-white/6 rounded-2xl p-4 space-y-2 text-right hover:border-red-400/20 transition-all">
-                  <span className="text-[10px] font-black text-purple-400 block tracking-wider uppercase">🔄  التسويات العكسية والسحب</span>
-                  <div className="text-xl font-mono font-black text-red-300">
-                    {Number(supplierStats.reverseAdjustmentsValue || 0).toLocaleString("ar")} <span className="text-xs">ج.م</span>
-                  </div>
-                  <div className="text-[9.5px] text-red-400 font-bold">
-                     تعديلات وخصومات إدارية
+                <div className="bg-slate-950/80 border border-white/4 p-3 rounded-xl text-center">
+                  <div className="text-[10px] font-black text-slate-400">إجمالي الكاش غير المصفى</div>
+                  <div className="text-lg font-mono font-bold text-emerald-300 mt-1">
+                    {Number(dailyLedgers.days.reduce((acc: number, cur: any) => cur.status === "pending" ? acc + cur.totalActualCollected : acc, 0)).toLocaleString("ar")} ج.م
                   </div>
                 </div>
               </div>
+            )}
+          </div>
 
-              {/* 5. الحقل الرئيسي البارز [المبلغ المستحق النهائي للمورد] */}
-              <div className="bg-gradient-to-l from-slate-900 via-slate-950 to-slate-900 border-2 border-emerald-500/25 rounded-2xl p-6 text-center space-y-3 relative overflow-hidden shadow-xl">
-                <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/5 rounded-full blur-2xl"></div>
-                <div className="absolute top-2 left-2 text-emerald-500/10">
-                  <Wallet size={50} />
-                </div>
-                
-                <span className="px-3 py-1 bg-emerald-950/40 border border-emerald-900/40 text-emerald-400 text-[10px] font-black rounded-lg uppercase tracking-widest inline-block">
-                  🏆 المبلغ المستحق النهائي للمورد (الصافي القابل للصرف)
+          {/* Days Explorer Block */}
+          <div className="space-y-4">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-slate-900 border border-white/6 p-4 rounded-2xl shadow-sm">
+              <div className="flex items-center gap-2">
+                <Calendar className="text-amber-500" size={18} />
+                <h3 className="text-xs font-black text-slate-300">سجل كشوف الحساب اليومية التفصيلية للأيام</h3>
+              </div>
+              <div className="relative w-full sm:w-[280px]">
+                <span className="absolute inset-y-0 right-3 flex items-center pr-1 text-slate-550">
+                  <Search size={14} />
                 </span>
-
-                <div className="text-4xl font-mono font-black text-emerald-400 tracking-tight animate-pulse">
-                  {Number(supplierStats.outstanding || 0).toLocaleString("ar")}{" "}
-                  <span className="text-sm font-medium">جنيهاً مصرياً</span>
-                </div>
-
-                {/* Formula display */}
-                <div className="bg-slate-950/80 border border-white/4 rounded-xl py-3 px-4 max-w-2xl mx-auto text-xs text-slate-300 leading-relaxed font-bold">
-                  <span className="text-amber-400">المعادلة البرمجية الإلزامية لتصفية الحساب:</span>
-                  <div className="mt-1 flex flex-wrap items-center justify-center gap-2 text-[11px] font-mono">
-                    <span className="text-amber-400">إجمالي بضائع المورد المرفوعة ({Number(supplierStats.totalGoodsUploaded || 0).toLocaleString("ar")})</span>
-                    <span className="text-slate-400 font-sans"> - </span>
-                    <span className="text-red-400">المرتجع المعتمد المستلم ({Number(supplierStats.returnsDeliveredValue || 0).toLocaleString("ar")})</span>
-                    <span className="text-slate-400 font-sans"> - </span>
-                    <span className="text-cyan-400">إجمالي الدفعات النقدية والتسويات ({Number((supplierStats.paymentsValue || 0) + (supplierStats.reverseAdjustmentsValue || 0)).toLocaleString("ar")})</span>
-                    <span className="text-slate-400 font-sans"> = </span>
-                    <span className="text-emerald-400 font-black">{Number(supplierStats.outstanding || 0).toLocaleString("ar")} ج.م</span>
-                  </div>
-                </div>
+                <input
+                  type="text"
+                  placeholder="ابحث بالتاريخ (مثال: 2026-06)..."
+                  value={daySearchQuery}
+                  onChange={(e) => setDaySearchQuery(e.target.value)}
+                  className="w-full bg-slate-950 border border-white/8 rounded-lg pr-9 pl-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-amber-500"
+                />
               </div>
             </div>
-          ) : (
-            <div className="bg-gradient-to-br from-slate-900 to-slate-950 border border-white/6 rounded-2xl p-6 text-center space-y-2 relative overflow-hidden">
-              <div className="absolute top-2 left-2 text-emerald-500/10">
-                <Wallet size={64} />
-              </div>
-              <div className="text-xs font-black text-slate-400 uppercase tracking-widest">
-                 الرصيد الدائن الحالي للمورد (ج.م)
-              </div>
-              <div className="text-4xl font-black text-emerald-400">
-                {liveBalance.toLocaleString("ar")}{" "}
-                <span className="text-sm font-medium">جنيهاً مصرياً</span>
-              </div>
-              <p className="text-[10px] text-slate-500 leading-relaxed font-semibold max-w-[420px] mx-auto">
-                تُعنى هذه القيمة بـ (إجمالي سعر المنتجات لجميع الأوردرات المرفوعة) مطروحاً منه (المرتجع المعتمد المستلم فعلياً من المورد) ومطروحاً منه (الدفعات النقدية والتسويات).
-              </p>
-            </div>
-          )}
-
-          {/* Settle Outlay Panel (Only visible to Admin / Controller) */}
-          {isFinancial && (
-            <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 space-y-4">
-              <h3 className="text-xs font-black text-slate-450 flex items-center gap-2">
-                <PlusCircle size={16} className="text-amber-500" />
-                <span>صرف دفعة مالية للمورد أو سحب تسوية عكسية وتسجيلها بالخزنة</span>
-              </h3>
-              <div className="flex flex-col md:flex-row gap-3">
-                <div className="w-full md:w-1/4 space-y-1">
-                  <label className="block text-[10px] text-slate-405 font-bold">نوع المعاملة*</label>
-                  <select
-                    value={supplierTransType}
-                    onChange={(e) => setSupplierTransType(e.target.value as any)}
-                    className="w-full h-[38px] bg-slate-950 text-slate-200 border border-white/8 rounded-lg px-3 py-2 text-xs font-bold focus:border-amber-500 outline-none"
-                  >
-                    <option value="payout">صرف دفعة للمورد</option>
-                    <option value="withdrawal">سحب / تسوية عكسية</option>
-                  </select>
-                </div>
-                <div className="flex-1">
-                  <form onSubmit={handleSupplierPayout} className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
-                    <div className="space-y-1">
-                      <label className="block text-[10px] text-slate-400 font-bold">
-                        {supplierTransType === "withdrawal" ? "مبلغ السحب (ج.م)*" : "مبلغ السداد (ج.م)*"}
-                      </label>
-                      <input
-                        type="number"
-                        required
-                        value={payAmount}
-                        onChange={(e) => setPayAmount(e.target.value)}
-                        placeholder="1000"
-                        className={`w-full h-[38px] bg-slate-950 border border-white/8 rounded-lg px-3 py-2 text-xs font-mono font-bold outline-none ${
-                          supplierTransType === "withdrawal" ? "text-red-450 border-red-500 focus:border-red-500" : "text-slate-200 focus:border-emerald-500"
-                        }`}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="block text-[10px] text-slate-400 font-bold">تفاصيل البيان / المرجع</label>
-                      <input
-                        type="text"
-                        value={payDesc}
-                        onChange={(e) => setPayDesc(e.target.value)}
-                        placeholder="تحويل بنكي / كاش..."
-                        className="w-full h-[38px] bg-slate-950 text-slate-200 border border-white/8 rounded-lg px-3 py-2 text-xs outline-none focus:border-amber-500"
-                      />
-                    </div>
-                    <button
-                      type="submit"
-                      disabled={submittingLedger}
-                      className={`font-black text-xs h-[38px] px-4 rounded-lg cursor-pointer transition-colors disabled:opacity-50 ${
-                        supplierTransType === "withdrawal" ? "bg-red-600 hover:bg-red-750 text-white" : "bg-emerald-600 hover:bg-emerald-700 text-slate-950"
-                      }`}
-                    >
-                      {supplierTransType === "withdrawal" ? "تسجيل سحب المورد" : "صرف سداد المورد"}
-                    </button>
-                  </form>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Supplier Ledger Transactions Ledger Timeline */}
-          <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 space-y-4">
-            <h3 className="text-xs font-black text-slate-400 flex items-center justify-between border-b border-white/6 pb-2">
-              <span>📊 دفتر كشف الحساب والمراكز المالي</span>
-              <FileText size={16} className="text-slate-500" />
-            </h3>
 
             {loading ? (
-              <div className="text-center py-6 text-xs text-slate-500 animate-pulse">جاري سحب تسويات وحركات المورد...</div>
-            ) : subscribes.length === 0 ? (
-              <div className="text-center py-8 text-xs text-slate-500">لا يوجد حركات قيود مسجلة لهذا المورد حالياً</div>
+              <div className="text-center py-16 space-y-3">
+                <Loader2 size={36} className="text-amber-500 animate-spin mx-auto" />
+                <div className="text-xs text-slate-400 animate-pulse font-bold">جاري حساب وتجميع كشف الأيام للمورد ديناميكياً...</div>
+              </div>
+            ) : !dailyLedgers || dailyLedgers.days.length === 0 ? (
+              <div className="bg-slate-900/50 border border-white/4 rounded-2xl py-12 text-center text-xs text-slate-405 font-bold">
+                🫙 لا يوجد أوردرات أو معاملات مسجلة كحساب يومي تحت اسم هذا المورد حالياً
+              </div>
             ) : (
-              <div className="space-y-3">
-                {subscribes.map((e: any, idx: number) => {
-                  const isPositive = Number(e.amount) > 0;
-                  return (
-                    <div
-                      key={idx}
-                      className="bg-slate-950 border border-white/4 p-4 rounded-xl flex items-center justify-between hover:bg-slate-950/70"
-                    >
-                      <div className="flex items-center gap-3">
-                        <span className={`p-2 rounded-lg text-xs ${isPositive ? "text-emerald-400 bg-emerald-950/20" : "text-red-400 bg-red-950/20"}`}>
-                          {isPositive ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />}
-                        </span>
-                        <div>
-                          <div className="text-xs font-bold text-slate-200">{e.desc || e.type}</div>
-                          <div className="text-[10px] text-slate-500 mt-1 font-semibold">
-                            {e.date} {e.tracking !== "CASH-PAY" ? `· الأوردر ${e.tracking}` : ""}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {dailyLedgers.days
+                  .filter((d: any) => !daySearchQuery || d.date.includes(daySearchQuery))
+                  .map((day: any, idx: number) => {
+                    const isPending = day.status === "pending";
+                    return (
+                      <div
+                        key={idx}
+                        className={`bg-slate-900 border rounded-2xl p-5 space-y-4 shadow-md transition-all hover:translate-y-[-2px] ${
+                          isPending ? "border-amber-500/10 hover:border-amber-500/25" : "border-emerald-500/10 hover:border-emerald-500/25"
+                        }`}
+                      >
+                        {/* Day Card Header */}
+                        <div className="flex items-center justify-between border-b border-white/6 pb-2.5">
+                          <span className="text-xs font-black text-slate-100 flex items-center gap-1.5">
+                            <Clock size={14} className="text-slate-400" />
+                            <span>يوم: {day.date}</span>
+                          </span>
+                          <span
+                            className={`px-3 py-1 text-[10px] font-black rounded-lg ${
+                              isPending
+                                ? "bg-amber-950/50 border border-amber-900/50 text-amber-400"
+                                : "bg-emerald-950/50 border border-emerald-900/50 text-emerald-400"
+                            }`}
+                          >
+                            {isPending ? "🔴 معلق لم يصفى" : "🟢 تم تصفية الكاش والمرتجع"}
+                          </span>
+                        </div>
+
+                        {/* Day Financial Grid Stats */}
+                        <div className="grid grid-cols-2 gap-3.5 text-right">
+                          <div className="bg-slate-950 border border-white/4 p-2.5 rounded-xl">
+                            <span className="text-[9.5px] text-slate-400 block font-bold">إجمالي قيمة الشغل (COD كلي)</span>
+                            <span className="text-xs font-mono font-black text-slate-200">{Number(day.totalWorkValue || 0).toLocaleString("ar")} ج.م</span>
+                          </div>
+                          <div className="bg-slate-950 border border-white/4 p-2.5 rounded-xl">
+                            <span className="text-[9.5px] text-slate-400 block font-bold">إجمالي التحصيل الفعلي الميداني</span>
+                            <span className="text-xs font-mono font-black text-emerald-400">{Number(day.totalActualCollected || 0).toLocaleString("ar")} ج.م</span>
+                          </div>
+                          <div className="bg-slate-950 border border-white/4 p-2.5 rounded-xl">
+                            <span className="text-[9.5px] text-slate-400 block font-bold">المرتجع المسترد اليوم</span>
+                            <span className="text-xs font-mono font-black text-red-400">{Number(day.returnedValueRefunded || 0).toLocaleString("ar")} ج.م</span>
+                          </div>
+                          <div className="bg-slate-950 border border-white/4 p-2.5 rounded-xl">
+                            <span className="text-[9.5px] text-slate-400 block font-bold">خصم شحن المرتجعات</span>
+                            <span className="text-xs font-mono font-black text-slate-350">{Number(day.returnShippingFees || 0).toLocaleString("ar")} ج.م</span>
                           </div>
                         </div>
-                      </div>
 
-                      <div className="text-left space-y-1">
-                        <div className={`text-xs font-black font-mono ${isPositive ? "text-emerald-400" : "text-red-400"}`}>
-                          {isPositive ? "+" : ""}
-                          {e.amount.toLocaleString("ar")} ج.م
+                        {/* Net Dues Container */}
+                        <div className="bg-slate-950 border border-white/6 p-3.5 rounded-xl flex items-center justify-between">
+                          <div>
+                            <span className="text-[10px] text-slate-400 block font-black">صافي مستحقات اليوم النهائية:</span>
+                            <span className="text-2xs text-slate-500 font-semibold">(صافي التحصيل الفعلي - خصومات الشحن للمرتجعات)</span>
+                          </div>
+                          <div className="text-base font-mono font-black text-emerald-400 text-left">
+                            {Number(day.netDues || 0).toLocaleString("ar")} ج.م
+                          </div>
                         </div>
-                        <div className="text-[9px] text-slate-500 font-bold font-mono">
-                          رصيد: {(e.balanceAfter || 0).toLocaleString("ar")}
+
+                        {/* Actions Inside Card */}
+                        <div className="grid grid-cols-2 gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedDayDate(day.date);
+                              setSelectedDayStatus(day.status);
+                              setSelectedDayOrdersDetail(day.orders);
+                            }}
+                            className="bg-slate-950 hover:bg-slate-950/80 border border-white/8 text-slate-200 py-2.5 px-3 rounded-lg text-2xs font-extrabold flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+                          >
+                            <Eye size={13} className="text-amber-500" />
+                            <span>تفاصيل أوردرات اليوم</span>
+                          </button>
+
+                          {isFinancial && isPending ? (
+                            <button
+                              type="button"
+                              disabled={settleDayProgress === day.date}
+                              onClick={() => handleSettleDay(day.date)}
+                              className="bg-emerald-600 hover:bg-emerald-700 text-slate-950 py-2.5 px-3 rounded-lg text-2xs font-black flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors"
+                            >
+                              {settleDayProgress === day.date ? (
+                                <Loader2 size={13} className="animate-spin text-slate-950" />
+                              ) : (
+                                <CheckCircle2 size={13} className="text-slate-950" />
+                              )}
+                              <span>تقفيل وتسليم الكاش المالي</span>
+                            </button>
+                          ) : (
+                            <div className="bg-emerald-950/30 border border-emerald-900/30 text-emerald-400 py-2.5 px-3 rounded-lg text-2xs font-bold flex items-center justify-center gap-1">
+                              <Check size={12} />
+                              <span>حساب مقفل ومصفى تماماً</span>
+                            </div>
+                          )}
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
               </div>
             )}
           </div>
@@ -1117,6 +1122,159 @@ export default function Ledger({ token, role, user }: LedgerProps) {
                 })}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* 🔍 Deep-Dive Daily Financial Ledger Modal */}
+      {selectedDayOrdersDetail && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-950 border border-white/10 rounded-2xl w-full max-w-5xl max-h-[85vh] overflow-hidden flex flex-col shadow-2xl text-right animate-fadeIn">
+            
+            {/* Modal Header */}
+            <div className="p-4 border-b border-white/8 flex items-center justify-between bg-slate-900">
+              <div className="space-y-1">
+                <h3 className="text-sm font-black text-slate-100 flex items-center gap-2">
+                  <Shield size={16} className="text-amber-500" />
+                  <span>🔍 كشف الحساب التفصيلي للطلبات - ليوم {selectedDayDate}</span>
+                </h3>
+                <p className="text-[10px] text-slate-400 font-bold">
+                  حالة اليوم الحالية: <span className={selectedDayStatus === "pending" ? "text-amber-450" : "text-emerald-400"}>{selectedDayStatus === "pending" ? "🔴 معلق لم يصفى" : "🟢 تم تصفيته وقفل حسابه"}</span>
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedDayOrdersDetail(null);
+                  setSelectedDayDate("");
+                  setModalSearchFilter("");
+                }}
+                className="p-1 text-slate-400 hover:text-white hover:bg-white/5 rounded-lg transition-colors cursor-pointer"
+              >
+                <ArrowLeft size={20} />
+              </button>
+            </div>
+
+            {/* Modal Search Bar */}
+            <div className="p-4 bg-slate-950 border-b border-white/4">
+              <div className="relative">
+                <span className="absolute inset-y-0 right-3 flex items-center pr-1 text-slate-550">
+                  <Search size={14} />
+                </span>
+                <input
+                  type="text"
+                  placeholder="ابحث باسم العميل، رقم الهاتف، كود التتبع، أو حالة الأوردر..."
+                  value={modalSearchFilter}
+                  onChange={(e) => setModalSearchFilter(e.target.value)}
+                  className="w-full bg-slate-900 border border-white/8 rounded-lg pr-9 pl-3 py-2 text-xs text-slate-200 outline-none focus:border-amber-500"
+                />
+              </div>
+            </div>
+
+            {/* Modal Table Content */}
+            <div className="flex-1 overflow-y-auto p-4">
+              <div className="overflow-x-auto border border-white/6 rounded-xl">
+                <table className="w-full text-right border-collapse text-2xs font-semibold">
+                  <thead>
+                    <tr className="bg-slate-900 text-slate-400 border-b border-white/6 font-bold">
+                      <th className="p-3">رقم التتبع</th>
+                      <th className="p-3">اسم العميل</th>
+                      <th className="p-3">الهاتف</th>
+                      <th className="p-3">المحافظة</th>
+                      <th className="p-3">الحالة الحالية</th>
+                      <th className="p-3 text-left">قيمة المنتج الصافي</th>
+                      <th className="p-3 text-left">مصاريف الشحن</th>
+                      <th className="p-3 text-left">COD المطلوب الكلي</th>
+                      <th className="p-3 text-left">الكاش المحصل</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/4">
+                    {selectedDayOrdersDetail
+                      .filter((o: any) => {
+                        const term = modalSearchFilter.toLowerCase().trim();
+                        if (!term) return true;
+                        return (
+                          (o.trackingId || "").toLowerCase().includes(term) ||
+                          (o.custName || "").toLowerCase().includes(term) ||
+                          (o.custPhone || "").toLowerCase().includes(term) ||
+                          (o.status || "").toLowerCase().includes(term)
+                        );
+                      })
+                      .map((o: any, oIdx: number) => {
+                        const isDelivered = ["تم التسليم", "تسليم جزئي"].includes(o.status);
+                        const isReturned = (o.status || "").includes("مرتجع") || ["قيد المرتجع"].includes(o.status);
+                        return (
+                          <tr key={oIdx} className="hover:bg-slate-900/40">
+                            <td className="p-3 font-mono text-slate-300 select-all">{o.trackingId}</td>
+                            <td className="p-3 text-slate-100 font-bold">{o.custName}</td>
+                            <td className="p-3 font-mono text-slate-300">{o.custPhone}</td>
+                            <td className="p-3 text-slate-400">{o.custProvince || "—"}</td>
+                            <td className="p-3">
+                              <span
+                                className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                  isDelivered
+                                    ? "bg-emerald-950/50 text-emerald-400"
+                                    : isReturned
+                                    ? "bg-red-950/50 text-red-400"
+                                    : "bg-slate-800 text-slate-200"
+                                }`}
+                              >
+                                {o.status}
+                              </span>
+                            </td>
+                            <td className="p-3 text-left font-mono text-slate-300">{(o.prodPrice || 0).toLocaleString("ar")} ج.م</td>
+                            <td className="p-3 text-left font-mono text-slate-300">{(o.shipPrice || 0).toLocaleString("ar")} ج.م</td>
+                            <td className="p-3 text-left font-mono text-amber-400">{(o.cod || 0).toLocaleString("ar")} ج.م</td>
+                            <td className="p-3 text-left font-mono font-bold text-emerald-400">{(o.collectedAmount || 0).toLocaleString("ar")} ج.م</td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Modal Bottom KPI Summary */}
+            <div className="p-4 bg-slate-900 border-t border-white/8 grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="bg-slate-950 border border-white/4 p-2.5 rounded-xl">
+                <span className="text-[10px] text-slate-400 block font-bold">عدد أوردرات اليوم المصنفة</span>
+                <span className="text-sm font-mono font-black text-slate-100">{selectedDayOrdersDetail.length} أوردرات</span>
+              </div>
+              <div className="bg-slate-950 border border-white/4 p-2.5 rounded-xl">
+                <span className="text-[10px] text-slate-400 block font-bold">إجمالي كود المطلوب كلياً</span>
+                <span className="text-sm font-mono font-black text-amber-400">
+                  {selectedDayOrdersDetail.reduce((acc, cur) => acc + (cur.cod || 0), 0).toLocaleString("ar")} ج.م
+                </span>
+              </div>
+              <div className="bg-slate-950 border border-white/4 p-2.5 rounded-xl">
+                <span className="text-[10px] text-slate-400 block font-bold">إجمالي الكاش المحصل الفعلي</span>
+                <span className="text-sm font-mono font-black text-emerald-400">
+                  {selectedDayOrdersDetail.reduce((acc, cur) => acc + (cur.collectedAmount || 0), 0).toLocaleString("ar")} ج.م
+                </span>
+              </div>
+              <div className="bg-slate-950 border border-white/4 p-2.5 rounded-xl">
+                <span className="text-[10px] text-slate-400 block font-bold">إجمالي شحن أوردرات اليوم</span>
+                <span className="text-sm font-mono font-black text-slate-300">
+                  {selectedDayOrdersDetail.reduce((acc, cur) => acc + (cur.shipPrice || 0), 0).toLocaleString("ar")} ج.م
+                </span>
+              </div>
+            </div>
+
+            {/* Modal Actions */}
+            <div className="p-3 bg-slate-950 border-t border-white/4 text-left">
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedDayOrdersDetail(null);
+                  setSelectedDayDate("");
+                  setModalSearchFilter("");
+                }}
+                className="bg-slate-800 hover:bg-slate-700 text-slate-200 py-2 px-5 rounded-lg text-xs font-black cursor-pointer transition-colors"
+              >
+                إغلاق الكشف التفصيلي
+              </button>
+            </div>
+
           </div>
         </div>
       )}

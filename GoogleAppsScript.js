@@ -87,6 +87,9 @@ function doPost(e) {
       case "getOrders":
         result = getOrders(sheets);
         break;
+      case "getArchivedOrders":
+        result = getArchivedOrders(sheets);
+        break;
       case "addOrder":
         result = addOrder(sheets, requestData);
         break;
@@ -222,6 +225,12 @@ function initSheets() {
       "totalCOD", "shipCost", "courier", "status", "prodType", "notes", "delivDate", "retDate", 
       "addedBy", "commission", "returnShippingType", "returnQueueStatus", "returnQueueAgent"
     ],
+    archivedOrders: [
+      "tracking", "createdAt", "updatedAt", "orderDate", "supplier", "customer", 
+      "phone", "phone2", "gov", "region", "address", "prodPrice", "shipPrice", 
+      "totalCOD", "shipCost", "courier", "status", "prodType", "notes", "delivDate", "retDate", 
+      "addedBy", "commission", "returnShippingType", "returnQueueStatus", "returnQueueAgent", "isSettled", "is_settled"
+    ],
     expenses: ["id", "date", "amount", "desc", "category", "addedBy"],
     cashbox: ["date", "desc", "type", "amount", "ref", "addedBy"],
     statusHistory: ["tracking", "oldStatus", "newStatus", "updatedBy", "dateTime"],
@@ -237,6 +246,7 @@ function initSheets() {
     couriers: ["المناديب", "اسم المندوب", "المندوبين", "مندوبي الشحن", "couriers"],
     suppliers: ["الموردين", "المورد المالي", "محل الأناقة", "suppliers"],
     orders: ["الطلبات", "الأوردرات", "الطلبيات", "orders"],
+    archivedOrders: ["الأرشيف التاريخي", "الأرشيف", "الأرشيف التاريخي المعزول", "الطلبات المؤرشفة", "archivedOrders"],
     expenses: ["المصاريف", "المصروفات", "expenses"],
     cashbox: ["الخزنة", "حركة الخزينة", "الخزينة", "cashbox"],
     statusHistory: ["سجل الحالات", "حالات الشحنات", "حالات الشحنة", "statusHistory"],
@@ -422,6 +432,16 @@ function updateRowByObject(sheet, rowIndex, obj) {
 function getOrders(sheets) {
   const orders = getTableData(sheets.orders);
   return { ok: true, orders: orders };
+}
+
+function getArchivedOrders(sheets) {
+  var list = [];
+  try {
+    list = getTableData(sheets.archivedOrders) || [];
+  } catch (e) {
+    // Graceful fallback
+  }
+  return { ok: true, orders: list };
 }
 
 function addOrder(sheets, d) {
@@ -1635,11 +1655,18 @@ function getSupplierDashboard(sheets, d) {
 function getSupplierAccounts(sheets) {
   const suppliers = getTableData(sheets.suppliers);
   const orders = getTableData(sheets.orders);
+  var archivedOrders = [];
+  try {
+    archivedOrders = getTableData(sheets.archivedOrders) || [];
+  } catch (e) {
+    // Graceful fallback if sheet does not exist
+  }
+  const combinedOrders = orders.concat(archivedOrders);
   const ledger = getTableData(sheets.supplierLedger);
 
   // Extract all unique names from both suppliers list and orders list
   const registeredNames = suppliers.map(function(s) { return s.name; }).filter(Boolean);
-  const orderNames = orders.map(function(o) { return o.supplier; }).filter(Boolean);
+  const orderNames = combinedOrders.map(function(o) { return o.supplier; }).filter(Boolean);
   const allSupplierNames = [];
   const seenSuppliers = {};
 
@@ -1657,7 +1684,7 @@ function getSupplierAccounts(sheets) {
       return s.name && s.name.toString().trim().toLowerCase() === supplierName.toLowerCase();
     });
     const sLedger = ledger.filter(function(l) { return isSameSupplier(l.supplier, supplierName); });
-    const rawSupOrders = orders.filter(function(o) { return isSameSupplier(o.supplier, supplierName); });
+    const rawSupOrders = combinedOrders.filter(function(o) { return isSameSupplier(o.supplier, supplierName); });
 
     // Dedup rawSupOrders by tracking ID
     const uniqueSupOrdersMap = {};
@@ -1711,44 +1738,48 @@ function getSupplierAccounts(sheets) {
 }
 
 function addSupplierPayment(sheets, d) {
-  const { supplier, amount, desc, currentUser, transactionType } = d;
-  if (!supplier || !amount || Number(amount) === 0) return { ok: false, error: "قيمة الدفعة المالية المكتوبة غير صحيحة" };
+  const { supplier, amount, desc, currentUser, transactionType, tracking } = d;
+  const isSettlement = transactionType === "تصفية يومية" || (desc && desc.includes("تصفية يوم"));
+  
+  if (!isSettlement) {
+    if (!supplier || !amount || Number(amount) === 0) return { ok: false, error: "قيمة الدفعة المالية المكتوبة غير صحيحة" };
+  }
 
   // Handle absolute values, manual deductions are stored as negative in ledger
-  const val = Math.abs(Number(amount));
+  const val = Math.abs(Number(amount || 0));
   const isWithdrawal = transactionType === "withdrawal" || transactionType === "سحب";
 
   // 1. قيد الخزانة (صرف الدفعة المادية من السند المركزي لتقليص النقدية أو إيداعها)
   appendToSheet(sheets.cashbox, ["date", "desc", "type", "amount", "ref", "addedBy"], {
     date: now(),
     desc: desc || (isWithdrawal ? `سحب مالي / تسوية عكسية من المورد: ${supplier}` : `دفعة نقدية منصرفة للمورد: ${supplier}`),
-    type: isWithdrawal ? "إيداع" : "صرف مورد",
+    type: isSettlement ? "صرف مورد" : (isWithdrawal ? "إيداع" : "صرف مورد"),
     amount: val,
-    ref: supplier,
+    ref: tracking || supplier,
     addedBy: currentUser || "إدارة الحسابات"
   });
 
   // 2. قيد دفتر الأستاذ الخاص بالمورد لإعدام الدائنة أو زيادتها (خصم دائم لدائن المورد)
   appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
     supplier: supplier,
-    date: now(),
-    type: isWithdrawal ? "سحب من المورد" : "دفعة مورد",
-    tracking: "—",
-    amount: -val,
+    date: d.date || now(),
+    type: isSettlement ? "تصفية يومية" : (isWithdrawal ? "سحب من المورد" : "دفعة مورد"),
+    tracking: tracking || "—",
+    amount: isSettlement ? 0 : -val,
     desc: desc || (isWithdrawal ? `سحب مالي / تسوية عكسية من المورد: ${supplier}` : `استلام دفعة نقدية مسواة للمورد: ${supplier}`)
   });
 
   // 3. تدوين الحدث الأمني المهم في سجل التدقيق المالي
   appendToSheet(sheets.auditLog, ["user", "type", "dateTime", "oldVal", "newVal", "reason"], {
     user: currentUser || "حسابات",
-    type: isWithdrawal ? "سحب مالي من مورد" : "سداد مورد / دفعة نقدية",
+    type: isSettlement ? "تصفية يومية للمورد" : (isWithdrawal ? "سحب مالي من مورد" : "سداد مورد / دفعة نقدية"),
     dateTime: now(),
     oldVal: "—",
-    newVal: isWithdrawal ? `سحب مبلغ: ${val} ج.م من المورد: ${supplier}` : `صرف مبلغ: ${val} ج.م للمورد: ${supplier}`,
+    newVal: isSettlement ? `تصفية حسابات يومية للمورد: ${supplier}` : (isWithdrawal ? `سحب مبلغ: ${val} ج.م من المورد: ${supplier}` : `صرف مبلغ: ${val} ج.م للمورد: ${supplier}`),
     reason: desc || (isWithdrawal ? `سحب مالي لتصحيح حساب المورد` : `تخليص سداد وتصفية للمورد: ${supplier}`)
   });
 
-  return { ok: true, msg: isWithdrawal ? "تم تسجيل حركة السحب المالي العكسية بنجاح وتسويتها بالخزنة" : "تم تسجيل الدفعة النقدية بنجاح وتسويتها بالخزنة" };
+  return { ok: true, msg: isSettlement ? "تم تصفية اليوم بنجاح في سجلات الشيت" : (isWithdrawal ? "تم تسجيل حركة السحب المالي العكسية بنجاح وتسويتها بالخزنة" : "تم تسجيل الدفعة النقدية بنجاح وتسويتها بالخزنة") };
 }
 
 // ───────────────────────────────────────────────
@@ -1775,12 +1806,29 @@ function getCourierLedger(sheets, d) {
   const todayDate = nowDay();
 
   // Strict Courier Settlement Calculations (Today's performance):
-  // 1. Delivered Cash (كاش الأوردرات المسلمة اليوم): (ثمن المنتجات + مصاريف الشحن) لجميع الأوردرات "تم التسليم" اليوم
-  const todayDeliveredOrders = courierOrders.filter(o => o.status === "تم التسليم" && o.delivDate && o.delivDate.substring(0, 10) === todayDate);
-  const todayDeliveredCount = todayDeliveredOrders.length;
-  const todayDeliveredCash = todayDeliveredOrders.reduce((sum, o) => sum + Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0))), 0);
+  // 1. Full COD from "تم التسليم" (Total Delivery)
+  const fullDeliveredOrders = courierOrders.filter(o => 
+    ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].indexOf(o.status) !== -1 && 
+    o.delivDate && o.delivDate.substring(0, 10) === todayDate
+  );
+  const fullDeliveredCash = fullDeliveredOrders.reduce((sum, o) => sum + Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0))), 0);
 
-  // 2. Returned Shipping Cash (كاش شحن المرتجعات اليوم): (مصاريف الشحن فقط) لجميع الأوردرات "مرتجع مدفوع الشحن" اليوم
+  // 2. Actual Amount Received from "تسليم جزئي"
+  const partialDeliveredOrders = courierOrders.filter(o => 
+    ["تسليم جزئي", "تسليم جزئي - معلق للجرد"].indexOf(o.status) !== -1 && 
+    o.delivDate && o.delivDate.substring(0, 10) === todayDate
+  );
+  const partialDeliveredCash = partialDeliveredOrders.reduce((sum, o) => {
+    const amt = o.partialAmount !== undefined && o.partialAmount !== null && o.partialAmount !== "" ? Number(o.partialAmount) :
+                (o.actualReceivedCash !== undefined && o.actualReceivedCash !== null && o.actualReceivedCash !== "" ? Number(o.actualReceivedCash) : Number(o.totalCOD || 0));
+    return sum + amt;
+  }, 0);
+
+  // Combine Delivered count and cash
+  const todayDeliveredCount = fullDeliveredOrders.length + partialDeliveredOrders.length;
+  const todayDeliveredCash = fullDeliveredCash + partialDeliveredCash;
+
+  // 3. Returned Shipping Cash (كاش شحن المرتجعات اليوم): (مصاريف الشحن فقط) لجميع الأوردرات "مرتجع مدفوع الشحن" اليوم
   const todayReturnedPaidOrders = courierOrders.filter(o => 
     (o.status === "مرتجع والعميل دفع الشحن" || o.status === "مرتجع مدفوع الشحن" || (o.status === "مرتجع" && o.returnShippingType === "paid")) && 
     o.retDate && o.retDate.substring(0, 10) === todayDate
@@ -1788,27 +1836,38 @@ function getCourierLedger(sheets, d) {
   const todayReturnedPaidCount = todayReturnedPaidOrders.length;
   const todayReturnedPaidCash = todayReturnedPaidOrders.reduce((sum, o) => sum + Number(o.shipPrice || o.shipCost || 0), 0);
 
-  // 3. Total Commission (عمولة المندوب الكلية اليوم): (deliveredCount * successRate) + (returnedPaidCount * successRate)
+  // 4. Total Commission (عمولة المندوب الكلية اليوم): (deliveredCount * successRate) + (returnedPaidCount * successRate)
   const todayTotalCommission = (todayDeliveredCount * commissionSuccess) + (todayReturnedPaidCount * commissionSuccess);
 
-  const deliveredCount = courierOrders.filter(o => o.status === "تم التسليم").length;
+  const deliveredCount = courierOrders.filter(o => ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].indexOf(o.status) !== -1).length;
   const delivCommission = deliveredCount * commissionSuccess;
 
   const returnedCount = courierOrders.filter(o => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length;
-  const returnedPaidCount = courierOrders.filter(o => o.status === "مرتجع" && o.returnShippingType === "paid").length;
+  const returnedPaidCount = courierOrders.filter(o => (o.status === "مرتجع" && o.returnShippingType === "paid") || o.status === "مرتجع والعميل دفع الشحن" || o.status === "مرتجع مدفوع الشحن").length;
   const returnShippingCommission = returnedPaidCount * commissionSuccess;
 
   const bonusesSum = targetLedger.filter(l => l.type === "مكافأة").reduce((sum, item) => sum + Math.abs(Number(item.amount || 0)), 0);
   const penaltiesSum = targetLedger.filter(l => l.type === "جزاء" || l.type === "خصم" || l.type === "خصم عجز").reduce((sum, item) => sum + Math.abs(Number(item.amount || 0)), 0);
 
-  // 4. Adjustments for today:
+  // 5. Adjustments for today:
   const todayBonuses = targetLedger.filter(l => l.type === "مكافأة" && l.date && l.date.substring(0, 10) === todayDate).reduce((sum, x) => sum + Math.abs(Number(x.amount || 0)), 0);
   const todayPenalties = targetLedger.filter(l => (l.type === "جزاء" || l.type === "خصم" || l.type === "خصم عجز") && l.date && l.date.substring(0, 10) === todayDate).reduce((sum, x) => sum + Math.abs(Number(x.amount || 0)), 0);
 
   // Final Settle Equation (الصافي المطلوب توريده للخزنة لليوم):
   const requiredHandoverToday = (todayDeliveredCash + todayReturnedPaidCash) - todayTotalCommission - todayPenalties + todayBonuses;
 
-  const totalCollected = courierOrders.filter(o => o.status === "تم التسليم").reduce((sum, o) => sum + Number(o.totalCOD || 0), 0);
+  const totalCollected = courierOrders.reduce((sum, o) => {
+    if (["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].indexOf(o.status) !== -1) {
+      return sum + Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0)));
+    } else if (["تسليم جزئي", "تسليم جزئي - معلق للجرد"].indexOf(o.status) !== -1) {
+      const amt = o.partialAmount !== undefined && o.partialAmount !== null && o.partialAmount !== "" ? Number(o.partialAmount) :
+                  (o.actualReceivedCash !== undefined && o.actualReceivedCash !== null && o.actualReceivedCash !== "" ? Number(o.actualReceivedCash) : Number(o.totalCOD || 0));
+      return sum + amt;
+    } else if (o.status === "مرتجع والعميل دفع الشحن" || o.status === "مرتجع مدفوع الشحن" || (o.status === "مرتجع" && o.returnShippingType === "paid")) {
+      return sum + Number(o.shipPrice || o.shipCost || 0);
+    }
+    return sum;
+  }, 0);
   const totalPaidToCompany = cashbox.filter(item => item.type === "استلام عهدة مندوب" && item.ref === courier).reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const deficit = totalCollected - totalPaidToCompany;
 
@@ -1916,12 +1975,29 @@ function getCourierInfo(sheets, d) {
   const todayDate = nowDay();
 
   // Strict Courier Settlement Calculations (Today's performance):
-  // 1. Delivered Cash (كاش الأوردرات المسلمة اليوم): (ثمن المنتجات + مصاريف الشحن) لجميع الأوردرات "تم التسليم" اليوم
-  const todayDeliveredOrders = courierOrders.filter(o => o.status === "تم التسليم" && o.delivDate && o.delivDate.substring(0, 10) === todayDate);
-  const todayDeliveredCount = todayDeliveredOrders.length;
-  const todayDeliveredCash = todayDeliveredOrders.reduce((sum, o) => sum + Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0))), 0);
+  // 1. Full COD from "تم التسليم" (Total Delivery)
+  const fullDeliveredOrders = courierOrders.filter(o => 
+    ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].indexOf(o.status) !== -1 && 
+    o.delivDate && o.delivDate.substring(0, 10) === todayDate
+  );
+  const fullDeliveredCash = fullDeliveredOrders.reduce((sum, o) => sum + Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0))), 0);
 
-  // 2. Returned Shipping Cash (كاش شحن المرتجعات اليوم): (مصاريف الشحن فقط) لجميع الأوردرات "مرتجع مدفوع الشحن" اليوم
+  // 2. Actual Amount Received from "تسليم جزئي"
+  const partialDeliveredOrders = courierOrders.filter(o => 
+    ["تسليم جزئي", "تسليم جزئي - معلق للجرد"].indexOf(o.status) !== -1 && 
+    o.delivDate && o.delivDate.substring(0, 10) === todayDate
+  );
+  const partialDeliveredCash = partialDeliveredOrders.reduce((sum, o) => {
+    const amt = o.partialAmount !== undefined && o.partialAmount !== null && o.partialAmount !== "" ? Number(o.partialAmount) :
+                (o.actualReceivedCash !== undefined && o.actualReceivedCash !== null && o.actualReceivedCash !== "" ? Number(o.actualReceivedCash) : Number(o.totalCOD || 0));
+    return sum + amt;
+  }, 0);
+
+  // Combine Delivered count and cash
+  const todayDeliveredCount = fullDeliveredOrders.length + partialDeliveredOrders.length;
+  const todayDeliveredCash = fullDeliveredCash + partialDeliveredCash;
+
+  // 3. Returned Shipping Cash (كاش شحن المرتجعات اليوم): (مصاريف الشحن فقط) لجميع الأوردرات "مرتجع مدفوع الشحن" اليوم
   const todayReturnedPaidOrders = courierOrders.filter(o => 
     (o.status === "مرتجع والعميل دفع الشحن" || o.status === "مرتجع مدفوع الشحن" || (o.status === "مرتجع" && o.returnShippingType === "paid")) && 
     o.retDate && o.retDate.substring(0, 10) === todayDate
@@ -1929,7 +2005,7 @@ function getCourierInfo(sheets, d) {
   const todayReturnedPaidCount = todayReturnedPaidOrders.length;
   const todayReturnedPaidCash = todayReturnedPaidOrders.reduce((sum, o) => sum + Number(o.shipPrice || o.shipCost || 0), 0);
 
-  // 3. Total Commission (عمولة المندوب الكلية اليوم): (deliveredCount * successRate) + (returnedPaidCount * successRate)
+  // 4. Total Commission (عمولة المندوب الكلية اليوم): (deliveredCount * successRate) + (returnedPaidCount * successRate)
   const todayTotalCommission = (todayDeliveredCount * commissionSuccess) + (todayReturnedPaidCount * commissionSuccess);
 
   const delivCommission = targetLedger.filter(l => l.type === "تسليم").reduce((sum, item) => sum + Number(item.amount || commissionSuccess), 0);
@@ -1943,7 +2019,18 @@ function getCourierInfo(sheets, d) {
   // Final Settle Equation (الصافي المطلوب توريده للخزنة لليوم):
   const requiredHandoverToday = (todayDeliveredCash + todayReturnedPaidCash) - todayTotalCommission - todayPenalties + todayBonuses;
 
-  const totalCollected = courierOrders.filter(o => o.status === "تم التسليم").reduce((sum, o) => sum + Number(o.totalCOD || 0), 0);
+  const totalCollected = courierOrders.reduce((sum, o) => {
+    if (["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].indexOf(o.status) !== -1) {
+      return sum + Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0)));
+    } else if (["تسليم جزئي", "تسليم جزئي - معلق للجرد"].indexOf(o.status) !== -1) {
+      const amt = o.partialAmount !== undefined && o.partialAmount !== null && o.partialAmount !== "" ? Number(o.partialAmount) :
+                  (o.actualReceivedCash !== undefined && o.actualReceivedCash !== null && o.actualReceivedCash !== "" ? Number(o.actualReceivedCash) : Number(o.totalCOD || 0));
+      return sum + amt;
+    } else if (o.status === "مرتجع والعميل دفع الشحن" || o.status === "مرتجع مدفوع الشحن" || (o.status === "مرتجع" && o.returnShippingType === "paid")) {
+      return sum + Number(o.shipPrice || o.shipCost || 0);
+    }
+    return sum;
+  }, 0);
   const totalPaidToCompany = cashbox.filter(item => item.type === "استلام عهدة مندوب" && item.ref === courierName).reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const deficit = totalCollected - totalPaidToCompany;
 
@@ -2465,6 +2552,10 @@ function settleCourierOrders(sheets, d) {
     const updatedAtIdx = headers.indexOf("updatedAt");
     const isSettledIdx = headers.indexOf("isSettled");
     const is_settledIdx = headers.indexOf("is_settled");
+    const partialAmountIdx = headers.indexOf("partialAmount");
+    const actualReceivedCashIdx = headers.indexOf("actualReceivedCash");
+    const returnReasonIdx = headers.indexOf("returnReason");
+    const returnSubStatusIdx = headers.indexOf("returnSubStatus");
 
     if (trackingIdx === -1 || courierIdx === -1 || statusIdx === -1) {
       return { ok: false, error: "فشل التحقق: حقول الورقة غير مكتملة" };
@@ -2474,7 +2565,12 @@ function settleCourierOrders(sheets, d) {
     const nowCairoStr = now();
     const searchCourier = courier.toString().trim().toLowerCase();
 
-    for (let r = 1; r < data.length; r++) {
+    // Prepare Archived Orders sheet
+    const archiveSheet = sheets.archivedOrders;
+    const archiveHeaders = archiveSheet.getRange(1, 1, 1, archiveSheet.getLastColumn()).getValues()[0].map(function(h) { return h ? h.toString().trim() : ""; });
+
+    // Process from back to front so row indices are structurally stable upon deletion
+    for (let r = data.length - 1; r >= 1; r--) {
       const rowCourier = data[r][courierIdx] ? data[r][courierIdx].toString().trim() : "";
       if (rowCourier.toLowerCase() === searchCourier) {
         const trackingVal = data[r][trackingIdx] ? data[r][trackingIdx].toString().trim() : "";
@@ -2482,51 +2578,71 @@ function settleCourierOrders(sheets, d) {
         const oldCommission = data[r][commissionIdx] ? Number(data[r][commissionIdx] || 0) : 0;
 
         const rowIndex = r + 1;
-        const updateObj = {};
+        
+        // Build data map for the current row to safely update properties dynamically
+        const rowDataMap = {};
+        for (let c = 0; c < headers.length; c++) {
+          if (headers[c]) {
+            rowDataMap[headers[c]] = data[r][c];
+          }
+        }
 
-        if (lastCourierIdx !== -1) updateObj["lastCourier"] = rowCourier;
-        if (lastCommissionIdx !== -1) updateObj["lastCommission"] = oldCommission;
+        rowDataMap["lastCourier"] = rowCourier;
+        rowDataMap["lastCommission"] = oldCommission;
 
         let nextStatus = oldStatus;
         if (oldStatus === "مرتجع" || oldStatus === "مرتجع جديد") {
           nextStatus = "مرتجع بالمستودع";
-          if (courierSignatureIdx !== -1) {
-            updateObj["courierSignature"] = rowCourier + " (توقيع تصفية المرتجع الميداني ✍️)";
-          }
-        } else if (oldStatus === "تسليم جزئي" || oldStatus === "مرتجع جزئي") {
+          rowDataMap["courierSignature"] = rowCourier + " (توقيع تصفية المرتجع الميداني ✍️)";
+        } else if (oldStatus === "تسليم جزئي" || oldStatus === "مرتجع جزئي" || oldStatus === "تسليم جزئي - معلق للجرد") {
           nextStatus = "مرتجع جزئي بالمستودع";
-          if (courierSignatureIdx !== -1) {
-            updateObj["courierSignature"] = rowCourier + " (توقيع تصفية المرتجع الجزئي ✍️)";
+          rowDataMap["returnReason"] = "مرتجع جزئي متبقي";
+          rowDataMap["returnSubStatus"] = "بضاعة متبقية من تسليم جزئي";
+          rowDataMap["courierSignature"] = rowCourier + " (توقيع تصفية المرتجع الجزئي ✍️)";
+
+          const partialAmt = rowDataMap["partialAmount"] !== undefined ? Number(rowDataMap["partialAmount"] || 0) : 0;
+          const actualCash = Number(rowDataMap["actualReceivedCash"] || partialAmt || rowDataMap["totalCOD"] || 0);
+          if (actualCash > 0) {
+            appendToSheet(sheets.cashbox, ["date", "desc", "type", "amount", "ref", "addedBy"], {
+              date: nowCairoStr,
+              desc: "تحصيل تصفية تسليم جزئي للشحنة رقم: " + trackingVal,
+              type: "استلام عهدة مندوب",
+              amount: actualCash,
+              ref: courier,
+              addedBy: currentUser || "إدارة"
+            });
           }
         } else if (oldStatus === "مؤجل" || oldStatus === "Delayed" || oldStatus === "مؤجل من المندوب" || oldStatus === "مؤجل بناءً على طلب العميل") {
           nextStatus = "مؤجل بالمستودع";
-          if (courierSignatureIdx !== -1) {
-            updateObj["courierSignature"] = rowCourier + " (توقيع تصفية المؤجل ✍️)";
-          }
+          rowDataMap["courierSignature"] = rowCourier + " (توقيع تصفية المؤجل ✍️)";
         } else if (oldStatus === "لا يوجد رد" || oldStatus === "العميل لا يرد" || oldStatus === "No Answer" || oldStatus === "العميل لم يقم بالرد") {
           nextStatus = "لا يوجد رد بالمستودع";
-          if (courierSignatureIdx !== -1) {
-            updateObj["courierSignature"] = rowCourier + " (توقيع تصفية عدم الرد ✍️)";
-          }
-        } else if (oldStatus === "تم التسليم" || oldStatus === "تم التسليم بنجاح" || oldStatus === "تم التسليم (ناجح كاش)") {
-          nextStatus = oldStatus;
-        } else {
-          nextStatus = oldStatus;
+          rowDataMap["courierSignature"] = rowCourier + " (توقيع تصفية عدم الرد ✍️)";
         }
 
-        updateObj["status"] = nextStatus;
+        rowDataMap["status"] = nextStatus;
         var isSuccessfullyClosed = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي"].indexOf(oldStatus) !== -1;
         if (isSuccessfullyClosed) {
-          if (isSettledIdx !== -1) updateObj["isSettled"] = "true";
-          if (is_settledIdx !== -1) updateObj["is_settled"] = "true";
+          rowDataMap["isSettled"] = "true";
+          rowDataMap["is_settled"] = "true";
         } else {
-          updateObj["courier"] = "";
-          if (commissionIdx !== -1) updateObj["commission"] = 0;
+          rowDataMap["courier"] = "";
+          rowDataMap["commission"] = 0;
         }
-        if (updatedAtIdx !== -1) updateObj["updatedAt"] = nowCairoStr;
+        rowDataMap["updatedAt"] = nowCairoStr;
 
-        updateRowByObject(sheet, rowIndex, updateObj);
+        // Populate values based on archive headers
+        const archiveRowValues = [];
+        for (let h = 0; h < archiveHeaders.length; h++) {
+          const headerName = archiveHeaders[h];
+          const val = rowDataMap[headerName] !== undefined ? rowDataMap[headerName] : "";
+          archiveRowValues.push(val);
+        }
 
+        // Write row into archive sheet
+        archiveSheet.appendRow(archiveRowValues);
+
+        // Record status change event
         appendToSheet(sheets.statusHistory, ["tracking", "oldStatus", "newStatus", "updatedBy", "dateTime"], {
           tracking: trackingVal,
           oldStatus: oldStatus,
@@ -2535,11 +2651,13 @@ function settleCourierOrders(sheets, d) {
           dateTime: nowCairoStr
         });
 
+        // Delete row from orders sheet
+        sheet.deleteRow(rowIndex);
         settledCount++;
       }
     }
 
-    return { ok: true, settled: settledCount, msg: "تم سحب وتصفية " + settledCount + " شحنة للمستودع وتبرئة المندوب بنجاح ✓" };
+    return { ok: true, settled: settledCount, msg: "تم ترحيل وتصفية " + settledCount + " شحنة إلى الأرشيف التاريخي وتطهير الشاشات الحية بنجاح ✓" };
 
   } catch (e) {
     return { ok: false, error: "خطأ في سكريبت جوجل شيت أثناء التسوية: " + e.toString() };

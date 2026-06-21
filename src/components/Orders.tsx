@@ -2289,22 +2289,39 @@ export default function Orders({ token, role, username, orders, setOrders, couri
           normalizeDateToYMD(o.delivDate) === targetDateStr
         ).length;
 
+        const myPartialDelivered = myActiveOrders.filter((o) => 
+          (o.status === "تسليم جزئي" || o.status === "تسليم جزئي - معلق للجرد") && 
+          o.delivDate && 
+          normalizeDateToYMD(o.delivDate) === targetDateStr
+        ).length;
+
         const myReturned = myActiveOrders.filter((o) => 
-          ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status) && 
+          ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع بالمستودع", "مرتجع جزئي بالمستودع"].includes(o.status) && 
           o.retDate && 
           normalizeDateToYMD(o.retDate) === targetDateStr
         ).length;
 
         const mySuspended = myActiveOrders.filter((o) => 
-          ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status) && 
+          ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد", "العميل لا يرد", "مؤجل بالمستودع", "لا يوجد رد بالمستودع"].includes(o.status) && 
           o.updatedAt && 
           normalizeDateToYMD(o.updatedAt) === targetDateStr
         ).length;
 
-        const myRemaining = Math.max(0, myActiveOrders.filter((o) => !o.isClosed && !["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)).length);
+        const myRemaining = Math.max(0, myActiveOrders.filter((o) => 
+          !o.isClosed && 
+          o.is_settled !== "true" && 
+          o.isSettled !== true && 
+          !["تم التسليم", "تسليم جزئي", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي - معلق للجرد", "مرتجع", "مرتجع بالمستودع", "مرتجع جزئي بالمستودع", "تم تسليمه للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)
+        ).length);
 
         // Financial Math
         const agentDeliveredOrders = roleFilteredOrders.filter(o => o.courier === username && o.status === "تم التسليم" && o.delivDate && normalizeDateToYMD(o.delivDate) === targetDateStr);
+        const agentPartialDeliveredOrders = roleFilteredOrders.filter(o => 
+          o.courier === username && 
+          (o.status === "تسليم جزئي" || o.status === "تسليم جزئي - معلق للجرد") && 
+          o.delivDate && 
+          normalizeDateToYMD(o.delivDate) === targetDateStr
+        );
         const agentCustomerPaidReturns = roleFilteredOrders.filter(o => 
           o.courier === username && 
           (o.status === "مرتجع والعميل دفع الشحن" || o.status === "مرتجع مدفوع الشحن" || (o.status === "مرتجع" && o.returnShippingType === "paid")) && 
@@ -2313,34 +2330,47 @@ export default function Orders({ token, role, username, orders, setOrders, couri
         );
         
         const totalCODDelivered = agentDeliveredOrders.reduce((sum, o) => sum + Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0))), 0);
+        const totalCODPartial = agentPartialDeliveredOrders.reduce((sum, o) => {
+          const amt = o.partialAmount !== undefined && o.partialAmount !== null && o.partialAmount !== "" ? Number(o.partialAmount) :
+                      (o.actualReceivedCash !== undefined && o.actualReceivedCash !== null && o.actualReceivedCash !== "" ? Number(o.actualReceivedCash) : Number(o.totalCOD || 0));
+          return sum + amt;
+        }, 0);
         const totalShipReturnsPaidByCust = agentCustomerPaidReturns.reduce((sum, o) => sum + Number(o.shipPrice || o.shipCost || 0), 0);
         
-        const totalReceivedCashInHand = totalCODDelivered + totalShipReturnsPaidByCust;
-        const totalCommissionsEarned = (agentDeliveredOrders.length * rawCommission) + (agentCustomerPaidReturns.length * rawCommission);
+        const totalReceivedCashInHand = totalCODDelivered + totalCODPartial + totalShipReturnsPaidByCust;
+        const totalCommissionsEarned = ((agentDeliveredOrders.length + agentPartialDeliveredOrders.length) * rawCommission) + (agentCustomerPaidReturns.length * rawCommission);
         const netRequiredHandover = totalReceivedCashInHand - totalCommissionsEarned - courierExpenses;
 
         return (
           <>
-            <div className="mx-4 grid grid-cols-2 md:grid-cols-5 gap-3 animate-fadeIn">
+            <div className="mx-4 grid grid-cols-2 md:grid-cols-6 gap-3 animate-fadeIn">
               {/* Total Orders Today */}
               <div className="bg-slate-900 border border-white/6 p-3.5 rounded-2xl flex flex-col justify-between space-y-1">
-                <span className="text-[10px] text-slate-400 font-bold font-sans">📦 إجمالي طلبات اليوم بالباقة</span>
+                <span className="text-[10px] text-slate-400 font-bold font-sans">📦 إجمالي طلبات اليوم</span>
                 <span className="text-xl font-black text-slate-100 font-mono">
-                  {myTotal} <span className="text-[10px] font-medium text-slate-400">شحنة</span>
+                  {myTotal} <span className="text-[10px] font-medium text-slate-400 font-sans">شحنة</span>
                 </span>
               </div>
 
               {/* Delivered 🟢 */}
               <div className="bg-emerald-950/20 border border-emerald-950/30 p-3.5 rounded-2xl flex flex-col justify-between space-y-1">
-                <span className="text-[10px] text-emerald-400 font-bold font-sans">🟢 تم التسليم اليوم</span>
+                <span className="text-[10px] text-emerald-400 font-bold font-sans">🟢 تم التسليم كلياً</span>
                 <span className="text-xl font-black text-emerald-400 font-mono">
-                  {myDelivered} <span className="text-[10px] font-medium text-emerald-550 font-sans">شحنة</span>
+                  {myDelivered} <span className="text-[10px] font-medium text-emerald-555 font-sans">شحنة</span>
+                </span>
+              </div>
+
+              {/* Partial Delivered 🔹 */}
+              <div className="bg-cyan-950/20 border border-cyan-950/30 p-3.5 rounded-2xl flex flex-col justify-between space-y-1">
+                <span className="text-[10px] text-cyan-400 font-bold font-sans">🔹 تسليم جزئي اليوم</span>
+                <span className="text-xl font-black text-cyan-400 font-mono">
+                  {myPartialDelivered} <span className="text-[10px] font-medium text-cyan-555 font-sans">شحنة</span>
                 </span>
               </div>
 
               {/* Returned 🔴 */}
               <div className="bg-red-950/20 border border-red-900/30 p-3.5 rounded-2xl flex flex-col justify-between space-y-1">
-                <span className="text-[10px] text-red-400 font-bold font-sans">🔴 مرتجع ميداني نهائي</span>
+                <span className="text-[10px] text-red-400 font-bold font-sans">🔴 مرتجع ميداني اليوم</span>
                 <span className="text-xl font-black text-red-400 font-mono">
                   {myReturned} <span className="text-[10px] font-medium text-red-505 font-sans">شحنة</span>
                 </span>
@@ -2348,17 +2378,17 @@ export default function Orders({ token, role, username, orders, setOrders, couri
 
               {/* Delayed / No Response 🟡 */}
               <div className="bg-amber-950/20 border border-amber-900/30 p-3.5 rounded-2xl flex flex-col justify-between space-y-1">
-                <span className="text-[10px] text-amber-400 font-bold font-sans">🟡 معلّق / لا يرد مؤقتاً</span>
+                <span className="text-[10px] text-amber-400 font-bold font-sans">🟡 معلّق / لا يرد</span>
                 <span className="text-xl font-black text-amber-400 font-mono">
                   {mySuspended} <span className="text-[10px] font-medium text-amber-505 font-sans">شحنة</span>
                 </span>
               </div>
 
               {/* Remaining in Bag 🔵 */}
-              <div className="bg-blue-950/30 border border-blue-900/40 p-3.5 rounded-2xl flex flex-col justify-between col-span-2 md:col-span-1 space-y-1 relative overflow-hidden">
+              <div className="bg-blue-950/30 border border-blue-900/40 p-3.5 rounded-2xl flex flex-col justify-between space-y-1 relative overflow-hidden">
                 <div className="absolute top-0 right-0 w-8 h-8 bg-blue-500/10 rounded-full blur-xl animate-pulse"></div>
                 <span className="text-[10px] text-blue-400 font-extrabold flex items-center gap-1.5 font-sans">
-                  <span>🔵 المتبقي بالحقيبة حالياً</span>
+                  <span>🔵 المتبقي بالحقيبة</span>
                 </span>
                 <span className="text-xl font-black text-blue-400 font-mono">
                   {myRemaining} <span className="text-[10px] font-medium text-blue-400 font-sans">شحنة</span>
@@ -2384,7 +2414,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                   <span className="text-[10px] text-slate-400 font-bold block font-sans">💵 إجمالي الكاش المستلم ميدانياً</span>
                   <div className="text-lg font-black text-emerald-400 font-mono">{totalReceivedCashInHand.toLocaleString("ar")} ج.م</div>
                   <p className="text-[9px] text-slate-500 leading-relaxed font-sans">
-                    تحصيل طلبات مسلّمة ({totalCODDelivered.toLocaleString("ar")} ج.م) + شحن مرتجعات دفعه العميل ({totalShipReturnsPaidByCust.toLocaleString("ar")} ج.م)
+                    تحصيل مسلّم كلياً ({totalCODDelivered.toLocaleString("ar")} ج.م) + تحصيل مسلّم جزئياً ({totalCODPartial.toLocaleString("ar")} ج.م) + شحن المرتجعات ({totalShipReturnsPaidByCust.toLocaleString("ar")} ج.م)
                   </p>
                 </div>
 

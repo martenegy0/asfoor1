@@ -542,6 +542,164 @@ function getOrderFinancials(o: any) {
   };
 }
 
+function normalizeDateStr(dateStr: any): string {
+  if (!dateStr) return "";
+  const s = String(dateStr).trim();
+  const m = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (m) {
+    const y = m[1];
+    const mn = m[2].padStart(2, "0");
+    const d = m[3].padStart(2, "0");
+    return `${y}-${mn}-${d}`;
+  }
+  return s.split("T")[0];
+}
+
+function getSupplierDailyLedger(db: any, supplierName: string) {
+  if (!db) {
+    return { days: [], outstandingBalance: 0 };
+  }
+
+  // 1. Get all orders for this supplier (active + archived)
+  const allOrdersList = [...(db.orders || []), ...(db.archivedOrders || [])];
+  const rawOrders = allOrdersList.filter((o: any) => sameSup(getOrderSupplier(o), supplierName));
+
+  // Dedup orders by tracking ID to ensure no double-counting
+  const dedupedOrdersMap = new Map<string, any>();
+  for (const o of rawOrders) {
+    const track = getOrderTracking(o);
+    if (track) {
+      dedupedOrdersMap.set(track, o);
+    } else {
+      dedupedOrdersMap.set(`RAND-${Math.random()}`, o);
+    }
+  }
+  const supplierOrders = Array.from(dedupedOrdersMap.values());
+
+  // 2. Fetch settled days from supplierLedger
+  const rawLedger = db.supplierLedger || [];
+  const settledDaysSet = new Set<string>();
+  for (const l of rawLedger) {
+    const lSup = l.supplier || l["المورد"] || "";
+    if (sameSup(lSup, supplierName)) {
+      const type = (l.type || l["النوع"] || "").toString().trim();
+      const tracking = (l.tracking || l["رقم التتبع"] || "").toString().trim();
+      if (type === "تصفية يومية" && tracking.startsWith("SETTLE-")) {
+        const dStr = tracking.replace("SETTLE-", "").trim();
+        settledDaysSet.add(dStr);
+      }
+    }
+  }
+
+  // 3. Group supplier orders by their normalized date
+  const ordersByDay = new Map<string, any[]>();
+  for (const o of supplierOrders) {
+    const rawDate = o.orderDate || o.createdAt || o["تاريخ الطلب"] || "";
+    const normDate = normalizeDateStr(rawDate);
+    if (!normDate) continue;
+    if (!ordersByDay.has(normDate)) {
+      ordersByDay.set(normDate, []);
+    }
+    ordersByDay.get(normDate)!.push(o);
+  }
+
+  // 4. Compute accounts for each day
+  const daysList: any[] = [];
+  let outstandingBalance = 0;
+
+  for (const [dayDate, dayOrders] of ordersByDay.entries()) {
+    // A. إجمالي قيمة الشغل: مجموع الـ COD الأصلي لكل الشحنات المستلمة منه في هذا التاريخ
+    const totalWorkValue = dayOrders.reduce((sum, o) => {
+      const financials = getOrderFinancials(o);
+      return sum + financials.totalCOD;
+    }, 0);
+
+    // B. إجمالي التحصيل الفعلي اليومي: (مجموع الأوردرات المسلمة كلياً) + (المبالغ الفعلية المحصلة من خانات التسليم جزئياً)
+    const deliveredOrders = dayOrders.filter((o: any) => {
+      const status = (o.status || "").toString().trim();
+      return ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(status);
+    });
+    const deliveredCashCollected = deliveredOrders.reduce((sum, o) => {
+      const financials = getOrderFinancials(o);
+      return sum + financials.totalCOD;
+    }, 0);
+
+    const partialOrders = dayOrders.filter((o: any) => {
+      const status = (o.status || "").toString().trim();
+      return ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].includes(status);
+    });
+    const partialCashCollected = partialOrders.reduce((sum, o) => {
+      return sum + Number(o.actualReceivedCash || o.partialAmount || 0);
+    }, 0);
+
+    const totalActualCollected = deliveredCashCollected + partialCashCollected;
+
+    // C. المرتجعات المستردة اليوم: قيمة البضاعة لتم تسليمها للمورد (صافي البضاعة بدون شحن)
+    const returnedDeliveredOrders = dayOrders.filter((o: any) => {
+      const status = (o.status || "").toString().trim();
+      return ["تم تسليم المرتجع للمورد", "تم تسليمه للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(status);
+    });
+    const returnedValueRefunded = returnedDeliveredOrders.reduce((sum, o) => {
+      const financials = getOrderFinancials(o);
+      return sum + financials.prodPrice;
+    }, 0);
+
+    // D. مصاريف شحن المرتجعات لأي أوردر مرتجع في هذا اليوم
+    const returnedOrdersAll = dayOrders.filter((o: any) => {
+      const status = (o.status || "").toString().trim();
+      return [
+        "مرتجع", "مرتجع جديد", "مرتجع بالمستودع", "مرتجع جزئي بالمستودع",
+        "تم تسليم المرتجع للمورد", "تم تسليمه للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"
+      ].includes(status);
+    });
+    const returnShippingFees = returnedOrdersAll.reduce((sum, o) => {
+      if (o.status === "مرتجع والعميل دفع الشحن") return sum;
+      const financials = getOrderFinancials(o);
+      return sum + financials.shipPrice;
+    }, 0);
+
+    // E. صافي مستحقات اليوم = التحصيل الفعلي - مصاريف شحن المرتجع
+    const netDues = totalActualCollected - returnShippingFees;
+
+    // F. حالة التصفية
+    const isSettled = settledDaysSet.has(dayDate);
+    const statusLabel = isSettled ? "🟢 تم تصفية الكاش والمرتجع" : "🔴 معلق لم يصفى";
+
+    if (!isSettled) {
+      outstandingBalance += netDues;
+    }
+
+    daysList.push({
+      date: dayDate,
+      orderCount: dayOrders.length,
+      totalWorkValue,
+      totalActualCollected,
+      returnedValueRefunded,
+      returnShippingFees,
+      netDues,
+      isSettled,
+      status: statusLabel,
+      orders: dayOrders.map(o => ({
+        tracking: o.tracking || getOrderTracking(o) || "",
+        customer: o.customer || o["اسم العميل"] || "",
+        phone: o.phone || o["الهاتف"] || "",
+        status: o.status || "",
+        prodPrice: Number(getOrderFinancials(o).prodPrice || 0),
+        shipPrice: Number(getOrderFinancials(o).shipPrice || 0),
+        totalCOD: Number(getOrderFinancials(o).totalCOD || 0),
+        partialAmount: Number(o.actualReceivedCash || o.partialAmount || 0)
+      }))
+    });
+  }
+
+  daysList.sort((a, b) => b.date.localeCompare(a.date));
+
+  return {
+    days: daysList,
+    outstandingBalance: Math.max(0, outstandingBalance)
+  };
+}
+
 function getSupplierUnifiedLedger(db: any, supplierName: string) {
   if (!db) {
     return {
@@ -562,7 +720,8 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
     };
   }
 
-  const rawOrders = (db.orders || []).filter((o: any) => sameSup(getOrderSupplier(o), supplierName));
+  const allOrdersList = [...(db.orders || []), ...(db.archivedOrders || [])];
+  const rawOrders = allOrdersList.filter((o: any) => sameSup(getOrderSupplier(o), supplierName));
   
   // Dedup rawOrders by tracking ID (Unique Order ID) keeping the latest instance/update
   const supplierOrdersMap = new Map<string, any>();
@@ -961,6 +1120,7 @@ interface CacheEntry {
 const READ_CACHE = new Map<string, CacheEntry>();
 const ACTIVE_FETCHES = new Map<string, Promise<any>>();
 const CACHE_TTL_MS = 10000; // 10 seconds cache
+let isGoogleScriptHealthy = true;
 
 function getCacheKey(payload: any): string {
   const keyObj = {
@@ -976,9 +1136,9 @@ function getCacheKey(payload: any): string {
   return JSON.stringify(keyObj);
 }
 
-async function fetchWithTimeout(url: string, options: any = {}, timeoutMs = 30000, retries = 3): Promise<any> {
+async function fetchWithTimeout(url: string, options: any = {}, timeoutMs = 2500, retries = 0): Promise<any> {
   const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-  for (let attempt = 1; attempt <= retries; attempt++) {
+  for (let attempt = 1; attempt <= (retries + 1); attempt++) {
     const controller = new AbortController();
     const id = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -990,13 +1150,13 @@ async function fetchWithTimeout(url: string, options: any = {}, timeoutMs = 3000
       return response;
     } catch (err: any) {
       clearTimeout(id);
-      const isLastAttempt = attempt === retries;
+      const isLastAttempt = attempt === (retries + 1);
       const isAbort = err.name === 'AbortError';
       console.warn(`[Proxy Fetch] Attempt ${attempt} failed for ${url} (Action: ${options.body ? JSON.parse(options.body).action : 'N/A'}): ${err.message || err}`);
       if (isLastAttempt) {
         throw err;
       }
-      const waitTime = isAbort ? 1500 : 500 * attempt;
+      const waitTime = isAbort ? 1000 : 300 * attempt;
       await delay(waitTime);
     }
   }
@@ -1029,12 +1189,21 @@ async function executeProxyRequest(gscriptUrl: string, payload: any): Promise<an
     READ_CACHE.clear();
     ACTIVE_FETCHES.clear();
     
-    const response = await fetchWithTimeout(gscriptUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-    return await parseResponseJson(response, payload.action);
+    try {
+      const response = await fetchWithTimeout(gscriptUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      return await parseResponseJson(response, payload.action);
+    } catch (err) {
+      console.warn(`[Proxy Write Error] Mark Google Script unhealthy:`, err);
+      if (isGoogleScriptHealthy) {
+        isGoogleScriptHealthy = false;
+        setTimeout(() => { isGoogleScriptHealthy = true; }, 120000);
+      }
+      throw err;
+    }
   }
 
   const cacheKey = getCacheKey(payload);
@@ -1085,6 +1254,11 @@ async function executeProxyRequest(gscriptUrl: string, payload: any): Promise<an
       READ_CACHE.set(cacheKey, { data, timestamp: Date.now() });
       return data;
     } catch (err) {
+      console.warn(`[Proxy Read Error] Mark Google Script unhealthy:`, err);
+      if (isGoogleScriptHealthy) {
+        isGoogleScriptHealthy = false;
+        setTimeout(() => { isGoogleScriptHealthy = true; }, 120000);
+      }
       ACTIVE_FETCHES.delete(cacheKey);
       throw err;
     } finally {
@@ -1107,8 +1281,15 @@ app.post("/api", async (req: Request, res: Response) => {
     }
 
     // 🌐 Modern Google Sheets Integration Proxy Gateway
-    if (process.env.GOOGLE_SCRIPT_URL && process.env.GOOGLE_SCRIPT_URL.trim() !== "" && process.env.GOOGLE_SCRIPT_URL.startsWith("http")) {
-      const gscriptUrl = process.env.GOOGLE_SCRIPT_URL.trim();
+    let scriptUrl = (process.env.GOOGLE_SCRIPT_URL || "").trim();
+    if (scriptUrl.startsWith('"') && scriptUrl.endsWith('"')) {
+      scriptUrl = scriptUrl.substring(1, scriptUrl.length - 1).trim();
+    } else if (scriptUrl.startsWith("'") && scriptUrl.endsWith("'")) {
+      scriptUrl = scriptUrl.substring(1, scriptUrl.length - 1).trim();
+    }
+
+    if (isGoogleScriptHealthy && scriptUrl && scriptUrl.startsWith("http")) {
+      const gscriptUrl = scriptUrl;
       try {
 
       // 1. Handle "login" action securely against Google Sheets
@@ -1564,6 +1745,16 @@ app.post("/api", async (req: Request, res: Response) => {
             return err(res, resOrders.error || "فشل سحب قائمة طلبات الموردين من سكريبت جوجل شيت");
           }
 
+          const resArchived = await executeProxyRequest(gscriptUrl, {
+            action: "getArchivedOrders",
+            token: "14014",
+            currentUser: "SystemAdmin",
+            currentRole: "مدير"
+          }).catch((err) => {
+            console.error("Failed to fetch Google Sheets archived orders:", err);
+            return { ok: true, orders: [] as any[] };
+          });
+
           const resLedger = await executeProxyRequest(gscriptUrl, {
             action: "getSupplierLedger",
             token: "14014",
@@ -1575,6 +1766,7 @@ app.post("/api", async (req: Request, res: Response) => {
           }
 
           console.log("DEBUG_SUPPLIERS: resOrders ok?", resOrders?.ok, "orders length:", resOrders?.orders?.length);
+          console.log("DEBUG_SUPPLIERS: resArchived ok?", resArchived?.ok, "archived length:", resArchived?.orders?.length);
           console.log("DEBUG_SUPPLIERS: resLedger ok?", resLedger?.ok, "ledger length:", resLedger?.ledger?.length);
           if (resOrders?.orders && resOrders.orders.length > 0) {
             console.log("DEBUG_SUPPLIERS Sample Order Keys:", Object.keys(resOrders.orders[0]));
@@ -1587,17 +1779,17 @@ app.post("/api", async (req: Request, res: Response) => {
 
           const mockDb = {
             orders: resOrders.orders || [],
+            archivedOrders: resArchived?.orders || [],
             supplierLedger: resLedger.ledger || []
           };
 
           if (d.action === "getSupplierLedger") {
             const supplierName = isSupplierRole(currentRole) ? currentUser : (d.supplier || "");
-            const unified = getSupplierUnifiedLedger(mockDb, supplierName);
-            // Return identical structure with local mode
+            const dailyData = getSupplierDailyLedger(mockDb, supplierName);
             return ok(res, { 
-              entries: unified.entries, 
-              balance: unified.balance, 
-              stats: unified.stats 
+              entries: mockDb.supplierLedger || [], 
+              balance: dailyData.outstandingBalance, 
+              dailyLedger: dailyData 
             });
           }
 
@@ -1607,6 +1799,7 @@ app.post("/api", async (req: Request, res: Response) => {
             if (!targetSupplier) return err(res, "المورد غير معروف");
 
             const unified = getSupplierUnifiedLedger(mockDb, targetSupplier);
+            const dailyData = getSupplierDailyLedger(mockDb, targetSupplier);
 
             return ok(res, {
               stats: {
@@ -1616,7 +1809,7 @@ app.post("/api", async (req: Request, res: Response) => {
                 pending: unified.stats.totalOrdersCount - unified.stats.deliveredOrdersCount - unified.stats.returnsDeliveredCount,
                 cod: unified.stats.totalGoodsUploaded,
                 rate: unified.stats.rate,
-                due: unified.stats.outstanding,
+                due: dailyData.outstandingBalance,
                 returnsDeliveredValue: unified.stats.returnsDeliveredValue,
                 paymentsValue: unified.stats.paymentsValue
               }
@@ -1650,6 +1843,7 @@ app.post("/api", async (req: Request, res: Response) => {
             const accountsList = allSuppliers.map((supName: any) => {
               const sup = String(supName);
               const unified = getSupplierUnifiedLedger(mockDb, sup);
+              const dailyData = getSupplierDailyLedger(mockDb, sup);
               return {
                 name: sup,
                 totalCOD: unified.stats.totalCOD,
@@ -1659,7 +1853,7 @@ app.post("/api", async (req: Request, res: Response) => {
                 totalOrders: unified.stats.totalOrdersCount,
                 deliveredOrders: unified.stats.deliveredOrdersCount,
                 returnsCount: unified.stats.returnsDeliveredCount,
-                balance: unified.stats.outstanding,
+                balance: dailyData.outstandingBalance,
                 rate: unified.stats.rate
               };
             });
@@ -3197,12 +3391,84 @@ app.post("/api", async (req: Request, res: Response) => {
       // ─────────────────────────────────────────────────────────────
       case "getSupplierLedger": {
         const supplierName = isSupplierRole(currentRole) ? currentUser : (d.supplier || "");
-        const unified = getSupplierUnifiedLedger(db, supplierName);
+        const dailyData = getSupplierDailyLedger(db, supplierName);
         return ok(res, { 
-          entries: unified.entries, 
-          balance: unified.balance, 
-          stats: unified.stats 
+          entries: db.supplierLedger || [], 
+          balance: dailyData.outstandingBalance, 
+          dailyLedger: dailyData 
         });
+      }
+
+      case "settleSupplierDay": {
+        const { supplier, dateStr } = d;
+        if (!supplier || !dateStr) {
+          return err(res, "معلومات تسوية حساب اليوم ناقصة");
+        }
+        
+        if (!["مدير", "محاسب"].includes(currentRole)) {
+          return err(res, "صلاحية مرفوضة. التصفية المالية إجراء مخصص للإدارة فقط.");
+        }
+
+        const nowStr = now();
+        const trackingId = `SETTLE-${dateStr}`;
+
+        // Double check if already settled
+        const isAlreadySettled = (db.supplierLedger || []).some((l: any) => {
+          const lSup = l.supplier || l["المورد"] || "";
+          const lType = (l.type || l["النوع"] || "").toString().trim();
+          const lTrack = (l.tracking || l["رقم التتبع"] || "").toString().trim();
+          return lSup.toLowerCase() === supplier.toLowerCase() && lType === "تصفية يومية" && lTrack === trackingId;
+        });
+
+        if (isAlreadySettled) {
+          return ok(res, { ok: true, msg: "اليوم مصفى بالفعل" });
+        }
+
+        // Add ledger entry
+        if (!db.supplierLedger) db.supplierLedger = [];
+        db.supplierLedger.push({
+          supplier: supplier,
+          date: nowStr,
+          type: "تصفية يومية",
+          tracking: trackingId,
+          amount: 0,
+          desc: `🔐 [💵 تقفيل وتسليم كاش اليوم للمورد] - تم تصفية وقفل حساب اليوم تاريخ: ${dateStr} بنجاح تصفية تامة✓`
+        });
+
+        if (!db.cashbox) db.cashbox = [];
+        db.cashbox.push({
+          date: nowStr,
+          desc: `تسوية وتصفية كاش يومية المورد: ${supplier} عن تاريخ: ${dateStr}`,
+          type: "منصرف",
+          amount: 0,
+          ref: trackingId,
+          addedBy: currentUser
+        });
+
+        writeDB(db);
+
+        // Sync with Sheets in background if available
+        let scriptUrl = (process.env.GOOGLE_SCRIPT_URL || "").trim();
+        if (scriptUrl.startsWith('"') && scriptUrl.endsWith('"')) scriptUrl = scriptUrl.substring(1, scriptUrl.length - 1).trim();
+        else if (scriptUrl.startsWith("'") && scriptUrl.endsWith("'")) scriptUrl = scriptUrl.substring(1, scriptUrl.length - 1).trim();
+
+        if (isGoogleScriptHealthy && scriptUrl && scriptUrl.startsWith("http")) {
+          // Send to sheets
+          executeProxyRequest(scriptUrl, {
+            action: "addSupplierPayment",
+            token: "14014",
+            supplier: supplier,
+            amount: 0,
+            desc: `🔐 [💵 تقفيل وتسليم كاش اليوم للمورد] - تم تصفية وقفل حساب اليوم تاريخ: ${dateStr} بنجاح تصفية تامة✓`,
+            transactionType: "تصفية يومية", 
+            tracking: trackingId,
+            date: nowStr
+          }).catch(err => {
+            console.error("Async sheets write failure for settleSupplierDay:", err);
+          });
+        }
+
+        return ok(res, { ok: true, msg: `تم تصفية وإقفال كاش تاريخ ${dateStr} للمورد ${supplier} وتأكيد الارتجاع اللوجستي بنجاح✓` });
       }
 
       case "addDailyClosing": {
@@ -3240,6 +3506,7 @@ app.post("/api", async (req: Request, res: Response) => {
         if (!targetSupplier) return err(res, "المورد غير معروف");
 
         const unified = getSupplierUnifiedLedger(db, targetSupplier);
+        const dailyData = getSupplierDailyLedger(db, targetSupplier);
 
         return ok(res, {
           stats: {
@@ -3249,7 +3516,7 @@ app.post("/api", async (req: Request, res: Response) => {
             pending: unified.stats.totalOrdersCount - unified.stats.deliveredOrdersCount - unified.stats.returnsDeliveredCount,
             cod: unified.stats.totalGoodsUploaded,
             rate: unified.stats.rate,
-            due: unified.stats.outstanding,
+            due: dailyData.outstandingBalance,
             returnsDeliveredValue: unified.stats.returnsDeliveredValue,
             paymentsValue: unified.stats.paymentsValue
           }
@@ -3283,6 +3550,7 @@ app.post("/api", async (req: Request, res: Response) => {
         const accountsList = allSuppliers.map((supName: any) => {
           const sup = String(supName);
           const unified = getSupplierUnifiedLedger(db, sup);
+          const dailyData = getSupplierDailyLedger(db, sup);
           return {
             name: sup,
             totalCOD: unified.stats.totalCOD,
@@ -3292,7 +3560,7 @@ app.post("/api", async (req: Request, res: Response) => {
             totalOrders: unified.stats.totalOrdersCount,
             deliveredOrders: unified.stats.deliveredOrdersCount,
             returnsCount: unified.stats.returnsDeliveredCount,
-            balance: unified.stats.outstanding,
+            balance: dailyData.outstandingBalance,
             rate: unified.stats.rate
           };
         });
@@ -3450,12 +3718,29 @@ app.post("/api", async (req: Request, res: Response) => {
         const todayDate = tod();
 
         // Strict Courier Settlement Calculations (Today's performance):
-        // 1. Delivered Cash (كاش الأوردرات المسلمة اليوم): (ثمن المنتجات + مصاريف الشحن) لجميع الأوردرات "تم التسليم" أو "تسليم جزئي" اليوم
-        const todayDeliveredOrders = courierOrders.filter((o: any) => (o.status === "تم التسليم" || o.status === "تسليم جزئي") && o.delivDate && isDateToday(o.delivDate));
-        const todayDeliveredCount = todayDeliveredOrders.length;
-        const todayDeliveredCash = todayDeliveredOrders.reduce((sum: number, o: any) => sum + Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0))), 0);
+        // 1. Full COD from "تم التسليم" (Total Delivery)
+        const fullDeliveredOrders = courierOrders.filter((o: any) => 
+          ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(o.status) && 
+          o.delivDate && isDateToday(o.delivDate)
+        );
+        const fullDeliveredCash = fullDeliveredOrders.reduce((sum: number, o: any) => sum + Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0))), 0);
 
-        // 2. Returned Shipping Cash (كاش شحن المرتجعات اليوم): (مصاريف الشحن فقط) لجميع الأوردرات "مرتجع مدفوع الشحن" اليوم
+        // 2. Actual Amount Received from "تسليم جزئي"
+        const partialDeliveredOrders = courierOrders.filter((o: any) => 
+          ["تسليم جزئي", "تسليم جزئي - معلق للجرد"].includes(o.status) && 
+          o.delivDate && isDateToday(o.delivDate)
+        );
+        const partialDeliveredCash = partialDeliveredOrders.reduce((sum: number, o: any) => {
+          const amt = o.partialAmount !== undefined && o.partialAmount !== null && o.partialAmount !== "" ? Number(o.partialAmount) :
+                      (o.actualReceivedCash !== undefined && o.actualReceivedCash !== null && o.actualReceivedCash !== "" ? Number(o.actualReceivedCash) : Number(o.totalCOD || 0));
+          return sum + amt;
+        }, 0);
+
+        // Combine Delivered count and cash
+        const todayDeliveredCount = fullDeliveredOrders.length + partialDeliveredOrders.length;
+        const todayDeliveredCash = fullDeliveredCash + partialDeliveredCash;
+
+        // 3. Returned Shipping Cash (كاش شحن المرتجعات اليوم): (مصاريف الشحن فقط) لجميع الأوردرات "مرتجع مدفوع الشحن" اليوم
         const todayReturnedPaidOrders = courierOrders.filter((o: any) => 
           (o.status === "مرتجع والعميل دفع الشحن" || o.status === "مرتجع مدفوع الشحن" || (o.status === "مرتجع" && o.returnShippingType === "paid")) && 
           o.retDate && isDateToday(o.retDate)
@@ -3463,16 +3748,15 @@ app.post("/api", async (req: Request, res: Response) => {
         const todayReturnedPaidCount = todayReturnedPaidOrders.length;
         const todayReturnedPaidCash = todayReturnedPaidOrders.reduce((sum: number, o: any) => sum + Number(o.shipPrice || o.shipCost || 0), 0);
 
-        // 3. Total Commission (عمولة المندوب الكلية اليوم): (deliveredCount * successRate) + (returnedPaidCount * successRate)
+        // 4. Total Commission (عمولة المندوب الكلية اليوم): (deliveredCount * successRate) + (returnedPaidCount * successRate)
         const todayTotalCommission = (todayDeliveredCount * commissionSuccess) + (todayReturnedPaidCount * commissionSuccess);
 
         // Cumulative totals (for historical indicators)
-        const deliveredCount = courierOrders.filter((o: any) => o.status === "تم التسليم" || o.status === "تسليم جزئي").length;
+        const deliveredCount = courierOrders.filter((o: any) => ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(o.status) || ["تسليم جزئي", "تسليم جزئي - معلق للجرد"].includes(o.status)).length;
         const returnedCount = courierOrders.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length;
-        const returnedPaidCount = courierOrders.filter((o: any) => o.status === "مرتجع" && o.returnShippingType === "paid").length;
+        const returnedPaidCount = courierOrders.filter((o: any) => ["مرتجع والعميل دفع الشحن", "مرتجع مدفوع الشحن"].includes(o.status) || (o.status === "مرتجع" && o.returnShippingType === "paid")).length;
 
         // Strict Financial Separation:
-        // Outstanding / Due Delivery commission consists ONLY of today's deliveries since past days are already closed & settled/paid.
         const delivCommission = todayDeliveredCount * commissionSuccess;
         const returnShippingCommission = todayReturnedPaidCount * commissionSuccess;
 
@@ -3487,12 +3771,21 @@ app.post("/api", async (req: Request, res: Response) => {
         const todayPenalties = targetLedger.filter((l: any) => (l.type === "جزاء" || l.type === "خصم" || l.type === "خصم عجز") && l.date && isDateToday(l.date)).reduce((sum: number, x: any) => sum + Math.abs(Number(x.amount || 0)), 0);
 
         // Final Settle Equation (الصافي المطلوب توريده للخزنة لليوم):
-        // الصافي المطلوب توريده للخزنة = (كاش الأوردرات المسلمة + كاش شحن المرتجعات) - (عمولة المندوب الكلية) - (قيمة الجزاء المخصوم) + (قيمة المكافأة المضافة).
         const requiredHandoverToday = (todayDeliveredCash + todayReturnedPaidCash) - todayTotalCommission - todayPenalties + todayBonuses;
 
         // Compute COD Collection tracking for anti-deficit control
-        // Life-time or cumulative collected
-        const totalCollected = courierOrders.filter((o: any) => o.status === "تم التسليم" || o.status === "تسليم جزئي").reduce((sum: number, o: any) => sum + Number(o.totalCOD || 0), 0);
+        const totalCollected = courierOrders.reduce((sum: number, o: any) => {
+          if (["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(o.status)) {
+            return sum + Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0)));
+          } else if (["تسليم جزئي", "تسليم جزئي - معلق للجرد"].includes(o.status)) {
+            const amt = o.partialAmount !== undefined && o.partialAmount !== null && o.partialAmount !== "" ? Number(o.partialAmount) :
+                        (o.actualReceivedCash !== undefined && o.actualReceivedCash !== null && o.actualReceivedCash !== "" ? Number(o.actualReceivedCash) : Number(o.totalCOD || 0));
+            return sum + amt;
+          } else if (o.status === "مرتجع والعميل دفع الشحن" || o.status === "مرتجع مدفوع الشحن" || (o.status === "مرتجع" && o.returnShippingType === "paid")) {
+            return sum + Number(o.shipPrice || o.shipCost || 0);
+          }
+          return sum;
+        }, 0);
         
         // Handed Over to company = Sum of "استلام عهدة مندوب" records in cashbox for this courier
         const totalPaidToCompany = db.cashbox
@@ -3613,8 +3906,8 @@ app.post("/api", async (req: Request, res: Response) => {
 
         const ordersList = db.orders.filter((o: any) => o.courier === courierName);
         const total = ordersList.length;
-        const delivered = ordersList.filter((o: any) => o.status === "تم التسليم" || o.status === "تسليم جزئي").length;
-        const returnedPaid = ordersList.filter((o: any) => o.status === "مرتجع" && o.returnShippingType === "paid").length;
+        const delivered = ordersList.filter((o: any) => ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(o.status) || ["تسليم جزئي", "تسليم جزئي - معلق للجرد"].includes(o.status)).length;
+        const returnedPaid = ordersList.filter((o: any) => ["مرتجع والعميل دفع الشحن", "مرتجع مدفوع الشحن"].includes(o.status) || (o.status === "مرتجع" && o.returnShippingType === "paid")).length;
         const returnedAll = ordersList.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length;
 
         const basicSalary = courierProfile.base_fixed_salary !== undefined ? Number(courierProfile.base_fixed_salary) : Number(courierProfile.salary || 3000);
@@ -3629,12 +3922,29 @@ app.post("/api", async (req: Request, res: Response) => {
         const todayDate = tod();
 
         // Strict Courier Settlement Calculations (Today's performance):
-        // 1. Delivered Cash (كاش الأوردرات المسلمة اليوم): (ثمن المنتجات + مصاريف الشحن) لجميع الأوردرات "تم التسليم" أو "تسليم جزئي" اليوم
-        const todayDeliveredOrders = ordersList.filter((o: any) => (o.status === "تم التسليم" || o.status === "تسليم جزئي") && o.delivDate && isDateToday(o.delivDate));
-        const todayDeliveredCount = todayDeliveredOrders.length;
-        const todayDeliveredCash = todayDeliveredOrders.reduce((sum: number, o: any) => sum + Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0))), 0);
+        // 1. Full COD from "تم التسليم" (Total Delivery)
+        const fullDeliveredOrders = ordersList.filter((o: any) => 
+          ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(o.status) && 
+          o.delivDate && isDateToday(o.delivDate)
+        );
+        const fullDeliveredCash = fullDeliveredOrders.reduce((sum: number, o: any) => sum + Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0))), 0);
 
-        // 2. Returned Shipping Cash (كاش شحن المرتجعات اليوم): (مصاريف الشحن فقط) لجميع الأوردرات "مرتجع مدفوع الشحن" اليوم
+        // 2. Actual Amount Received from "تسليم جزئي"
+        const partialDeliveredOrders = ordersList.filter((o: any) => 
+          ["تسليم جزئي", "تسليم جزئي - معلق للجرد"].includes(o.status) && 
+          o.delivDate && isDateToday(o.delivDate)
+        );
+        const partialDeliveredCash = partialDeliveredOrders.reduce((sum: number, o: any) => {
+          const amt = o.partialAmount !== undefined && o.partialAmount !== null && o.partialAmount !== "" ? Number(o.partialAmount) :
+                      (o.actualReceivedCash !== undefined && o.actualReceivedCash !== null && o.actualReceivedCash !== "" ? Number(o.actualReceivedCash) : Number(o.totalCOD || 0));
+          return sum + amt;
+        }, 0);
+
+        // Combine Delivered count and cash
+        const todayDeliveredCount = fullDeliveredOrders.length + partialDeliveredOrders.length;
+        const todayDeliveredCash = fullDeliveredCash + partialDeliveredCash;
+
+        // 3. Returned Shipping Cash (كاش شحن المرتجعات اليوم): (مصاريف الشحن فقط) لجميع الأوردرات "مرتجع مدفوع الشحن" اليوم
         const todayReturnedPaidOrders = ordersList.filter((o: any) => 
           (o.status === "مرتجع والعميل دفع الشحن" || o.status === "مرتجع مدفوع الشحن" || (o.status === "مرتجع" && o.returnShippingType === "paid")) && 
           o.retDate && isDateToday(o.retDate)
@@ -3642,7 +3952,7 @@ app.post("/api", async (req: Request, res: Response) => {
         const todayReturnedPaidCount = todayReturnedPaidOrders.length;
         const todayReturnedPaidCash = todayReturnedPaidOrders.reduce((sum: number, o: any) => sum + Number(o.shipPrice || o.shipCost || 0), 0);
 
-        // 3. Total Commission (عمولة المندوب الكلية اليوم): (deliveredCount * successRate) + (returnedPaidCount * successRate)
+        // 4. Total Commission (عمولة المندوب الكلية اليوم): (deliveredCount * successRate) + (returnedPaidCount * successRate)
         const todayTotalCommission = (todayDeliveredCount * commissionSuccess) + (todayReturnedPaidCount * commissionSuccess);
 
         const todayBonuses = ledgerTr.filter((l: any) => l.type === "مكافأة" && l.date && isDateToday(l.date)).reduce((sum: number, x: any) => sum + Math.abs(Number(x.amount || 0)), 0);
@@ -3720,7 +4030,19 @@ app.post("/api", async (req: Request, res: Response) => {
         });
 
         // Total cash collected vs deposited for the courier portal itself
-        const totalCollectedOnInfo = ordersList.filter((o: any) => o.status === "تم التسليم" || o.status === "تسليم جزئي").reduce((sum: number, o: any) => sum + Number(o.totalCOD || 0), 0);
+        const totalCollectedOnInfo = ordersList.reduce((sum: number, o: any) => {
+          if (["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(o.status)) {
+            return sum + Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0)));
+          } else if (["تسليم جزئي", "تسليم جزئي - معلق للجرد"].includes(o.status)) {
+            const amt = o.partialAmount !== undefined && o.partialAmount !== null && o.partialAmount !== "" ? Number(o.partialAmount) :
+                        (o.actualReceivedCash !== undefined && o.actualReceivedCash !== null && o.actualReceivedCash !== "" ? Number(o.actualReceivedCash) : Number(o.totalCOD || 0));
+            return sum + amt;
+          } else if (o.status === "مرتجع والعميل دفع الشحن" || o.status === "مرتجع مدفوع الشحن" || (o.status === "مرتجع" && o.returnShippingType === "paid")) {
+            return sum + Number(o.shipPrice || o.shipCost || 0);
+          }
+          return sum;
+        }, 0);
+
         const totalPaidToCompanyOnInfo = db.cashbox
           .filter((item: any) => item.type === "استلام عهدة مندوب" && item.ref === courierName)
           .reduce((sum: number, item: any) => sum + Number(item.amount || 0), 0);
