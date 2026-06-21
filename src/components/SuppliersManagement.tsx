@@ -852,7 +852,7 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
                         <tr key={idx} className="border-b border-white/4 hover:bg-slate-950/20 text-[11px] transition-colors">
                           {/* Date */}
                           <td className="p-3 font-mono text-slate-300">
-                            {entry.date ? entry.date.substring(0, 16) : "—"}
+                            {entry.date ? entry.date.toString().substring(0, 16) : "—"}
                           </td>
 
                           {/* Type with color coded badge */}

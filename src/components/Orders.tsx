@@ -1723,55 +1723,6 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                     <span>🤝 تم تسليم المرتجع للمورد</span>
                   </button>
                 </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[10px] text-slate-400 font-bold">ملاحظات ووصاية المرتجع:</span>
-                    <input
-                      id={`ret-notes-${o.tracking}`}
-                      type="text"
-                      placeholder="اكتب ملاحظات فرز المرتجع أو رغبة التوريد..."
-                      defaultValue={o.notes || ""}
-                      className="bg-slate-900 border border-white/8 text-xs text-slate-100 rounded-lg p-2 focus:border-purple-500 font-medium w-full"
-                    />
-                  </div>
-
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[10px] text-slate-400 font-bold">تاريخ المتابعة المتوقع:</span>
-                    <input
-                      id={`ret-date-${o.tracking}`}
-                      type="date"
-                      defaultValue={o.delivDate ? o.delivDate.substring(0, 10) : ""}
-                      className="bg-slate-900 border border-white/8 text-xs text-slate-100 rounded-lg p-1.5 focus:border-purple-500 font-semibold w-full"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex flex-col gap-1">
-                  <span className="text-[10px] text-purple-400 font-bold">اختر صفة وحالة المرتجع الحالية:</span>
-                  <select
-                    value={o.status || ""}
-                    disabled={pendingTrackings.has(o.tracking)}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      if (val) {
-                        const notesEl = document.getElementById(`ret-notes-${o.tracking}`) as HTMLInputElement | null;
-                        const dateEl = document.getElementById(`ret-date-${o.tracking}`) as HTMLInputElement | null;
-                        const currentNotes = notesEl ? notesEl.value : (o.notes || "");
-                        const currentDate = dateEl ? dateEl.value : (o.delivDate || "");
-
-                        triggerStatusUpdate(o.tracking, val, "", currentNotes, currentDate);
-                      }
-                    }}
-                    className="bg-slate-900 border border-white/10 text-xs text-slate-100 rounded-lg p-2.5 focus:border-purple-500 font-bold focus:ring-0 cursor-pointer w-full text-right"
-                  >
-                    <option value="">-- اضغط لتعديل الحالة --</option>
-                    <option value="جاري التجهيز للرجوع">🔄 جاري التجهيز للرجوع</option>
-                    <option value="جاري الرجوع للمورد">🚛 جاري الرجوع للمورد</option>
-                    <option value="تم تسليم المرتجع للمورد">📦 تم تسليم المرتجع للمورد (تسوية مالية للمورد)</option>
-                    <option value="جديد">↩ تم إلغاء المرتجع وإعادته للمخزن الفعلي</option>
-                  </select>
-                </div>
               </div>
             )}
 
@@ -2506,9 +2457,6 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                 {isReturnsOfficer && (
                   <>
                     <option value="">-- اختر إجراء المرتجعات الجماعي --</option>
-                    <option value="مرتجع جديد">مرتجع جديد (مسار الاسترجاع)</option>
-                    <option value="مرتجع جاري تسليمه للمكتب">مرتجع جاري تسليمه للمكتب</option>
-                    <option value="جاري الرجوع للمورد">جاري الرجوع للمورد</option>
                     <option value="تم تسليم المرتجع للمورد">تم تسليم المرتجع للمورد وتصفية حسابه</option>
                   </>
                 )}
@@ -3123,55 +3071,6 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                           >
                             <span>🤝 تم تسليم المرتجع للمورد</span>
                           </button>
-                        </div>
-
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                          <div className="flex flex-col gap-1">
-                            <span className="text-[10px] text-slate-400 font-bold">ملاحظات ووصاية المرتجع:</span>
-                            <input
-                              id={`ret-notes-compact-${o.tracking}`}
-                              type="text"
-                              placeholder="اكتب ملاحظات فرز المرتجع أو رغبة التوريد..."
-                              defaultValue={o.notes || ""}
-                              className="bg-slate-900 border border-white/8 text-xs text-slate-100 rounded-lg p-2 focus:border-purple-500 font-medium w-full"
-                            />
-                          </div>
-
-                          <div className="flex flex-col gap-1">
-                            <span className="text-[10px] text-slate-400 font-bold">تاريخ المتابعة المتوقع:</span>
-                            <input
-                              id={`ret-date-compact-${o.tracking}`}
-                              type="date"
-                              defaultValue={o.delivDate ? o.delivDate.substring(0, 10) : ""}
-                              className="bg-slate-900 border border-white/8 text-xs text-slate-100 rounded-lg p-1.5 focus:border-purple-500 font-semibold w-full"
-                            />
-                          </div>
-                        </div>
-
-                        <div className="flex flex-col gap-1">
-                          <span className="text-[10px] text-purple-400 font-bold">اختر صفة وحالة المرتجع الحالية:</span>
-                          <select
-                            value={o.status}
-                            disabled={pendingTrackings.has(o.tracking)}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              if (val) {
-                                const notesEl = document.getElementById(`ret-notes-compact-${o.tracking}`) as HTMLInputElement | null;
-                                const dateEl = document.getElementById(`ret-date-compact-${o.tracking}`) as HTMLInputElement | null;
-                                const currentNotes = notesEl ? notesEl.value : (o.notes || "");
-                                const currentDate = dateEl ? dateEl.value : (o.delivDate || "");
-
-                                triggerStatusUpdate(o.tracking, val, "", currentNotes, currentDate);
-                              }
-                            }}
-                            className="bg-slate-900 border border-white/10 text-xs text-slate-100 rounded-lg p-2.5 focus:border-purple-500 font-bold focus:ring-0 cursor-pointer w-full text-right"
-                          >
-                            <option value="">-- اضغط لتعديل الحالة --</option>
-                            <option value="جاري التجهيز للرجوع">🔄 جاري التجهيز للرجوع</option>
-                            <option value="جاري الرجوع للمورد">🚛 جاري الرجوع للمورد</option>
-                            <option value="تم تسليم المرتجع للمورد">📦 تم تسليم المرتجع للمورد (تسوية مالية للمورد)</option>
-                            <option value="جديد">↩ تم إلغاء المرتجع وإعادته للمخزن الفعلي</option>
-                          </select>
                         </div>
                       </div>
                     )}

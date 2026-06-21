@@ -664,8 +664,8 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
     return sum + Math.abs(Number(l.amount || 0));
   }, 0);
 
-  // 5. Calculate outstanding balance based on the approved formula: Net Balance = Total COD - Total Delivered back to Supplier - (Outgoing Cash Payments + Adjustments)
-  const totalCOD = supplierOrders.reduce((sum: number, o: any) => sum + getOrderFinancials(o).totalCOD, 0);
+  // 5. Calculate outstanding balance based on the approved formula: Net Balance = Total Goods Uploaded (Product value only, excluding shipping fees!) - Total Delivered back to Supplier - (Outgoing Cash Payments + Adjustments)
+  const totalCOD = totalGoodsUploaded;
   const outstanding = totalCOD - returnsDeliveredValue - (paymentsValue + reverseAdjustmentsValue);
 
   // Build the ledger entries list
@@ -1379,13 +1379,11 @@ app.post("/api", async (req: Request, res: Response) => {
         const { courier, type, amount, desc } = d;
         if (!courier || !amount || !type) return err(res, "بيانات مفقودة للتسوية");
 
-        const val = Number(amount);
+        let val = Number(amount);
+        if (type === "جزاء" || type === "خصم" || type === "خصم عجز") {
+          val = Math.abs(val) * -1;
+        }
 
-        // 1. Invalidate caches
-        READ_CACHE.clear();
-        ACTIVE_FETCHES.clear();
-
-        // 2. Perform optimistic local database write
         const db = readDB();
         if (!db.courierLedger) db.courierLedger = [];
         db.courierLedger.push({
@@ -1397,56 +1395,29 @@ app.post("/api", async (req: Request, res: Response) => {
           desc: desc || `${type} للمندوب بقيمة ${amount} ج`
         });
 
-        // Auto post to central cashbox
-        if (type === "مكافأة") {
-          db.cashbox.push({
-            date: now(),
-            desc: `مكافأة منصرفة للمندوب: ${courier} - ${desc || ''}`,
-            type: "صرف",
-            amount: val,
-            ref: "BONUS",
-            addedBy: currentUser
-          });
-        } else if (type === "جزاء" || type === "خصم" || type === "خصم عجز") {
+        if (type === "جزاء" || type === "خصم" || type === "خصم عجز") {
           db.cashbox.push({
             date: now(),
             desc: `تسوية خصم/جزاء مستقطع للمندوب: ${courier} - ${desc || ''}`,
             type: "إيداع",
-            amount: val,
+            amount: Math.abs(val),
             ref: "PENALTY",
             addedBy: currentUser
           });
         }
 
-        // Audit Log
-        if (!db.auditLog) db.auditLog = [];
-        db.auditLog.push({
-          user: currentUser,
-          type: `تسوية مندوب (${type})`,
-          dateTime: now(),
-          oldVal: "—",
-          newVal: `${type}: ${val} ج.م للمندوب: ${courier}`,
-          reason: desc || `تسجيل تسوية للمندوب: ${courier}`
-        });
-
         writeDB(db);
 
-        // 3. Queue asynchronous Google Sheets write
         executeProxyRequest(gscriptUrl, payloadToSheet).catch((syncErr) => {
           console.error("Async Google Sheets synchronization for addCourierAdjustment failed:", syncErr);
         });
 
-        // 4. Fast response
-        return ok(res, { msg: "تم تسجيل التسوية المالية للمندوب بنجاح" });
+        return ok(res, { msg: "تم تسجيل التسوية المالية للمندوب بنجاح ✓" });
       }
 
       if (d.action === "addDailyClosing") {
-        if (!["مدير", "محاسب"].includes(currentRole)) {
-          return err(res, "فقط المدير والمحاسب يمتلك صلاحية تسجيل التقفيل اليومي");
-        }
-
-        const { date, deliveredCount, returnedCount, returnedValue, totalCOD, shippingCost, cashboxIn, cashboxOut, cashboxNet } = d;
-        if (!date) return err(res, "تاريخ التقفيل مطلوب");
+        const { date, deliveredCount, returnedCount, returnedValue, totalCOD, cashboxNet } = d;
+        if (!date) return err(res, "التاريخ غير محدد");
 
         // 1. Invalidate caches
         READ_CACHE.clear();
@@ -1454,25 +1425,14 @@ app.post("/api", async (req: Request, res: Response) => {
 
         // 2. Perform optimistic local database write
         const db = readDB();
-        if (!db.dailyClosing) db.dailyClosing = [];
-        
-        const isAlreadyClosed = db.dailyClosing.some((r: any) => r.date === date);
-        if (isAlreadyClosed) {
-          return err(res, "عذراً، هذا اليوم المالي تم تقفيله واعتماده ولا يمكن تعديل أو تكرار تسوياته نهائياً من جديد برمجياً");
-        }
-
-        db.dailyClosing.push({
-          date,
-          deliveredCount: Number(deliveredCount || 0),
-          returnedCount: Number(returnedCount || 0),
-          returnedValue: Number(returnedValue || 0),
-          totalCOD: Number(totalCOD || 0),
-          shippingCost: Number(shippingCost || 0),
-          cashboxIn: Number(cashboxIn || 0),
-          cashboxOut: Number(cashboxOut || 0),
-          cashboxNet: Number(cashboxNet || 0),
-          addedBy: currentUser,
-          createdAt: now()
+        if (!db.cashbox) db.cashbox = [];
+        db.cashbox.push({
+          date: now(),
+          desc: `ترصيد تقفيل يومي وتصديق الحسابات لتاريخ ${date}`,
+          type: "وارد",
+          amount: Number(cashboxNet || 0),
+          ref: `CLOSE-${date}`,
+          addedBy: currentUser
         });
 
         // Add to audit logs optimistically
@@ -1510,12 +1470,17 @@ app.post("/api", async (req: Request, res: Response) => {
         let settledCount = 0;
         const nowCairoStr = now();
 
+        const settledOrders: any[] = [];
+        const activeOrders: any[] = [];
+        if (!db.archivedOrders) db.archivedOrders = [];
+
         db.orders.forEach((order: any) => {
           if (order.courier && order.courier.toString().trim().toLowerCase() === courier.toString().trim().toLowerCase()) {
             const oldStatus = order.status;
             order.lastCourier = order.courier;
             order.lastCommission = order.commission;
 
+            // Apply strict status transitions on warehouse settlement
             if (oldStatus === "مرتجع" || oldStatus === "مرتجع جديد") {
               order.status = "مرتجع بالمستودع";
               order.courierSignature = `${order.courier} (توقيع تصفية المرتجع الميداني ✍️)`;
@@ -1564,8 +1529,14 @@ app.post("/api", async (req: Request, res: Response) => {
             });
 
             settledCount++;
+            settledOrders.push(order);
+          } else {
+            activeOrders.push(order);
           }
         });
+
+        db.archivedOrders.push(...settledOrders);
+        db.orders = activeOrders;
 
         writeDB(db);
 
@@ -1945,18 +1916,29 @@ app.post("/api", async (req: Request, res: Response) => {
         const isSupplier = isSupplierRole(currentRole);
         const isReturnsOfficer = (currentRole || "").toString().trim() === "مسؤول مرتجعات" || (currentRole || "").toString().trim().includes("مرتجع");
         const isOps = currentRole === "موظف عمليات" || (currentRole || "").toString().includes("عمليات");
+        
         let ordersList = [...db.orders];
+        if (d.includeArchived === true || d.includeArchived === "true") {
+          const archived = db.archivedOrders || [];
+          ordersList = [...db.orders, ...archived];
+        }
 
         // Apply role filter
         if (isAgent || isReturnsOfficer || isOps) {
           const todayStr = tod(); // Cairo YYYY-MM-DD
+          const bypassTodayFilter = d.includeArchived === true || d.includeArchived === "true";
           ordersList = ordersList.filter((o: any) => {
             // 1. Role boundaries
             if (isAgent) {
-              if (!o.courier || o.courier.toString().trim().toLowerCase() !== currentUser.trim().toLowerCase()) return false;
+              const oCou = (o.courier || o.lastCourier || "").toString().trim().toLowerCase();
+              if (oCou !== currentUser.trim().toLowerCase()) return false;
             } else if (isReturnsOfficer) {
               const isRet = ["مرتجع", "التسليم للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) || o.returnQueueStatus;
               if (!isRet) return false;
+            }
+            
+            if (bypassTodayFilter) {
+              return true;
             }
             
             // 2. Strict Today's Filter - Filter out orders completed and completed on previous days
@@ -3223,6 +3205,34 @@ app.post("/api", async (req: Request, res: Response) => {
         });
       }
 
+      case "addDailyClosing": {
+        const { date, deliveredCount, returnedCount, returnedValue, totalCOD, cashboxNet } = d;
+        if (!date) return err(res, "التاريخ غير محدد");
+
+        if (!db.cashbox) db.cashbox = [];
+        db.cashbox.push({
+          date: now(),
+          desc: `ترصيد تقفيل يومي وتصديق الحسابات لتاريخ ${date}`,
+          type: "وارد",
+          amount: Number(cashboxNet || 0),
+          ref: `CLOSE-${date}`,
+          addedBy: currentUser
+        });
+
+        if (!db.auditLog) db.auditLog = [];
+        db.auditLog.push({
+          user: currentUser,
+          type: "ترصيد تقفيل يومي",
+          dateTime: now(),
+          oldVal: "—",
+          newVal: `تقفيل يوم: ${date} (مسلم: ${deliveredCount}، مرتجع: ${returnedCount} (بقيمة ${returnedValue || 0} ج.م)، محصل COD: ${totalCOD} ج.م، صافي الخزنة: ${cashboxNet || 0} ج.م)`,
+          reason: `ترصيد اليوم المالي من خلال أداة التصدير السريع`
+        });
+
+        writeDB(db);
+        return ok(res, { ok: true, msg: "تم ترحيل وحفظ التقرير اليومي بنجاح" });
+      }
+
       case "supplierDashboard": {
         const isSupplier = isSupplierRole(currentRole);
         const targetSupplier = isSupplier ? currentUser : (d.supplier || "");
@@ -3347,6 +3357,10 @@ app.post("/api", async (req: Request, res: Response) => {
         let settledCount = 0;
         const nowCairoStr = now();
         
+        const settledOrders: any[] = [];
+        const activeOrders: any[] = [];
+        if (!db.archivedOrders) db.archivedOrders = [];
+        
         db.orders.forEach((order: any) => {
           if (order.courier && order.courier.toString().trim().toLowerCase() === courier.toString().trim().toLowerCase()) {
             const oldStatus = order.status;
@@ -3402,8 +3416,14 @@ app.post("/api", async (req: Request, res: Response) => {
             });
             
             settledCount++;
+            settledOrders.push(order);
+          } else {
+            activeOrders.push(order);
           }
         });
+        
+        db.archivedOrders.push(...settledOrders);
+        db.orders = activeOrders;
         
         writeDB(db);
         return ok(res, { settled: settledCount, msg: `تم سحب وتصفية ${settledCount} شحنة للمستودع وتبرئة المندوب بنجاح ✓` });

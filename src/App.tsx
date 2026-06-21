@@ -86,6 +86,7 @@ export default function App() {
   const [quickActive, setQuickActive] = useState(0);
   const [quickTotalCOD, setQuickTotalCOD] = useState(0);
   const [quickTodayCOD, setQuickTodayCOD] = useState(0);
+  const [supplierBalance, setSupplierBalance] = useState(0);
 
   // --- Real-time Manager Toast Notifications state & helper ---
   const [toasts, setToasts] = useState<any[]>([]);
@@ -286,7 +287,10 @@ export default function App() {
       // If user is Courier (Agent), todayOnly true is enforced to prevent lagging
       let rawOrders: any[] = [];
       try {
-        const resOrd = await apiCall("getOrders", tk, { todayOnly: isAgent });
+        const resOrd = await apiCall("getOrders", tk, { 
+          todayOnly: isAgent,
+          includeArchived: activeTab === "archive"
+        });
         if (resOrd && resOrd.ok) {
           rawOrders = resOrd.orders || [];
         }
@@ -332,6 +336,18 @@ export default function App() {
       setQuickActive(orderList.filter((o: any) => o.status === "خارج مع المندوب" || o.status === "تم الإسناد").length);
       setQuickTotalCOD(cumulativeCollection);
       setQuickTodayCOD(todayCollection);
+
+      // 1.5. If the logged user is a supplier, retrieve their authentic outstanding cumulative balance
+      if (isSupplier) {
+        try {
+          const resDash = await apiCall("supplierDashboard", tk, { supplier: activeUser });
+          if (resDash && resDash.ok && resDash.stats) {
+            setSupplierBalance(resDash.stats.due || 0);
+          }
+        } catch (e) {
+          console.warn("supplierDashboard API fetch failed", e);
+        }
+      }
 
       // 2. Fetch couriers profiles
       const resCourier = await apiCall("getCouriers", tk);
@@ -557,7 +573,7 @@ export default function App() {
       const tid = setInterval(() => refreshAllData(token, role, username), 30000); // refresh every 30s
       return () => clearInterval(tid);
     }
-  }, [token, role, username]);
+  }, [token, role, username, activeTab]);
 
   // If token is missing, direct show the Login Portal
   if (!token) {
@@ -591,6 +607,12 @@ export default function App() {
             <div className="text-xs font-black text-slate-100">{username}</div>
             <div className="text-[9px] font-bold text-amber-500 uppercase tracking-widest mt-0.5">{role}</div>
           </div>
+          {isSupplierState && (
+            <div className="mr-3 flex items-center gap-1.5 px-2.5 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-xl text-[10.5px] font-black">
+              <span>صافي المستحقات:</span>
+              <span className="font-mono">{(supplierBalance || 0).toLocaleString("ar")} ج.م</span>
+            </div>
+          )}
           {isBgSyncing && (
             <div className="mr-3 flex items-center gap-1.5 px-2.5 py-1 bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-xl text-[9.5px] font-black animate-pulse">
               <RefreshCw size={11} className="animate-spin" />

@@ -570,7 +570,7 @@ export default function MobileOrders({
                         </div>
                       )}
 
-                      {!isSupplier && (
+                      {!isSupplier && !isReturnsOfficer && (
                         <>
                           <div className="pt-2 bg-slate-950/40 p-2.5 rounded-xl border border-white/4 space-y-1">
                             <label className="block text-[10px] text-slate-400 font-extrabold text-right">⚡ تحديث الحالة المفتوحة:</label>
