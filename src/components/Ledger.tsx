@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { PlusCircle, Wallet, FileText, ArrowUpRight, ArrowDownRight, Calendar, Filter, Users, ShieldAlert, Search, Eye, CheckCircle2, Clock, Loader2, ArrowLeft, Check, Shield } from "lucide-react";
+import { PlusCircle, Wallet, FileText, ArrowUpRight, ArrowDownRight, Calendar, Filter, Users, ShieldAlert, Search, Eye, CheckCircle2, Clock, Loader2, ArrowLeft, Check, Shield, ChevronDown, ChevronUp } from "lucide-react";
 import { apiCall } from "../utils";
 
 interface LedgerProps {
@@ -44,6 +44,16 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
   const [selectedDayStatus, setSelectedDayStatus] = useState<string>("");
   const [settleDayProgress, setSettleDayProgress] = useState<string>("");
   const [modalSearchFilter, setModalSearchFilter] = useState<string>("");
+  const [expandedDays, setExpandedDays] = useState<Record<string, boolean>>({});
+  const [expandedCourierDays, setExpandedCourierDays] = useState<Record<string, boolean>>({});
+
+  const toggleDay = (dateStr: string) => {
+    setExpandedDays(prev => ({ ...prev, [dateStr]: !prev[dateStr] }));
+  };
+
+  const toggleCourierDay = (dateStr: string) => {
+    setExpandedCourierDays(prev => ({ ...prev, [dateStr]: !prev[dateStr] }));
+  };
 
   // --- Courier Ledger States ---
   const [courierSummary, setCourierSummary] = useState<any>(null);
@@ -632,100 +642,137 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
                     }
 
                     const isPending = !item.isSettled;
+                    const dateStr = item.date || "";
+                    const isOpen = !!expandedDays[dateStr];
+
                     return (
                       <div
                         key={`d-${idx}`}
-                        className={`bg-slate-900 border rounded-2xl p-5 space-y-4 shadow-md transition-all hover:translate-y-[-2px] text-right ${
-                          isPending ? "border-amber-500/10 hover:border-amber-500/25" : "border-emerald-500/10 hover:border-emerald-500/25"
+                        className={`bg-slate-900 border rounded-2xl shadow-md transition-all text-right overflow-hidden ${
+                          isPending ? "border-amber-500/15 hover:border-amber-500/25" : "border-emerald-500/15 hover:border-emerald-500/25"
                         }`}
                       >
-                        {/* Day Card Header */}
-                        <div className="flex items-center justify-between border-b border-white/6 pb-2.5">
-                          <span className="text-xs font-black text-slate-100 flex items-center gap-1.5">
-                            <Clock size={14} className="text-slate-400" />
-                            <span>يوم: {item.date}</span>
-                          </span>
-                          <span
-                            className={`px-3 py-1 text-[10px] font-black rounded-lg ${
-                              isPending
-                                ? "bg-amber-950/50 border border-amber-900/50 text-amber-400"
-                                : "bg-emerald-950/50 border border-emerald-900/50 text-emerald-400"
-                            }`}
-                          >
-                            {isPending ? "🔴 معلق لم يصفى" : "🟢 تم تصفية الكاش والمرتجع"}
-                          </span>
-                        </div>
-
-                        {/* Day Financial Grid Stats */}
-                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3.5">
-                          <div className="bg-slate-950 border border-white/4 p-2.5 rounded-xl">
-                            <span className="text-[9.5px] text-slate-400 block font-bold">إجمالي قيمة الشغل (COD كلي)</span>
-                            <span className="text-xs font-mono font-black text-slate-200">{Number(item.totalWorkValue || 0).toLocaleString("ar")} ج.م</span>
+                        {/* Outward Collapsed Card Header */}
+                        <div
+                          onClick={() => toggleDay(dateStr)}
+                          className="p-4 flex items-center justify-between cursor-pointer select-none bg-slate-950/40 hover:bg-slate-950/80 transition-all gap-3"
+                        >
+                          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 text-right">
+                            <span className="text-xs font-black text-slate-100 flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
+                              <span>يوم: {dateStr}</span>
+                            </span>
+                            <span className="text-[11px] text-slate-400 font-bold bg-slate-950 px-2.5 py-1 rounded-lg border border-white/4">
+                              المورد: {selectedSupplier || "غير محدد"}
+                            </span>
                           </div>
-                          <div className="bg-slate-950 border border-amber-500/20 p-2.5 rounded-xl">
-                            <span className="text-[9.5px] text-amber-500 block font-bold">صافي ثمن البضاعة (بدون شحن)</span>
-                            <span className="text-xs font-mono font-bold text-amber-400">{Number(item.netProductValue || 0).toLocaleString("ar")} ج.م</span>
-                          </div>
-                          <div className="bg-slate-950 border border-white/4 p-2.5 rounded-xl">
-                            <span className="text-[9.5px] text-slate-400 block font-bold">إجمالي التحصيل الفعلي الميداني</span>
-                            <span className="text-xs font-mono font-black text-emerald-400">{Number(item.totalActualCollected || 0).toLocaleString("ar")} ج.م</span>
-                          </div>
-                          <div className="bg-slate-950 border border-white/4 p-2.5 rounded-xl">
-                            <span className="text-[9.5px] text-slate-400 block font-bold">المرتجع المسترد اليوم</span>
-                            <span className="text-xs font-mono font-black text-red-400">{Number(item.returnedValueRefunded || 0).toLocaleString("ar")} ج.م</span>
-                          </div>
-                          <div className="bg-slate-950 border border-white/4 p-2.5 rounded-xl">
-                            <span className="text-[9.5px] text-slate-400 block font-bold">خصم شحن المرتجعات</span>
-                            <span className="text-xs font-mono font-black text-slate-350">{Number(item.returnShippingFees || 0).toLocaleString("ar")} ج.م</span>
-                          </div>
-                        </div>
-
-                        {/* Net Dues Container */}
-                        <div className="bg-slate-950 border border-white/6 p-3.5 rounded-xl flex items-center justify-between">
-                          <div>
-                            <span className="text-[10px] text-slate-400 block font-black">صافي حساب اليوم:</span>
-                            <span className="text-2xs text-slate-500 font-semibold">(إجمالي التحصيل الفعلي - مرتجعات مستلمة - نقدية مصروفة باليوم)</span>
-                          </div>
-                          <div className="text-base font-mono font-black text-emerald-400 text-left">
-                            {Number(item.netDues || 0).toLocaleString("ar")} ج.م
-                          </div>
-                        </div>
-
-                        {/* Actions Inside Card */}
-                        <div className="grid grid-cols-2 gap-2 pt-1">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelectedDayDate(item.date);
-                              setSelectedDayStatus(item.status);
-                              setSelectedDayOrdersDetail(item.orders);
-                            }}
-                            className="bg-slate-950 hover:bg-slate-950/80 border border-white/8 text-slate-200 py-2.5 px-3 rounded-lg text-2xs font-extrabold flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
-                          >
-                            <Eye size={13} className="text-amber-500" />
-                            <span>تفاصيل أوردرات اليوم</span>
-                          </button>
-
-                          {isFinancial && isPending ? (
-                            <button
-                              type="button"
-                              disabled={settleDayProgress === item.date}
-                              onClick={() => handleSettleDay(item.date)}
-                              className="bg-emerald-600 hover:bg-emerald-700 text-slate-950 py-2.5 px-3 rounded-lg text-2xs font-black flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors"
-                            >
-                              {settleDayProgress === item.date ? (
-                                <Loader2 size={13} className="animate-spin text-slate-950" />
-                              ) : (
-                                <CheckCircle2 size={13} className="text-slate-950" />
-                              )}
-                              <span>تقفيل وتسليم الكاش المالي</span>
-                            </button>
-                          ) : (
-                            <div className="bg-emerald-950/30 border border-emerald-900/30 text-emerald-400 py-2.5 px-3 rounded-lg text-2xs font-bold flex items-center justify-center gap-1">
-                              <Check size={12} />
-                              <span>حساب مقفل ومصفى تماماً</span>
+                          
+                          <div className="flex items-center gap-3">
+                            <div className="text-right">
+                              <span className="text-[9px] text-slate-450 block font-bold leading-none">الصافي المالي:</span>
+                              <span className="text-xs font-mono font-black text-emerald-400 mt-0.5 block">
+                                {Number(item.netDues || 0).toLocaleString("ar")} ج.م
+                              </span>
                             </div>
-                          )}
+                            
+                            <div className="flex items-center gap-2">
+                              <span
+                                className={`px-2.5 py-0.5 text-[9px] font-black rounded ${
+                                  isPending
+                                    ? "bg-amber-950/40 border border-amber-900/40 text-amber-500"
+                                    : "bg-emerald-950/40 border border-emerald-900/40 text-emerald-500"
+                                }`}
+                              >
+                                {isPending ? "🔴 معلق" : "🟢 مصفى"}
+                              </span>
+                              {isOpen ? (
+                                <ChevronUp size={16} className="text-slate-400" />
+                              ) : (
+                                <ChevronDown size={16} className="text-slate-400" />
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Expandable Panel */}
+                        <div
+                          className={`transition-all duration-300 ease-in-out ${
+                            isOpen ? "max-h-[1200px] border-t border-white/6 p-5 opacity-100" : "max-h-0 overflow-hidden opacity-0 pointer-events-none"
+                          }`}
+                        >
+                          <div className="space-y-4">
+                            {/* Day Financial Grid Stats */}
+                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                              <div className="bg-slate-950 border border-white/4 p-2.5 rounded-xl">
+                                <span className="text-[9.5px] text-slate-400 block font-bold">إجمالي قيمة الشغل (COD كلي)</span>
+                                <span className="text-xs font-mono font-black text-slate-200">{Number(item.totalWorkValue || 0).toLocaleString("ar")} ج.م</span>
+                              </div>
+                              <div className="bg-slate-950 border border-amber-500/20 p-2.5 rounded-xl">
+                                <span className="text-[9.5px] text-amber-500 block font-bold">صافي ثمن البضاعة (بدون شحن)</span>
+                                <span className="text-xs font-mono font-bold text-amber-400">{Number(item.netProductValue || 0).toLocaleString("ar")} ج.م</span>
+                              </div>
+                              <div className="bg-slate-950 border border-white/4 p-2.5 rounded-xl">
+                                <span className="text-[9.5px] text-slate-400 block font-bold">إجمالي التحصيل الفعلي الميداني</span>
+                                <span className="text-xs font-mono font-black text-emerald-400">{Number(item.totalActualCollected || 0).toLocaleString("ar")} ج.م</span>
+                              </div>
+                              <div className="bg-slate-950 border border-white/4 p-2.5 rounded-xl">
+                                <span className="text-[9.5px] text-slate-400 block font-bold">المرتجع المسترد اليوم</span>
+                                <span className="text-xs font-mono font-black text-red-400">{Number(item.returnedValueRefunded || 0).toLocaleString("ar")} ج.م</span>
+                              </div>
+                              <div className="bg-slate-950 border border-white/4 p-2.5 rounded-xl">
+                                <span className="text-[9.5px] text-slate-400 block font-bold">خصم شحن المرتجعات</span>
+                                <span className="text-xs font-mono font-black text-slate-350">{Number(item.returnShippingFees || 0).toLocaleString("ar")} ج.م</span>
+                              </div>
+                            </div>
+
+                            {/* Net Dues Container */}
+                            <div className="bg-slate-950 border border-white/6 p-3.5 rounded-xl flex items-center justify-between">
+                              <div>
+                                <span className="text-[10px] text-slate-400 block font-black">صافي حساب اليوم:</span>
+                                <span className="text-2xs text-slate-500 font-semibold">(إجمالي التحصيل الفعلي - مرتجعات مستلمة - نقدية مصروفة باليوم)</span>
+                              </div>
+                              <div className="text-base font-mono font-black text-emerald-400 text-left">
+                                {Number(item.netDues || 0).toLocaleString("ar")} ج.م
+                              </div>
+                            </div>
+
+                            {/* Actions Inside Card */}
+                            <div className="grid grid-cols-2 gap-2 pt-1">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedDayDate(item.date);
+                                  setSelectedDayStatus(isPending ? "🔴 معلق لم يصفى" : "🟢 تم تصفية الكاش والمرتجع");
+                                  setSelectedDayOrdersDetail(item.orders);
+                                }}
+                                className="bg-slate-950 hover:bg-slate-950/80 border border-white/8 text-slate-200 py-2.5 px-3 rounded-lg text-2xs font-extrabold flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+                              >
+                                <Eye size={13} className="text-amber-500" />
+                                <span>تفاصيل أوردرات اليوم</span>
+                              </button>
+
+                              {isFinancial && isPending ? (
+                                <button
+                                  type="button"
+                                  disabled={settleDayProgress === item.date}
+                                  onClick={() => handleSettleDay(item.date)}
+                                  className="bg-emerald-600 hover:bg-emerald-700 text-slate-950 py-2.5 px-3 rounded-lg text-2xs font-black flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors"
+                                >
+                                  {settleDayProgress === item.date ? (
+                                    <Loader2 size={13} className="animate-spin text-slate-950" />
+                                  ) : (
+                                    <CheckCircle2 size={13} className="text-slate-950" />
+                                  )}
+                                  <span>تقفيل وتسليم الكاش المالي</span>
+                                </button>
+                              ) : (
+                                <div className="bg-emerald-950/30 border border-emerald-900/30 text-emerald-400 py-2.5 px-3 rounded-lg text-2xs font-bold flex items-center justify-center gap-1">
+                                  <Check size={12} />
+                                  <span>حساب مقفل ومصفى تماماً</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
                         </div>
                       </div>
                     );
@@ -854,54 +901,148 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
                   رصد يومي مستمر للمعادلة المعتمدة: الراتب اليومي الثابت (الراتب الأساسي / أيام الشهر) + (عدد التسليمات × {courierSummary.commission_success || 25}) + (عدد المرتجعات × {courierSummary.commission_return || 10}).
                 </p>
 
-                <div className="overflow-x-auto max-h-[350px] overflow-y-auto">
-                  <table className="w-full text-right text-xs border-collapse">
-                    <thead className="sticky top-0 bg-slate-900 z-10">
-                      <tr className="border-b border-white/10 text-slate-400 font-extrabold text-[10px]">
-                        <th className="py-2 px-3 text-right">اليوم والتاريخ</th>
-                        <th className="py-2 px-3 text-center">التسليمات</th>
-                        <th className="py-2 px-3 text-center">المرتجعات</th>
-                        <th className="py-2 px-3 text-center">حصة الراتب اليومي</th>
-                        <th className="py-2 px-3 text-center">العمولات المكتسبة</th>
-                        <th className="py-2 px-3 text-left">صافي اليوم</th>
-                        <th className="py-2 px-3 text-left">التراكمي المتراكم</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(!courierSummary.dailyEarnings || courierSummary.dailyEarnings.length === 0) ? (
-                        <tr>
-                          <td colSpan={7} className="py-6 text-center text-slate-500 text-xs">
-                            لا يوجد سجل حركات يومية متاح لهذا الشهر للأن
-                          </td>
+                <div className="overflow-x-auto max-h-[450px] overflow-y-auto">
+                  {/* Desktop view: Traditional table */}
+                  <div className="hidden md:block">
+                    <table className="w-full text-right text-xs border-collapse">
+                      <thead className="sticky top-0 bg-slate-900 z-10">
+                        <tr className="border-b border-white/10 text-slate-400 font-extrabold text-[10px]">
+                          <th className="py-2 px-3 text-right">اليوم والتاريخ</th>
+                          <th className="py-2 px-3 text-center">التسليمات</th>
+                          <th className="py-2 px-3 text-center">المرتجعات</th>
+                          <th className="py-2 px-3 text-center">حصة الراتب اليومي</th>
+                          <th className="py-2 px-3 text-center">العمولات المكتسبة</th>
+                          <th className="py-2 px-3 text-left">صافي اليوم</th>
+                          <th className="py-2 px-3 text-left">التراكمي المتراكم</th>
                         </tr>
-                      ) : (
-                        courierSummary.dailyEarnings.map((dItem: any, idx: number) => {
-                          const dailyCommissions = (dItem.delivered * (courierSummary.commission_success || 25)) + (dItem.returned * (courierSummary.commission_return || 10));
-                          return (
-                            <tr key={idx} className={`border-b border-white/4 text-[11px] hover:bg-slate-950/40 transition-colors ${idx === 0 ? "bg-amber-500/5 animate-pulse" : ""}`}>
-                              <td className="py-3 px-3 font-bold text-slate-200">{dItem.date} {idx === 0 ? " (اليوم)" : ""}</td>
-                              <td className={`py-3 px-3 text-center font-black ${dItem.delivered > 0 ? "text-emerald-400" : "text-slate-500"}`}>
-                                {dItem.delivered} شحنة
-                              </td>
-                              <td className={`py-3 px-3 text-center font-black ${dItem.returned > 0 ? "text-amber-500" : "text-slate-500"}`}>
-                                {dItem.returned} شحنة
-                              </td>
-                              <td className="py-3 px-3 text-center font-mono text-slate-400">{(dItem.baseEarning || 0).toFixed(2)} ج.م</td>
-                              <td className={`py-3 px-3 text-center font-mono ${dailyCommissions > 0 ? "text-emerald-400 font-bold" : "text-slate-500"}`}>
-                                {dailyCommissions > 0 ? `+${dailyCommissions.toLocaleString("ar")}` : "0"} ج.م
-                              </td>
-                              <td className="py-3 px-3 text-left font-mono font-black text-amber-500">
-                                {dItem.total.toLocaleString("ar")} ج.م
-                              </td>
-                              <td className="py-3 px-3 text-left font-mono font-black text-emerald-400 bg-emerald-950/5">
-                                {dItem.cumulative.toLocaleString("ar")} ج.م
-                              </td>
-                            </tr>
-                          );
-                        })
-                      )}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {(!courierSummary.dailyEarnings || courierSummary.dailyEarnings.length === 0) ? (
+                          <tr>
+                            <td colSpan={7} className="py-6 text-center text-slate-500 text-xs">
+                              لا يوجد سجل حركات يومية متاح لهذا الشهر للأن
+                            </td>
+                          </tr>
+                        ) : (
+                          courierSummary.dailyEarnings.map((dItem: any, idx: number) => {
+                            const dailyCommissions = (dItem.delivered * (courierSummary.commission_success || 25)) + (dItem.returned * (courierSummary.commission_return || 10));
+                            return (
+                              <tr key={idx} className={`border-b border-white/4 text-[11px] hover:bg-slate-950/40 transition-colors ${idx === 0 ? "bg-amber-500/5 animate-pulse" : ""}`}>
+                                <td className="py-3 px-3 font-bold text-slate-200">{dItem.date} {idx === 0 ? " (اليوم)" : ""}</td>
+                                <td className={`py-3 px-3 text-center font-black ${dItem.delivered > 0 ? "text-emerald-400" : "text-slate-500"}`}>
+                                  {dItem.delivered} شحنة
+                                </td>
+                                <td className={`py-3 px-3 text-center font-black ${dItem.returned > 0 ? "text-amber-500" : "text-slate-500"}`}>
+                                  {dItem.returned} شحنة
+                                </td>
+                                <td className="py-3 px-3 text-center font-mono text-slate-400">{(dItem.baseEarning || 0).toFixed(2)} ج.م</td>
+                                <td className={`py-3 px-3 text-center font-mono ${dailyCommissions > 0 ? "text-emerald-400 font-bold" : "text-slate-500"}`}>
+                                  {dailyCommissions > 0 ? `+${dailyCommissions.toLocaleString("ar")}` : "0"} ج.م
+                                </td>
+                                <td className="py-3 px-3 text-left font-mono font-black text-amber-500">
+                                  {dItem.total.toLocaleString("ar")} ج.م
+                                </td>
+                                <td className="py-3 px-3 text-left font-mono font-black text-emerald-400 bg-emerald-950/5">
+                                  {dItem.cumulative.toLocaleString("ar")} ج.م
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Mobile view: Collapsible Accordion Card layout */}
+                  <div className="block md:hidden space-y-3">
+                    {(!courierSummary.dailyEarnings || courierSummary.dailyEarnings.length === 0) ? (
+                      <div className="py-6 text-center text-slate-500 text-xs font-bold">
+                        لا يوجد سجل حركات يومية متاح لهذا الشهر للأن
+                      </div>
+                    ) : (
+                      courierSummary.dailyEarnings.map((dItem: any, idx: number) => {
+                        const dailyCommissions = (dItem.delivered * (courierSummary.commission_success || 25)) + (dItem.returned * (courierSummary.commission_return || 10));
+                        const courierDateStr = dItem.date || "";
+                        const isCourierOpen = !!expandedCourierDays[courierDateStr];
+                        const isToday = idx === 0;
+
+                        return (
+                          <div
+                            key={`c-day-mobile-${idx}`}
+                            className={`border rounded-xl shadow-sm transition-all text-right overflow-hidden ${
+                              isToday
+                                ? "bg-amber-950/10 border-amber-500/20"
+                                : "bg-slate-950/60 border-white/6 hover:border-white/12"
+                            }`}
+                          >
+                            {/* Outward Card Shell */}
+                            <div
+                              onClick={() => toggleCourierDay(courierDateStr)}
+                              className="p-3.5 flex items-center justify-between cursor-pointer select-none gap-3 hover:bg-slate-950 transition-all"
+                            >
+                              <div className="flex flex-col text-right">
+                                <span className="text-xs font-black text-slate-200 flex items-center gap-1.5">
+                                  {isToday && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>}
+                                  <span>{courierDateStr} {isToday ? " (اليوم)" : ""}</span>
+                                </span>
+                                <span className="text-[10px] text-slate-400 font-bold mt-1">
+                                  المندوب: {selectedCourier || "غير محدد"}
+                                </span>
+                              </div>
+
+                              <div className="flex items-center gap-2.5">
+                                <div className="text-right">
+                                  <span className="text-[9px] text-slate-450 block font-bold leading-none">صافي اليوم:</span>
+                                  <span className="text-xs font-mono font-black text-amber-500 mt-0.5 block">
+                                    {Number(dItem.total || 0).toLocaleString("ar")} ج.م
+                                  </span>
+                                </div>
+                                <div className="bg-slate-900 border border-white/5 p-1 rounded-md text-slate-400">
+                                  {isCourierOpen ? (
+                                    <ChevronUp size={14} />
+                                  ) : (
+                                    <ChevronDown size={14} />
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Collapsible Details */}
+                            <div
+                              className={`transition-all duration-300 ease-in-out ${
+                                isCourierOpen ? "max-h-[500px] border-t border-white/6 p-4 bg-slate-950/90 opacity-100" : "max-h-0 overflow-hidden opacity-0 pointer-events-none"
+                              }`}
+                            >
+                              <div className="grid grid-cols-2 gap-3">
+                                <div className="bg-slate-900 border border-white/4 p-2.5 rounded-lg text-right">
+                                  <span className="text-[9.5px] text-slate-410 block font-bold">التسليمات الفيلية:</span>
+                                  <span className="text-xs font-black text-emerald-400 mt-0.5 block">{dItem.delivered} شحنة</span>
+                                </div>
+                                <div className="bg-slate-900 border border-white/4 p-2.5 rounded-lg text-right">
+                                  <span className="text-[9.5px] text-slate-410 block font-bold">المرتجعات المرتجعة:</span>
+                                  <span className="text-xs font-black text-amber-500 mt-0.5 block">{dItem.returned} شحنة</span>
+                                </div>
+                                <div className="bg-slate-900 border border-white/4 p-2.5 rounded-lg text-right">
+                                  <span className="text-[9.5px] text-slate-410 block font-bold">حصة الراتب الثابت:</span>
+                                  <span className="text-xs font-mono font-bold text-slate-300 mt-0.5 block">{(dItem.baseEarning || 0).toFixed(2)} ج.م</span>
+                                </div>
+                                <div className="bg-slate-900 border border-white/4 p-2.5 rounded-lg text-right">
+                                  <span className="text-[9.5px] text-slate-410 block font-bold">العمولات الإضافية:</span>
+                                  <span className="text-xs font-mono font-black text-emerald-400 mt-0.5 block">+{dailyCommissions.toLocaleString("ar")} ج.م</span>
+                                </div>
+                                <div className="bg-slate-900 border border-emerald-500/10 p-2.5 rounded-lg col-span-2 flex justify-between items-center text-right">
+                                  <span className="text-[10px] text-slate-350 font-bold">الرصيد التراكمي المتبقي:</span>
+                                  <span className="text-sm font-mono font-black text-emerald-300">
+                                    {Number(dItem.cumulative || 0).toLocaleString("ar")} ج.م
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
                 </div>
               </div>
 

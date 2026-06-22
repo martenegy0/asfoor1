@@ -478,6 +478,16 @@ const getOrderStatus = (o: any): string => {
   return raw ? raw.toString().trim() : "";
 };
 
+const getOrderActualReceivedCash = (o: any): number => {
+  if (!o) return 0;
+  const raw = o.actualReceivedCash ?? o.partialAmount ?? o["المبلغ المستلم"] ?? o["التحصيل الجزئي"] ?? o["التحصيل"] ?? o["المبلغ المحصل"] ?? o["المبلغ المستلم الفعلي"];
+  if (raw !== undefined && raw !== null && raw !== "") {
+    const val = Number(raw);
+    if (!isNaN(val)) return val;
+  }
+  return 0;
+};
+
 const getOrderCourier = (o: any): string => {
   if (!o) return "";
   const raw = o.courier ?? o["المندوب"] ?? o["مندوب الشحن"] ?? o["الموصل"] ?? o["الطيار"] ?? o["courierName"] ?? o["courier_name"];
@@ -591,18 +601,6 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
     }
   }
 
-  // 3. Group supplier orders by their normalized date
-  const ordersByDay = new Map<string, any[]>();
-  for (const o of supplierOrders) {
-    const rawDate = o.orderDate || o.createdAt || o["تاريخ الطلب"] || "";
-    const normDate = normalizeDateStr(rawDate);
-    if (!normDate) continue;
-    if (!ordersByDay.has(normDate)) {
-      ordersByDay.set(normDate, []);
-    }
-    ordersByDay.get(normDate)!.push(o);
-  }
-
   // Helper functions matching getSupplierUnifiedLedger / isHumanPayout
   const isHumanLedgedPayout = (l: any) => {
     if (!l) return false;
@@ -632,6 +630,18 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
   });
   const adjustmentsAndPayments = sLedgerLoc.filter(isHumanLedgedPayout);
 
+  // 3. Group supplier orders by their normalized date
+  const ordersByDay = new Map<string, any[]>();
+  for (const o of supplierOrders) {
+    const rawDate = o.orderDate || o.createdAt || o["تاريخ الطلب"] || "";
+    const normDate = normalizeDateStr(rawDate);
+    if (!normDate) continue;
+    if (!ordersByDay.has(normDate)) {
+      ordersByDay.set(normDate, []);
+    }
+    ordersByDay.get(normDate)!.push(o);
+  }
+
   // 4. Compute accounts for each day
   const daysList: any[] = [];
 
@@ -644,7 +654,7 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
 
     // B. إجمالي التحصيل الفعلي اليومي: (مجموع الأوردرات المسلمة كلياً) + (المبالغ الفعلية المحصلة من خانات التسليم جزئياً)
     const deliveredOrders = dayOrders.filter((o: any) => {
-      const status = (o.status || "").toString().trim();
+      const status = getOrderStatus(o);
       return ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(status);
     });
     const deliveredCashCollected = deliveredOrders.reduce((sum, o) => {
@@ -653,18 +663,18 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
     }, 0);
 
     const partialOrders = dayOrders.filter((o: any) => {
-      const status = (o.status || "").toString().trim();
+      const status = getOrderStatus(o);
       return ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].includes(status);
     });
     const partialCashCollected = partialOrders.reduce((sum, o) => {
-      return sum + Number(o.actualReceivedCash || o.partialAmount || 0);
+      return sum + getOrderActualReceivedCash(o);
     }, 0);
 
     const totalActualCollected = deliveredCashCollected + partialCashCollected;
 
     // C. المرتجعات المستردة اليوم: قيمة البضاعة لتم تسليمها للمورد (صافي البضاعة بدون شحن)
     const returnedDeliveredOrders = dayOrders.filter((o: any) => {
-      const status = (o.status || "").toString().trim();
+      const status = getOrderStatus(o);
       return ["تم تسليم المرتجع للمورد", "تم تسليمه للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(status);
     });
     const returnedValueRefunded = returnedDeliveredOrders.reduce((sum, o) => {
@@ -674,14 +684,14 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
 
     // D. مصاريف شحن المرتجعات لأي أوردر مرتجع في هذا اليوم
     const returnedOrdersAll = dayOrders.filter((o: any) => {
-      const status = (o.status || "").toString().trim();
+      const status = getOrderStatus(o);
       return [
         "مرتجع", "مرتجع جديد", "مرتجع بالمستودع", "مرتجع جزئي بالمستودع",
         "تم تسليم المرتجع للمورد", "تم تسليمه للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"
       ].includes(status);
     });
     const returnShippingFees = returnedOrdersAll.reduce((sum, o) => {
-      if (o.status === "مرتجع والعميل دفع الشحن") return sum;
+      if (getOrderStatus(o) === "مرتجع والعميل دفع الشحن") return sum;
       const financials = getOrderFinancials(o);
       return sum + financials.shipPrice;
     }, 0);
@@ -702,13 +712,13 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
 
     // صافي قيمة البضاعة/المنتجات بدون شحن للطلبات المسلمة والجزئية اليوم
     const netProductValue = dayOrders.reduce((sum, o) => {
-      const status = (o.status || "").toString().trim();
+      const status = getOrderStatus(o);
       const financials = getOrderFinancials(o);
       if (["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(status)) {
         return sum + financials.prodPrice;
       }
       if (["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].includes(status)) {
-        const cash = Number(o.actualReceivedCash || o.partialAmount || 0);
+        const cash = getOrderActualReceivedCash(o);
         return sum + Math.max(0, cash - financials.shipPrice);
       }
       return sum;
@@ -733,11 +743,11 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
         tracking: o.tracking || getOrderTracking(o) || "",
         customer: o.customer || o["اسم العميل"] || "",
         phone: o.phone || o["الهاتف"] || "",
-        status: o.status || "",
+        status: getOrderStatus(o),
         prodPrice: Number(getOrderFinancials(o).prodPrice || 0),
         shipPrice: Number(getOrderFinancials(o).shipPrice || 0),
         totalCOD: Number(getOrderFinancials(o).totalCOD || 0),
-        partialAmount: Number(o.actualReceivedCash || o.partialAmount || 0)
+        partialAmount: getOrderActualReceivedCash(o)
       }))
     });
   }
@@ -771,7 +781,7 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
       return sum + financials.prodPrice;
     }
     if (["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].includes(status)) {
-      const cash = Number(o.actualReceivedCash || o.partialAmount || 0);
+      const cash = getOrderActualReceivedCash(o);
       return sum + Math.max(0, cash - financials.shipPrice);
     }
     return sum;
