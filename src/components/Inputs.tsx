@@ -1,6 +1,7 @@
 import React, { useRef, useState } from "react";
 import { PlusCircle, Upload, Camera, FileSpreadsheet, Loader2, RefreshCw, Layers } from "lucide-react";
 import { apiCall, fixPhoneJS, validatePhone } from "../utils";
+import * as XLSX from "xlsx";
 
 interface InputsProps {
   token: string;
@@ -174,82 +175,117 @@ export default function Inputs({ token, role, user, onSuccess }: InputsProps) {
 
     const r = new FileReader();
     r.onload = (event) => {
-      const text = event.target?.result as string;
-      const lines = text.split("\n").filter((l) => l.trim());
-      if (lines.length < 2) {
-        alert("الملف فارغ أو لا يحتوي على صفوف بيانات صحيحة");
-        return;
-      }
-
-      // Parse headers
-      const headers = lines[0].split(",").map((h) => h.trim().replace(/"/g, ""));
-      const list: any[] = [];
-
-      for (let i = 1; i < lines.length; i++) {
-        const vals = lines[i].split(",").map((v) => v.trim().replace(/"/g, ""));
-        if (!vals[0] && !vals[1]) continue;
-
-        const obj: any = {};
-        headers.forEach((h, idx) => {
-          obj[h] = vals[idx] || "";
-        });
-
-        // 🧠 Smart Extraction Logic for prices:
-        // 1. Resolve shipping fees (default to 60)
-        let resolvedShip = 60;
-        const shipMatch = obj["سعر الشحن"] || obj["الشحن"] || obj["تكلفة الشحن"] || obj["مصاريف الشحن"] || obj["shipping"] || obj["shipPrice"] || obj["ship_price"];
-        if (shipMatch && !isNaN(Number(shipMatch))) {
-          resolvedShip = Number(shipMatch);
+      try {
+        const arrayBuffer = event.target?.result as ArrayBuffer;
+        const data = new Uint8Array(arrayBuffer);
+        const workbook = XLSX.read(data, { type: "array" });
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        
+        // Convert sheet to array of arrays so we can easily resolve headers by name or fallback by index
+        const rows = XLSX.utils.sheet_to_json<any[]>(worksheet, { header: 1 });
+        
+        if (rows.length < 2) {
+          alert("الملف فارغ أو لا يحتوي على صفوف بيانات صحيحة");
+          return;
         }
 
-        // 2. Resolve total COD / cash to be collected
-        let resolvedTotal = 0;
-        const totalMatch = obj["المطلوب تحصيله"] || obj["التحصيل"] || obj["المطلوب"] || obj["إجمالي الكود"] || obj["الإجمالي"] || obj["الاجمالي"] || obj["إجمالي الأوردر"] || obj["total"] || obj["totalCOD"] || obj["total_cod"] || obj["cash_to_be_collected"] || obj["cash"];
-        if (totalMatch && !isNaN(Number(totalMatch))) {
-          resolvedTotal = Number(totalMatch);
-        }
+        // Clean and prepare headers
+        const headers = (rows[0] || []).map((h: any) => h ? h.toString().toLowerCase().trim() : "");
+        const list: any[] = [];
 
-        // 3. Resolve product price
-        let resolvedProd = 0;
-        const prodMatch = obj["سعر المنتج"] || obj["المنتج"] || obj["سعر المادة"] || obj["price"] || obj["prodPrice"] || obj["product_price"];
-        if (prodMatch && !isNaN(Number(prodMatch))) {
-          resolvedProd = Number(prodMatch);
-        }
+        // Loop over second row onwards
+        for (let i = 1; i < rows.length; i++) {
+          const rowData = rows[i];
+          if (!rowData || rowData.length === 0) continue;
 
-        // 4. Do smart math equations to construct values
-        if (resolvedTotal > 0) {
-          if (resolvedProd === 0) {
-            resolvedProd = resolvedTotal - resolvedShip;
-          } else if (resolvedShip === 60 && resolvedTotal > resolvedProd) {
-            resolvedShip = resolvedTotal - resolvedProd;
+          // Check if at least one column is filled (to skip empty rows)
+          const isRowEmpty = rowData.every((val: any) => val === undefined || val === null || val.toString().trim() === "");
+          if (isRowEmpty) continue;
+
+          const getValue = (names: string[], fallbackIdx: number): string => {
+            for (const name of names) {
+              const idx = headers.indexOf(name.toLowerCase().trim());
+              if (idx !== -1 && rowData[idx] !== undefined && rowData[idx] !== null) {
+                return rowData[idx].toString().trim();
+              }
+            }
+            if (fallbackIdx >= 0 && fallbackIdx < rowData.length && rowData[fallbackIdx] !== undefined && rowData[fallbackIdx] !== null) {
+              return rowData[fallbackIdx].toString().trim();
+            }
+            return "";
+          };
+
+          // Smart Extraction Logic for prices:
+          // 1. Resolve shipping fees (default to 65)
+          let resolvedShip = 65;
+          const shipMatch = getValue(["سعر الشحن", "الشحن", "تكلفة الشحن", "مصاريف الشحن", "shipping", "shipprice", "ship_price"], -1);
+          if (shipMatch && !isNaN(Number(shipMatch))) {
+            resolvedShip = Number(shipMatch);
           }
-        } else {
-          resolvedTotal = resolvedProd + resolvedShip;
+
+          // 2. Resolve total COD / cash to be collected
+          let resolvedTotal = 0;
+          const totalMatch = getValue(["المطلوب تحصيله", "التحصيل", "المطلوب", "إجمالي الكود", "الإجمالي", "الاجمالي", "إجمالي الأوردر", "total", "totalcod", "total_cod", "cash_to_be_collected", "cash"], -1);
+          if (totalMatch && !isNaN(Number(totalMatch))) {
+            resolvedTotal = Number(totalMatch);
+          }
+
+          // 3. Resolve product price
+          let resolvedProd = 0;
+          const prodMatch = getValue(["سعر المنتج", "المنتج", "سعر المادة", "price", "prodprice", "product_price"], 5);
+          if (prodMatch && !isNaN(Number(prodMatch))) {
+            resolvedProd = Number(prodMatch);
+          }
+
+          // 4. Do smart math equations to construct values
+          if (resolvedTotal > 0) {
+            if (resolvedProd === 0) {
+              resolvedProd = resolvedTotal - resolvedShip;
+            } else if (resolvedShip === 65 && resolvedTotal > resolvedProd) {
+              resolvedShip = resolvedTotal - resolvedProd;
+            }
+          } else {
+            resolvedTotal = resolvedProd + resolvedShip;
+          }
+
+          const customerVal = getValue(["اسم العميل", "العميل", "اسم المستلم", "customer"], 0);
+          const phoneVal = getValue(["التليفون", "رقم التليفون", "تليفون", "الهاتف", "phone"], 1);
+          const addressVal = getValue(["العنوان", "العنوان بالتفصيل", "عنوان", "address"], 2);
+          const govVal = getValue(["المحافظة", "مقاولة المحافظة", "المحافظه", "gov"], 3) || "القاهرة";
+          const regionVal = getValue(["المنطقة", "المنطقه", "region"], 4);
+          const prodTypeVal = getValue(["نوع المنتج", "المنتج", "الصنف", "صنف", "الأصناف", "المحتويات", "المحتوى", "product", "prodtype", "type"], -1);
+          const notesVal = getValue(["ملاحظات", "الملاحظات", "notes"], -1);
+          const supplierVal = getValue(["المورد", "اسم المورد", "مورد", "merchant", "supplier"], 6);
+
+          if (!customerVal && !phoneVal) continue;
+
+          list.push({
+            customer: customerVal,
+            phone: phoneVal,
+            address: addressVal,
+            gov: govVal,
+            region: regionVal,
+            prodPrice: resolvedProd,
+            shipPrice: resolvedShip,
+            totalCOD: resolvedTotal,
+            prodType: prodTypeVal,
+            notes: notesVal,
+            supplier: supplierVal
+          });
         }
 
-        list.push({
-          customer: obj["اسم العميل"] || obj["العميل"] || obj["اسم المستلم"] || obj["customer"] || vals[0] || "",
-          phone: obj["التليفون"] || obj["رقم التليفون"] || obj["تليفون"] || obj["الهاتف"] || obj["phone"] || vals[1] || "",
-          address: obj["العنوان"] || obj["العنوان بالتفصيل"] || obj["عنوان"] || obj["address"] || vals[2] || "",
-          gov: obj["المحافظة"] || obj["مقاولة المحافظة"] || obj["gov"] || vals[3] || "القاهرة",
-          region: obj["المنطقة"] || obj["المنطقه"] || obj["region"] || vals[4] || "",
-          prodPrice: resolvedProd,
-          shipPrice: resolvedShip,
-          totalCOD: resolvedTotal,
-          prodType: obj["نوع المنتج"] || obj["المنتج"] || obj["الصنف"] || obj["صنف"] || obj["الأصناف"] || obj["المحتويات"] || obj["المحتوى"] || obj["product"] || obj["prodType"] || obj["type"] || "",
-          notes: obj["ملاحظات"] || obj["الملاحظات"] || obj["notes"] || "",
-          supplier: obj["المورد"] || obj["اسم المورد"] || obj["مورد"] || obj["merchant"] || obj["supplier"] || vals[6] || ""
-        });
+        setExcelData(list);
+      } catch (err: any) {
+        alert("حدث خطأ أثناء قراءة ومعالجة شيت الإكسيل: " + (err.message || err));
       }
-
-      setExcelData(list);
     };
-    r.readAsText(file, "utf-8");
+    r.readAsArrayBuffer(file);
   }
 
   async function submitBulkExcel() {
     if (excelData.length === 0) {
-      alert("الرجاء تحديد ملف CSV أولاً");
+      alert("الرجاء تحديد ملف Excel/CSV أولاً");
       return;
     }
 
@@ -533,14 +569,14 @@ export default function Inputs({ token, role, user, onSuccess }: InputsProps) {
         </div>
       )}
 
-      {/* --- Tab 2: Bulk CSV File Upload --- */}
+      {/* --- Tab 2: Bulk Excel/CSV File Upload --- */}
       {activeTab === "excel" && (
         <div className="space-y-5 text-center py-4 bg-slate-950/40 border border-white/4 p-4 rounded-xl">
           <div className="max-w-[320px] mx-auto space-y-3">
             <span className="text-4xl block text-amber-500/80">📄</span>
             <div className="text-xs font-bold text-slate-350">تحميل واستيراد كشف الشحنات العام</div>
             <p className="text-[10px] text-slate-500 leading-relaxed">
-              يرجى اختيار ملف CSV يتضمن الأعمدة التالية بالترتيب: العميل (customer)، التليفون (phone)، العنوان (address)، المحافظة (gov)، المنطقة (region)، سعر المنتج (price).
+              يرجى اختيار ملف Excel (.xlsx) أو CSV يتضمن الأعمدة التالية أو أسماءها: العميل، التليفون، العنوان، المحافظة، المنطقة، سعر المنتج.
             </p>
 
             <button
@@ -548,12 +584,12 @@ export default function Inputs({ token, role, user, onSuccess }: InputsProps) {
               className="px-4 py-2.5 bg-slate-900 border border-white/8 rounded-xl text-[10px] text-slate-300 font-bold hover:bg-slate-950 cursor-pointer flex items-center gap-1.5 mx-auto"
             >
               <Upload size={14} />
-              <span>اختر ملف الشيت</span>
+              <span>اختر ملف إكسيل / CSV</span>
             </button>
             <input
               type="file"
               ref={fileInputRef}
-              accept=".csv"
+              accept=".csv, .xlsx, .xls"
               onChange={handleFileRead}
               className="hidden"
             />

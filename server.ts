@@ -700,6 +700,20 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
     // E. صافي حساب اليوم: (إجمالي التحصيل الفعلي لطلبات اليوم - المرتجعات المستلمة اليوم - النقدية المصروفة اليوم)
     const netDues = totalActualCollected - returnedValueRefunded - totalPayoutsOnDay;
 
+    // صافي قيمة البضاعة/المنتجات بدون شحن للطلبات المسلمة والجزئية اليوم
+    const netProductValue = dayOrders.reduce((sum, o) => {
+      const status = (o.status || "").toString().trim();
+      const financials = getOrderFinancials(o);
+      if (["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(status)) {
+        return sum + financials.prodPrice;
+      }
+      if (["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].includes(status)) {
+        const cash = Number(o.actualReceivedCash || o.partialAmount || 0);
+        return sum + Math.max(0, cash - financials.shipPrice);
+      }
+      return sum;
+    }, 0);
+
     // F. حالة التصفية
     const isSettled = settledDaysSet.has(dayDate);
     const statusLabel = isSettled ? "🟢 تم تصفية الكاش والمرتجع" : "🔴 معلق لم يصفى";
@@ -712,6 +726,7 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
       returnedValueRefunded,
       returnShippingFees,
       netDues,
+      netProductValue,
       isSettled,
       status: statusLabel,
       orders: dayOrders.map(o => ({
@@ -749,11 +764,25 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
 
   const finalUnifiedOutstanding = totalGoodsUploaded - returnsDeliveredValue - totalPaid;
 
+  const overallNetProductValue = supplierOrders.reduce((sum: number, o: any) => {
+    const status = getOrderStatus(o);
+    const financials = getOrderFinancials(o);
+    if (["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(status)) {
+      return sum + financials.prodPrice;
+    }
+    if (["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].includes(status)) {
+      const cash = Number(o.actualReceivedCash || o.partialAmount || 0);
+      return sum + Math.max(0, cash - financials.shipPrice);
+    }
+    return sum;
+  }, 0);
+
   return {
     days: daysList,
     outstandingBalance: Math.max(0, finalUnifiedOutstanding),
     totalGoodsUploaded,
     returnsDeliveredValue,
+    overallNetProductValue,
     globalPayments: totalPaid,
     paymentEntries: adjustmentsAndPayments.map((l: any) => ({
       date: normalizeDateStr(l.date || ""),

@@ -420,8 +420,8 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
 
   return (
     <div className="p-4 space-y-6 select-none font-sans text-right">
-      {/* Ledger Mode Filter */}
-      {isFinancial && (
+      {/* Ledger Mode Filter (Hidden if activeLedgerMode is provided to ensure absolute view isolation) */}
+      {isFinancial && !activeLedgerMode && (
         <div className="flex bg-slate-950 border border-white/6 rounded-xl p-1 max-w-[400px] mx-auto">
           <button
             onClick={() => setActiveLedger("courier")}
@@ -490,11 +490,17 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
 
             {/* Quick Metrics */}
             {dailyLedgers && (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 max-w-5xl mx-auto pt-2">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3 max-w-5xl mx-auto pt-2">
                 <div className="bg-slate-950/80 border border-white/4 p-3 rounded-xl text-center shadow-md">
                   <div className="text-[10px] font-black text-slate-400">إجمالي البضاعة المرفوعة</div>
                   <div className="text-sm font-mono font-bold text-slate-200 mt-1">
                     {Number(dailyLedgers.totalGoodsUploaded || 0).toLocaleString("ar")} ج.م
+                  </div>
+                </div>
+                <div className="bg-slate-950/80 border border-amber-500/20 p-3 rounded-xl text-center shadow-md">
+                  <div className="text-[10px] font-black text-amber-500">صافي قيمة البضاعة (تسليم وجزئي)</div>
+                  <div className="text-sm font-mono font-bold text-amber-450 mt-1">
+                    {Number(dailyLedgers.overallNetProductValue || 0).toLocaleString("ar")} ج.م
                   </div>
                 </div>
                 <div className="bg-slate-950/80 border border-white/4 p-3 rounded-xl text-center shadow-md">
@@ -651,10 +657,14 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
                         </div>
 
                         {/* Day Financial Grid Stats */}
-                        <div className="grid grid-cols-2 gap-3.5">
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3.5">
                           <div className="bg-slate-950 border border-white/4 p-2.5 rounded-xl">
                             <span className="text-[9.5px] text-slate-400 block font-bold">إجمالي قيمة الشغل (COD كلي)</span>
                             <span className="text-xs font-mono font-black text-slate-200">{Number(item.totalWorkValue || 0).toLocaleString("ar")} ج.م</span>
+                          </div>
+                          <div className="bg-slate-950 border border-amber-500/20 p-2.5 rounded-xl">
+                            <span className="text-[9.5px] text-amber-500 block font-bold">صافي ثمن البضاعة (بدون شحن)</span>
+                            <span className="text-xs font-mono font-bold text-amber-400">{Number(item.netProductValue || 0).toLocaleString("ar")} ج.م</span>
                           </div>
                           <div className="bg-slate-950 border border-white/4 p-2.5 rounded-xl">
                             <span className="text-[9.5px] text-slate-400 block font-bold">إجمالي التحصيل الفعلي الميداني</span>
