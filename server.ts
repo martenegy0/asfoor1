@@ -603,9 +603,31 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
     ordersByDay.get(normDate)!.push(o);
   }
 
+  // Helper functions matching getSupplierUnifiedLedger / isHumanPayout
+  const isHumanLedgedPayout = (l: any) => {
+    if (!l) return false;
+    const type = (l.type || l["النوع"] || "").toString().trim();
+    const desc = (l.desc || l["البيان"] || "").toString().trim();
+    const tracking = (l.tracking || l["رقم التتبع"] || "").toString().trim();
+
+    const isPayOrAdj = ["دفع نقدي", "دفعة مورد", "صرف مورد", "دفعة", "مسحوبات", "طرح", "تسوية", "سحب"].includes(type) ||
+                       type.includes("دفعة") ||
+                       type.includes("صرف") ||
+                       type.includes("سحب") ||
+                       tracking === "CASH-PAY";
+
+    const isAutoOrReturn = type.includes("مرتجع") ||
+                           desc.includes("مرتجع") ||
+                           type.includes("أوردر") ||
+                           type.includes("حقوق") ||
+                           desc.includes("حقوق") ||
+                           (tracking !== "" && tracking !== "—" && tracking !== "CASH-PAY" && tracking.startsWith("FP-"));
+
+    return isPayOrAdj && !isAutoOrReturn;
+  };
+
   // 4. Compute accounts for each day
   const daysList: any[] = [];
-  let outstandingBalance = 0;
 
   for (const [dayDate, dayOrders] of ordersByDay.entries()) {
     // A. إجمالي قيمة الشغل: مجموع الـ COD الأصلي لكل الشحنات المستلمة منه في هذا التاريخ
@@ -665,10 +687,6 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
     const isSettled = settledDaysSet.has(dayDate);
     const statusLabel = isSettled ? "🟢 تم تصفية الكاش والمرتجع" : "🔴 معلق لم يصفى";
 
-    if (!isSettled) {
-      outstandingBalance += netDues;
-    }
-
     daysList.push({
       date: dayDate,
       orderCount: dayOrders.length,
@@ -694,9 +712,44 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
 
   daysList.sort((a, b) => b.date.localeCompare(a.date));
 
+  // Let's compute outstandingBalance via the exact Unified Ledger Equation
+  // Net Supplier Due = [إجمالي البضاعة المرفوعة (الطلبات المسلمة والجزئية الفعالة)] - [المرتجع المعتمد المستلم] - [إجمالي الدفعات النقدية المسددة للمورد]
+  const totalGoodsUploaded = supplierOrders.reduce((sum: number, o: any) => {
+    return sum + getOrderFinancials(o).prodPrice;
+  }, 0);
+
+  const returnedOrders = supplierOrders.filter((o: any) => {
+    return isReturnedDeliveredToSupplier(getOrderStatus(o));
+  });
+  const returnsDeliveredValue = returnedOrders.reduce((sum: number, o: any) => {
+    const financials = getOrderFinancials(o);
+    return sum + financials.prodPrice;
+  }, 0);
+
+  const sLedger = rawLedger.filter((l: any) => {
+    const s = l.supplier || l["المورد"];
+    return s && sameSup(s, supplierName);
+  });
+  const adjustmentsAndPayments = sLedger.filter(isHumanLedgedPayout);
+  const totalPaid = adjustmentsAndPayments.reduce((sum: number, l: any) => {
+    return sum + Math.abs(Number(l.amount || 0));
+  }, 0);
+
+  const finalUnifiedOutstanding = totalGoodsUploaded - returnsDeliveredValue - totalPaid;
+
   return {
     days: daysList,
-    outstandingBalance: Math.max(0, outstandingBalance)
+    outstandingBalance: Math.max(0, finalUnifiedOutstanding),
+    totalGoodsUploaded,
+    returnsDeliveredValue,
+    globalPayments: totalPaid,
+    paymentEntries: adjustmentsAndPayments.map((l: any) => ({
+      date: normalizeDateStr(l.date || ""),
+      type: l.type || l["النوع"] || "",
+      tracking: l.tracking || l["رقم التتبع"] || "",
+      amount: Math.abs(Number(l.amount || 0)),
+      desc: l.desc || l["البيان"] || ""
+    }))
   };
 }
 

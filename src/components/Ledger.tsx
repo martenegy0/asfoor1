@@ -483,29 +483,36 @@ export default function Ledger({ token, role, user }: LedgerProps) {
 
             {/* Quick Metrics */}
             {dailyLedgers && (
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 max-w-4xl mx-auto pt-2">
-                <div className="bg-slate-950/80 border border-white/4 p-3 rounded-xl text-center">
-                  <div className="text-[10px] font-black text-slate-400">إجمالي الأيام المعلقة</div>
-                  <div className="text-lg font-mono font-bold text-red-300 mt-1">
-                    {dailyLedgers.days.filter((d: any) => !d.isSettled).length} يوم
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 max-w-5xl mx-auto pt-2">
+                <div className="bg-slate-950/80 border border-white/4 p-3 rounded-xl text-center shadow-md">
+                  <div className="text-[10px] font-black text-slate-400">إجمالي البضاعة المرفوعة</div>
+                  <div className="text-sm font-mono font-bold text-slate-200 mt-1">
+                    {Number(dailyLedgers.totalGoodsUploaded || 0).toLocaleString("ar")} ج.م
                   </div>
                 </div>
-                <div className="bg-slate-950/80 border border-white/4 p-3 rounded-xl text-center">
-                  <div className="text-[10px] font-black text-slate-400">إجمالي الأيام المصفاة</div>
-                  <div className="text-lg font-mono font-bold text-emerald-400 mt-1">
-                    {dailyLedgers.days.filter((d: any) => d.isSettled).length} يوم
+                <div className="bg-slate-950/80 border border-white/4 p-3 rounded-xl text-center shadow-md">
+                  <div className="text-[10px] font-black text-slate-400">المرتجع المعتمد المستلم</div>
+                  <div className="text-sm font-mono font-bold text-red-400 mt-1">
+                    {Number(dailyLedgers.returnsDeliveredValue || 0).toLocaleString("ar")} ج.م
                   </div>
                 </div>
-                <div className="bg-slate-950/80 border border-white/4 p-3 rounded-xl text-center">
-                  <div className="text-[10px] font-black text-slate-400">إجمالي قيمة الشغل المعلق</div>
-                  <div className="text-lg font-mono font-bold text-slate-200 mt-1">
-                    {Number(dailyLedgers.days.reduce((acc: number, cur: any) => !cur.isSettled ? acc + cur.totalWorkValue : acc, 0)).toLocaleString("ar")} ج.م
+                <div className="bg-slate-950/80 border border-white/4 p-3 rounded-xl text-center shadow-md">
+                  <div className="text-[10px] font-black text-slate-400">إجمالي الدفعات المسددة</div>
+                  <div className="text-sm font-mono font-bold text-indigo-400 mt-1">
+                    {Number(dailyLedgers.globalPayments || 0).toLocaleString("ar")} ج.م
                   </div>
                 </div>
-                <div className="bg-slate-950/80 border border-white/4 p-3 rounded-xl text-center">
-                  <div className="text-[10px] font-black text-slate-400">إجمالي الكاش غير المصفى</div>
-                  <div className="text-lg font-mono font-bold text-emerald-300 mt-1">
-                    {Number(dailyLedgers.days.reduce((acc: number, cur: any) => !cur.isSettled ? acc + cur.totalActualCollected : acc, 0)).toLocaleString("ar")} ج.م
+                <div className="bg-slate-950/85 border-2 border-emerald-500/20 p-3 rounded-xl text-center shadow-md">
+                  <div className="text-[10px] font-black text-emerald-400">مستحقات معلقة تصفية نهائية</div>
+                  <div className="text-sm font-mono font-bold text-emerald-300 mt-1">
+                    {Number(dailyLedgers.outstandingBalance || 0).toLocaleString("ar")} ج.م
+                  </div>
+                </div>
+                <div className="bg-slate-950/80 border border-white/4 p-3 rounded-xl text-center col-span-2 sm:col-span-1 shadow-md">
+                  <div className="text-[10px] font-black text-slate-400">حالة الأيام</div>
+                  <div className="text-[10px] font-bold text-slate-300 mt-1 flex justify-around border-t border-white/5 pt-1">
+                    <span className="text-red-350">🔴 {dailyLedgers.days.filter((d: any) => !d.isSettled).length} معلق</span>
+                    <span className="text-emerald-400">🟢 {dailyLedgers.days.filter((d: any) => d.isSettled).length} مصفى</span>
                   </div>
                 </div>
               </div>
@@ -517,7 +524,7 @@ export default function Ledger({ token, role, user }: LedgerProps) {
             <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-slate-900 border border-white/6 p-4 rounded-2xl shadow-sm">
               <div className="flex items-center gap-2">
                 <Calendar className="text-amber-500" size={18} />
-                <h3 className="text-xs font-black text-slate-300">سجل كشوف الحساب اليومية التفصيلية للأيام</h3>
+                <h3 className="text-xs font-black text-slate-300">سجل كشوف الحساب اليومية التفصيلية للأيام والدفعات</h3>
               </div>
               <div className="relative w-full sm:w-[280px]">
                 <span className="absolute inset-y-0 right-3 flex items-center pr-1 text-slate-550">
@@ -538,20 +545,84 @@ export default function Ledger({ token, role, user }: LedgerProps) {
                 <Loader2 size={36} className="text-amber-500 animate-spin mx-auto" />
                 <div className="text-xs text-slate-400 animate-pulse font-bold">جاري حساب وتجميع كشف الأيام للمورد ديناميكياً...</div>
               </div>
-            ) : !dailyLedgers || dailyLedgers.days.length === 0 ? (
+            ) : !dailyLedgers || (dailyLedgers.days.length === 0 && (!dailyLedgers.paymentEntries || dailyLedgers.paymentEntries.length === 0)) ? (
               <div className="bg-slate-900/50 border border-white/4 rounded-2xl py-12 text-center text-xs text-slate-405 font-bold">
                 🫙 لا يوجد أوردرات أو معاملات مسجلة كحساب يومي تحت اسم هذا المورد حالياً
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {dailyLedgers.days
-                  .filter((d: any) => !daySearchQuery || d.date.includes(daySearchQuery))
-                  .map((day: any, idx: number) => {
-                    const isPending = !day.isSettled;
+                {(() => {
+                  const daysFiltered = dailyLedgers.days.map((d: any) => ({ ...d, timelineType: "day" }));
+                  const paymentsFiltered = (dailyLedgers.paymentEntries || []).map((p: any) => ({ ...p, timelineType: "payment" }));
+                  
+                  const mergedTimeline = [...daysFiltered, ...paymentsFiltered];
+                  
+                  // Sort by date (descending)
+                  mergedTimeline.sort((a, b) => {
+                    const dateA = a.date ? a.date.split("T")[0] : "";
+                    const dateB = b.date ? b.date.split("T")[0] : "";
+                    return dateB.localeCompare(dateA);
+                  });
+
+                  const finalFiltered = mergedTimeline.filter((item: any) => {
+                    if (!daySearchQuery) return true;
+                    return item.date && item.date.includes(daySearchQuery);
+                  });
+
+                  if (finalFiltered.length === 0) {
+                    return (
+                      <div className="col-span-2 bg-slate-900/50 border border-white/4 rounded-2xl py-12 text-center text-xs text-slate-405 font-bold">
+                        🔍 لا توجد أوردرات أو حركات سداد مطابقة للبحث حالياً
+                      </div>
+                    );
+                  }
+
+                  return finalFiltered.map((item: any, idx: number) => {
+                    if (item.timelineType === "payment") {
+                      return (
+                        <div
+                          key={`p-${idx}`}
+                          className="bg-gradient-to-br from-slate-900 to-indigo-950/20 border border-indigo-500/10 hover:border-indigo-500/25 rounded-2xl p-5 space-y-4 shadow-md transition-all hover:translate-y-[-2px] relative overflow-hidden text-right"
+                        >
+                          <div className="absolute top-0 right-0 w-24 h-24 bg-indigo-500/5 rounded-full blur-2xl"></div>
+                          <div className="flex items-center justify-between border-b border-white/6 pb-2.5">
+                            <span className="text-xs font-black text-indigo-300 flex items-center gap-1.5">
+                              <Wallet size={14} className="text-indigo-400" />
+                              <span>يوم: {item.date}</span>
+                            </span>
+                            <span className="px-3 py-1 text-[10px] font-black rounded-lg bg-indigo-950/50 border border-indigo-900/50 text-indigo-300 flex items-center gap-1">
+                              <span>💳 دفعة نقدية مسددة</span>
+                            </span>
+                          </div>
+
+                          <div className="space-y-2">
+                            <div className="bg-slate-950/80 border border-indigo-500/5 p-3 rounded-xl flex justify-between items-center">
+                              <span className="text-[10px] text-slate-400 font-bold block">القيمة المالية المصروفة للمورد</span>
+                              <span className="text-sm font-mono font-black text-indigo-350">
+                                -{Number(item.amount || 0).toLocaleString("ar")} ج.م
+                              </span>
+                            </div>
+                            <div className="bg-slate-950/60 border border-white/4 p-2.5 rounded-xl">
+                              <span className="text-[9.5px] text-slate-400 block font-bold">البيان / تفاصيل الدفعة</span>
+                              <span className="text-xs text-slate-300 font-medium block mt-1 leading-relaxed">
+                                {item.desc || "حركة صرف نقدية وتصفية حساب"}
+                              </span>
+                            </div>
+                            {item.tracking && (
+                              <div className="text-[10px] text-slate-500 font-mono text-left pt-1">
+                                الرقم المرجعي: {item.tracking}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    const isPending = !item.isSettled;
                     return (
                       <div
-                        key={idx}
-                        className={`bg-slate-900 border rounded-2xl p-5 space-y-4 shadow-md transition-all hover:translate-y-[-2px] ${
+                        key={`d-${idx}`}
+                        className={`bg-slate-900 border rounded-2xl p-5 space-y-4 shadow-md transition-all hover:translate-y-[-2px] text-right ${
                           isPending ? "border-amber-500/10 hover:border-amber-500/25" : "border-emerald-500/10 hover:border-emerald-500/25"
                         }`}
                       >
@@ -559,7 +630,7 @@ export default function Ledger({ token, role, user }: LedgerProps) {
                         <div className="flex items-center justify-between border-b border-white/6 pb-2.5">
                           <span className="text-xs font-black text-slate-100 flex items-center gap-1.5">
                             <Clock size={14} className="text-slate-400" />
-                            <span>يوم: {day.date}</span>
+                            <span>يوم: {item.date}</span>
                           </span>
                           <span
                             className={`px-3 py-1 text-[10px] font-black rounded-lg ${
@@ -573,22 +644,22 @@ export default function Ledger({ token, role, user }: LedgerProps) {
                         </div>
 
                         {/* Day Financial Grid Stats */}
-                        <div className="grid grid-cols-2 gap-3.5 text-right">
+                        <div className="grid grid-cols-2 gap-3.5">
                           <div className="bg-slate-950 border border-white/4 p-2.5 rounded-xl">
                             <span className="text-[9.5px] text-slate-400 block font-bold">إجمالي قيمة الشغل (COD كلي)</span>
-                            <span className="text-xs font-mono font-black text-slate-200">{Number(day.totalWorkValue || 0).toLocaleString("ar")} ج.م</span>
+                            <span className="text-xs font-mono font-black text-slate-200">{Number(item.totalWorkValue || 0).toLocaleString("ar")} ج.م</span>
                           </div>
                           <div className="bg-slate-950 border border-white/4 p-2.5 rounded-xl">
                             <span className="text-[9.5px] text-slate-400 block font-bold">إجمالي التحصيل الفعلي الميداني</span>
-                            <span className="text-xs font-mono font-black text-emerald-400">{Number(day.totalActualCollected || 0).toLocaleString("ar")} ج.م</span>
+                            <span className="text-xs font-mono font-black text-emerald-400">{Number(item.totalActualCollected || 0).toLocaleString("ar")} ج.م</span>
                           </div>
                           <div className="bg-slate-950 border border-white/4 p-2.5 rounded-xl">
                             <span className="text-[9.5px] text-slate-400 block font-bold">المرتجع المسترد اليوم</span>
-                            <span className="text-xs font-mono font-black text-red-400">{Number(day.returnedValueRefunded || 0).toLocaleString("ar")} ج.م</span>
+                            <span className="text-xs font-mono font-black text-red-400">{Number(item.returnedValueRefunded || 0).toLocaleString("ar")} ج.م</span>
                           </div>
                           <div className="bg-slate-950 border border-white/4 p-2.5 rounded-xl">
                             <span className="text-[9.5px] text-slate-400 block font-bold">خصم شحن المرتجعات</span>
-                            <span className="text-xs font-mono font-black text-slate-350">{Number(day.returnShippingFees || 0).toLocaleString("ar")} ج.م</span>
+                            <span className="text-xs font-mono font-black text-slate-350">{Number(item.returnShippingFees || 0).toLocaleString("ar")} ج.م</span>
                           </div>
                         </div>
 
@@ -599,7 +670,7 @@ export default function Ledger({ token, role, user }: LedgerProps) {
                             <span className="text-2xs text-slate-500 font-semibold">(صافي التحصيل الفعلي - خصومات الشحن للمرتجعات)</span>
                           </div>
                           <div className="text-base font-mono font-black text-emerald-400 text-left">
-                            {Number(day.netDues || 0).toLocaleString("ar")} ج.م
+                            {Number(item.netDues || 0).toLocaleString("ar")} ج.م
                           </div>
                         </div>
 
@@ -608,9 +679,9 @@ export default function Ledger({ token, role, user }: LedgerProps) {
                           <button
                             type="button"
                             onClick={() => {
-                              setSelectedDayDate(day.date);
-                              setSelectedDayStatus(day.status);
-                              setSelectedDayOrdersDetail(day.orders);
+                              setSelectedDayDate(item.date);
+                              setSelectedDayStatus(item.status);
+                              setSelectedDayOrdersDetail(item.orders);
                             }}
                             className="bg-slate-950 hover:bg-slate-950/80 border border-white/8 text-slate-200 py-2.5 px-3 rounded-lg text-2xs font-extrabold flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
                           >
@@ -621,11 +692,11 @@ export default function Ledger({ token, role, user }: LedgerProps) {
                           {isFinancial && isPending ? (
                             <button
                               type="button"
-                              disabled={settleDayProgress === day.date}
-                              onClick={() => handleSettleDay(day.date)}
+                              disabled={settleDayProgress === item.date}
+                              onClick={() => handleSettleDay(item.date)}
                               className="bg-emerald-600 hover:bg-emerald-700 text-slate-950 py-2.5 px-3 rounded-lg text-2xs font-black flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors"
                             >
-                              {settleDayProgress === day.date ? (
+                              {settleDayProgress === item.date ? (
                                 <Loader2 size={13} className="animate-spin text-slate-950" />
                               ) : (
                                 <CheckCircle2 size={13} className="text-slate-950" />
@@ -641,7 +712,8 @@ export default function Ledger({ token, role, user }: LedgerProps) {
                         </div>
                       </div>
                     );
-                  })}
+                  });
+                })()}
               </div>
             )}
           </div>

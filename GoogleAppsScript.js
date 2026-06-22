@@ -1635,7 +1635,6 @@ function getSupplierLedgerData(sheets, d) {
 
   // 5. Compute metrics per day
   var daysList = [];
-  var outstandingBalance = 0;
 
   var dayDates = Object.keys(ordersByDay);
   for (var i = 0; i < dayDates.length; i++) {
@@ -1690,10 +1689,6 @@ function getSupplierLedgerData(sheets, d) {
     var isSettled = !!settledDaysSet[dayDate];
     var statusLabel = isSettled ? "🟢 تم تصفية الكاش والمرتجع" : "🔴 معلق لم يصفى";
 
-    if (!isSettled) {
-      outstandingBalance += netDues;
-    }
-
     daysList.push({
       date: dayDate,
       orderCount: dayOrders.length,
@@ -1724,10 +1719,48 @@ function getSupplierLedgerData(sheets, d) {
     return b.date.localeCompare(a.date);
   });
 
+  // Calculate outstanding balance via the Unified Ledger Equation
+  var totalGoodsUploadedVal = supplierOrders.reduce(function(sum, o) {
+    return sum + getOrderFinancials(o).prodPrice;
+  }, 0);
+
+  var returnsDeliveredVal = supplierOrders.filter(function(o) {
+    return isReturnedDeliveredToSupplier(o.status || o["الحالة"] || "");
+  }).reduce(function(sum, o) {
+    return sum + getOrderFinancials(o).prodPrice;
+  }, 0);
+
+  // Filter direct payments from supplierLedger
+  var directPaymentsVal = ledgerEntries.filter(function(l) {
+    var lSup = l.supplier || l["المورد"] || "";
+    if (!isSameSupplier(lSup, supplier)) return false;
+    return isHumanPayout(l);
+  }).reduce(function(sum, l) {
+    return sum + Math.abs(Number(l.amount || 0));
+  }, 0);
+
+  var finalUnifiedOutstanding = totalGoodsUploadedVal - returnsDeliveredVal - directPaymentsVal;
+
   return {
     ok: true,
     days: daysList,
-    outstandingBalance: Math.max(0, outstandingBalance)
+    outstandingBalance: Math.max(0, finalUnifiedOutstanding),
+    totalGoodsUploaded: totalGoodsUploadedVal,
+    returnsDeliveredValue: returnsDeliveredVal,
+    globalPayments: directPaymentsVal,
+    paymentEntries: ledgerEntries.filter(function(l) {
+      var lSup = l.supplier || l["المورد"] || "";
+      if (!isSameSupplier(lSup, supplier)) return false;
+      return isHumanPayout(l);
+    }).map(function(l) {
+      return {
+        date: normalizeDateStrAr(l.date || ""),
+        type: l.type || l["النوع"] || "",
+        tracking: l.tracking || l["رقم التتبع"] || "",
+        amount: Math.abs(Number(l.amount || 0)),
+        desc: l.desc || l["البيان"] || ""
+      };
+    })
   };
 }
 
