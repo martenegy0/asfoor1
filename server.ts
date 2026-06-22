@@ -626,6 +626,12 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
     return isPayOrAdj && !isAutoOrReturn;
   };
 
+  const sLedgerLoc = (db.supplierLedger || []).filter((l: any) => {
+    const s = l.supplier || l["المورد"];
+    return s && sameSup(s, supplierName);
+  });
+  const adjustmentsAndPayments = sLedgerLoc.filter(isHumanLedgedPayout);
+
   // 4. Compute accounts for each day
   const daysList: any[] = [];
 
@@ -680,8 +686,19 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
       return sum + financials.shipPrice;
     }, 0);
 
-    // E. صافي مستحقات اليوم = التحصيل الفعلي - مصاريف شحن المرتجع
-    const netDues = totalActualCollected - returnShippingFees;
+    // D. Payouts/Cash Paid on this exact day
+    const dayPayments = adjustmentsAndPayments.filter((l: any) => {
+      const lSup = l.supplier || l["المورد"] || "";
+      if (!sameSup(lSup, supplierName)) return false;
+      const lDate = normalizeDateStr(l.date || "");
+      return lDate === dayDate && isHumanLedgedPayout(l);
+    });
+    const totalPayoutsOnDay = dayPayments.reduce((sum: number, l: any) => {
+      return sum + Math.abs(Number(l.amount || 0));
+    }, 0);
+
+    // E. صافي حساب اليوم: (إجمالي التحصيل الفعلي لطلبات اليوم - المرتجعات المستلمة اليوم - النقدية المصروفة اليوم)
+    const netDues = totalActualCollected - returnedValueRefunded - totalPayoutsOnDay;
 
     // F. حالة التصفية
     const isSettled = settledDaysSet.has(dayDate);
@@ -726,11 +743,6 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
     return sum + financials.prodPrice;
   }, 0);
 
-  const sLedger = rawLedger.filter((l: any) => {
-    const s = l.supplier || l["المورد"];
-    return s && sameSup(s, supplierName);
-  });
-  const adjustmentsAndPayments = sLedger.filter(isHumanLedgedPayout);
   const totalPaid = adjustmentsAndPayments.reduce((sum: number, l: any) => {
     return sum + Math.abs(Number(l.amount || 0));
   }, 0);
@@ -1189,7 +1201,7 @@ function getCacheKey(payload: any): string {
   return JSON.stringify(keyObj);
 }
 
-async function fetchWithTimeout(url: string, options: any = {}, timeoutMs = 2500, retries = 0): Promise<any> {
+async function fetchWithTimeout(url: string, options: any = {}, timeoutMs = 20000, retries = 1): Promise<any> {
   const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
   for (let attempt = 1; attempt <= (retries + 1); attempt++) {
     const controller = new AbortController();
@@ -1209,7 +1221,7 @@ async function fetchWithTimeout(url: string, options: any = {}, timeoutMs = 2500
       if (isLastAttempt) {
         throw err;
       }
-      const waitTime = isAbort ? 1000 : 300 * attempt;
+      const waitTime = isAbort ? 1500 : 500 * attempt;
       await delay(waitTime);
     }
   }
@@ -1253,7 +1265,7 @@ async function executeProxyRequest(gscriptUrl: string, payload: any): Promise<an
       console.warn(`[Proxy Write Error] Mark Google Script unhealthy:`, err);
       if (isGoogleScriptHealthy) {
         isGoogleScriptHealthy = false;
-        setTimeout(() => { isGoogleScriptHealthy = true; }, 120000);
+        setTimeout(() => { isGoogleScriptHealthy = true; }, 10000);
       }
       throw err;
     }
@@ -1310,7 +1322,7 @@ async function executeProxyRequest(gscriptUrl: string, payload: any): Promise<an
       console.warn(`[Proxy Read Error] Mark Google Script unhealthy:`, err);
       if (isGoogleScriptHealthy) {
         isGoogleScriptHealthy = false;
-        setTimeout(() => { isGoogleScriptHealthy = true; }, 120000);
+        setTimeout(() => { isGoogleScriptHealthy = true; }, 10000);
       }
       ACTIVE_FETCHES.delete(cacheKey);
       throw err;

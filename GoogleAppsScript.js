@@ -1682,8 +1682,19 @@ function getSupplierLedgerData(sheets, d) {
       return sum;
     }, 0);
 
-    // E. Net dues = cash collected - return shipping fees
-    var netDues = totalActualCollected - returnShippingFees;
+    // D. Payouts/Cash Paid on this exact day
+    var dayPayments = ledgerEntries.filter(function(l) {
+      var lSup = l.supplier || l["المورد"] || "";
+      if (!isSameSupplier(lSup, supplier)) return false;
+      var lDate = normalizeDateStrAr(l.date || "");
+      return lDate === dayDate && isHumanPayout(l);
+    });
+    var totalPayoutsOnDay = dayPayments.reduce(function(sum, l) {
+      return sum + Math.abs(Number(l.amount || 0));
+    }, 0);
+
+    // E. Net dues = cash collected - returned value refunded - total payouts on day
+    var netDues = totalActualCollected - returnedValueRefunded - totalPayoutsOnDay;
 
     // F. Settle status
     var isSettled = !!settledDaysSet[dayDate];
@@ -1927,7 +1938,7 @@ function getSupplierDashboard(sheets, d) {
 
   // 3. Cash payments paid to supplier (Strict signed human payout classification)
   const sLedger = ledger.filter(l => isSameSupplier(l.supplier, supplier));
-  const totalPaid = sLedger.filter(isHumanPayout).reduce((sum, l) => sum - Number(l.amount || 0), 0);
+  const totalPaid = sLedger.filter(isHumanPayout).reduce((sum, l) => sum + Math.abs(Number(l.amount || 0)), 0);
 
   // 4. Current outstanding balance based on formula: Outstanding = TotalGoodsUploaded - Returned - Paid
   const remaining = totalGoodsUploaded - returnsDeliveredValue - totalPaid;
@@ -2004,7 +2015,7 @@ function getSupplierAccounts(sheets) {
     }, 0);
 
     // 3. Cash payments paid to supplier
-    const paid = sLedger.filter(isHumanPayout).reduce(function(sum, l) { return sum - Number(l.amount || 0); }, 0);
+    const paid = sLedger.filter(isHumanPayout).reduce(function(sum, l) { return sum + Math.abs(Number(l.amount || 0)); }, 0);
 
     // 4. Current outstanding balance based on final formula: Outstanding = TotalGoodsUploaded - Returned - Paid
     const balance = totalGoodsUploaded - returnsDeliveredValue - paid;

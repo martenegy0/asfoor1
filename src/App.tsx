@@ -590,7 +590,8 @@ export default function App() {
   const showFinanceTabs = role === "مدير" || role === "محاسب";
   const showUsersTab = role === "مدير";
   const showAddInputTab = role === "مدير" || role === "مشرف" || role === "موظف عمليات" || isSupplierState;
-  const showLedgerAccountingTab = isSupplierState || isAgentState || role === "مدير" || role === "محاسب";
+  const showSupplierLedgerTab = isSupplierState || role === "مدير" || role === "محاسب";
+  const showCourierLedgerTab = isAgentState || role === "مدير" || role === "محاسب";
   const showCouriersProfileTab = role === "مدير" || role === "محاسب" || role === "مشرف";
   const showSuppliersPageTab = role === "مدير" || role === "محاسب" || role === "مشرف";
 
@@ -728,15 +729,27 @@ export default function App() {
           </button>
         )}
 
-        {showLedgerAccountingTab && (
+        {showSupplierLedgerTab && (
           <button
-            onClick={() => setActiveTab("ledger")}
+            onClick={() => setActiveTab("supplier_ledger")}
             className={`px-5 py-4 text-xs font-black cursor-pointer transition-all border-b-2 flex items-center gap-1.5 whitespace-nowrap ${
-              activeTab === "ledger" ? "text-amber-500 border-amber-500" : "text-slate-400 border-transparent hover:text-slate-200"
+              activeTab === "supplier_ledger" ? "text-amber-500 border-amber-500" : "text-slate-400 border-transparent hover:text-slate-200"
             }`}
           >
             <BookOpen size={14} />
-            <span>دفتر الحسابات</span>
+            <span>كشف حساب الموردين</span>
+          </button>
+        )}
+
+        {showCourierLedgerTab && (
+          <button
+            onClick={() => setActiveTab("courier_ledger")}
+            className={`px-5 py-4 text-xs font-black cursor-pointer transition-all border-b-2 flex items-center gap-1.5 whitespace-nowrap ${
+              activeTab === "courier_ledger" ? "text-amber-500 border-amber-500" : "text-slate-400 border-transparent hover:text-slate-200"
+            }`}
+          >
+            <BookOpen size={14} />
+            <span>كشف حساب المناديب</span>
           </button>
         )}
 
@@ -880,7 +893,13 @@ export default function App() {
           />
         )}
 
-        {activeTab === "ledger" && <Ledger token={token} role={role} user={username} />}
+        {activeTab === "supplier_ledger" && showSupplierLedgerTab && (
+          <Ledger token={token} role={role} user={username} activeLedgerMode="supplier" />
+        )}
+
+        {activeTab === "courier_ledger" && showCourierLedgerTab && (
+          <Ledger token={token} role={role} user={username} activeLedgerMode="courier" />
+        )}
 
         {/* --- CASHBOX INTEGRATION (Only visible to accountant & admin per rules) --- */}
         {activeTab === "cash" && showFinanceTabs && (

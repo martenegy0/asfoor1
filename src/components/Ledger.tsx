@@ -6,16 +6,23 @@ interface LedgerProps {
   token: string;
   role: string;
   user: string;
+  activeLedgerMode?: "supplier" | "courier";
 }
 
-export default function Ledger({ token, role, user }: LedgerProps) {
+export default function Ledger({ token, role, user, activeLedgerMode }: LedgerProps) {
   const isSupplier = (role || "").toString().trim() === "مورد" || (role || "").toString().trim().includes("مورد");
   const isCourier = (role || "").toString().trim() === "مندوب" || (role || "").toString().trim().includes("مندوب");
   const isFinancial = (role || "").toString().trim() === "مدير" || (role || "").toString().trim() === "محاسب" || (role || "").toString().trim().includes("مدير") || (role || "").toString().trim().includes("محاسب");
 
   const [activeLedger, setActiveLedger] = useState<"supplier" | "courier">(
-    isSupplier ? "supplier" : "courier"
+    activeLedgerMode || (isSupplier ? "supplier" : "courier")
   );
+
+  useEffect(() => {
+    if (activeLedgerMode) {
+      setActiveLedger(activeLedgerMode);
+    }
+  }, [activeLedgerMode]);
 
   // --- Supplier Ledger States ---
   const [subscribes, setSubscribes] = useState<any[]>([]);
@@ -666,8 +673,8 @@ export default function Ledger({ token, role, user }: LedgerProps) {
                         {/* Net Dues Container */}
                         <div className="bg-slate-950 border border-white/6 p-3.5 rounded-xl flex items-center justify-between">
                           <div>
-                            <span className="text-[10px] text-slate-400 block font-black">صافي مستحقات اليوم النهائية:</span>
-                            <span className="text-2xs text-slate-500 font-semibold">(صافي التحصيل الفعلي - خصومات الشحن للمرتجعات)</span>
+                            <span className="text-[10px] text-slate-400 block font-black">صافي حساب اليوم:</span>
+                            <span className="text-2xs text-slate-500 font-semibold">(إجمالي التحصيل الفعلي - مرتجعات مستلمة - نقدية مصروفة باليوم)</span>
                           </div>
                           <div className="text-base font-mono font-black text-emerald-400 text-left">
                             {Number(item.netDues || 0).toLocaleString("ar")} ج.م
