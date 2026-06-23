@@ -3426,7 +3426,8 @@ app.post("/api", async (req: Request, res: Response) => {
         let status = rawStatus;
 
         const sc = tracking.toString().trim().toUpperCase();
-        const order = db.orders.find((o: any) => {
+        let fromArchive = false;
+        let order = db.orders.find((o: any) => {
           const ot = o.tracking.toString().trim().toUpperCase();
           const phoneClean = (o.phone || "").toString().trim();
           const phone2Clean = (o.phone2 || "").toString().trim();
@@ -3438,6 +3439,25 @@ app.post("/api", async (req: Request, res: Response) => {
             phone2Clean === sc
           );
         });
+
+        if (!order) {
+          order = (db.archivedOrders || []).find((o: any) => {
+            const ot = o.tracking.toString().trim().toUpperCase();
+            const phoneClean = (o.phone || "").toString().trim();
+            const phone2Clean = (o.phone2 || "").toString().trim();
+            return (
+              ot === sc ||
+              sc.includes(ot) ||
+              ot.includes(sc) ||
+              phoneClean === sc ||
+              phone2Clean === sc
+            );
+          });
+          if (order) {
+            fromArchive = true;
+          }
+        }
+
         if (!order)
           return err(res, "لم يتم العثور على الأوردر بأي باركود مُدخل");
 
@@ -3762,6 +3782,18 @@ app.post("/api", async (req: Request, res: Response) => {
 
         order.updatedAt = now();
 
+        // منطق ترحيل البضائع الصارم والاسترجاع:
+        // إذا كان الأوردر في الأرشيف وتغيرت حالته إلى حالة نشطة غير صالحة للأرشفة،
+        // فيتم إرجاعه للشحنات النشطة فوراً لضمان عدم ضياع عهدة البضائع ومنع ارتداد الحالة، ثم حذفه نهائياً من شيت الأرشيف.
+        const isEventualArchivable = ["تم التسليم", "التسليم للمورد", "تم تسليم المرتجع للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(status);
+        if (fromArchive && !isEventualArchivable) {
+          const alreadyInActive = db.orders.some((o: any) => o.tracking === matchedTracking);
+          if (!alreadyInActive) {
+            db.orders.push(order);
+          }
+          db.archivedOrders = (db.archivedOrders || []).filter((o: any) => o.tracking !== matchedTracking);
+        }
+
         // Save Status History log (which act as audit trail)
         if (!db.statusHistory) db.statusHistory = [];
         db.statusHistory.push({
@@ -3829,7 +3861,14 @@ app.post("/api", async (req: Request, res: Response) => {
         const { tracking, order: o } = d;
         if (!tracking) return err(res, "معامل رقم التتبع مفقود");
 
-        const order = db.orders.find((x: any) => x.tracking === tracking);
+        let fromArchive = false;
+        let order = db.orders.find((x: any) => x.tracking === tracking);
+        if (!order) {
+          order = (db.archivedOrders || []).find((x: any) => x.tracking === tracking);
+          if (order) {
+            fromArchive = true;
+          }
+        }
         if (!order) return err(res, "الأوردر غير موجود");
 
         order.customer = o.customer !== undefined ? o.customer : order.customer;
@@ -3948,6 +3987,19 @@ app.post("/api", async (req: Request, res: Response) => {
         }
 
         order.updatedAt = now();
+
+        // منطق ترحيل البضائع الصارم والاسترجاع:
+        // إذا تغيرت حالة الأوردر نتيجة التحديث إلى حالة نشطة غير صالحة للأرشفة وكان في الأرشيف،
+        // فيتم إرجاعه للشحنات النشطة فوراً لضمان عدم ضياع عهدة البضائع ومنع ارتداد الحالة، ثم حذفه نهائياً من شيت الأرشيف.
+        const eventualStatus = order.status;
+        const isEventualArchivable = ["تم التسليم", "التسليم للمورد", "تم تسليم المرتجع للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(eventualStatus);
+        if (fromArchive && !isEventualArchivable) {
+          const alreadyInActive = db.orders.some((o: any) => o.tracking === tracking);
+          if (!alreadyInActive) {
+            db.orders.push(order);
+          }
+          db.archivedOrders = (db.archivedOrders || []).filter((o: any) => o.tracking !== tracking);
+        }
 
         writeDB(db);
         return ok(res, { tracking, msg: "تم تحديث بيانات الأوردر بنجاح" });

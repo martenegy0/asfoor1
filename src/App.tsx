@@ -289,7 +289,7 @@ export default function App() {
       try {
         const resOrd = await apiCall("getOrders", tk, { 
           todayOnly: isAgent,
-          includeArchived: activeTab === "archive"
+          includeArchived: !isAgent // Load archived orders for admin/ops/returns to allow unified search over both tables
         });
         if (resOrd && resOrd.ok) {
           rawOrders = resOrd.orders || [];

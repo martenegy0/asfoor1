@@ -771,14 +771,11 @@ function updateStatus(sheets, d) {
     }
   }
 
-  let orderIndex = findRowIndex(sheets.orders, "tracking", tracking);
-  let targetSheet = sheets.orders;
-  if (orderIndex === -1) {
-    orderIndex = findRowIndex(sheets.archivedOrders, "tracking", tracking);
-    if (orderIndex !== -1) {
-      targetSheet = sheets.archivedOrders;
-    }
-  }
+  let activeRowIndex = findRowIndex(sheets.orders, "tracking", tracking);
+  let archivedRowIndex = findRowIndex(sheets.archivedOrders, "tracking", tracking);
+  let orderIndex = activeRowIndex !== -1 ? activeRowIndex : archivedRowIndex;
+  let targetSheet = activeRowIndex !== -1 ? sheets.orders : sheets.archivedOrders;
+  
   if (orderIndex === -1) return { ok: false, error: "الأوردر المطلوب غير موجود" };
 
   const orders = getTableData(targetSheet);
@@ -975,8 +972,40 @@ function updateStatus(sheets, d) {
     }
   }
 
-  // إتمام الحفظ والتعديل
-  updateRowByObject(targetSheet, orderIndex, updateObj);
+  // إتمام الحفظ والتعديل (التحديث الثنائي المتزامن للـ Active والأرشيف)
+  let activeIndexForSave = findRowIndex(sheets.orders, "tracking", tracking);
+  let archivedIndexForSave = findRowIndex(sheets.archivedOrders, "tracking", tracking);
+  
+  if (activeIndexForSave !== -1) {
+    updateRowByObject(sheets.orders, activeIndexForSave, updateObj);
+  }
+  if (archivedIndexForSave !== -1) {
+    updateRowByObject(sheets.archivedOrders, archivedIndexForSave, updateObj);
+  }
+
+  // منطق ترحيل البضائع الصارم والاسترجاع من الأرشيف:
+  // إذا كان الأوردر في الأرشيف وتغيرت حالته إلى حالة نشطة غير صالحة للأرشفة (خارج مع المندوب، مؤجل، مرتجع في المستودع إلخ)،
+  // فيتم إرجاعه للشيت النشط فوراً لضمان عدم ضياع عهدة البضائع ومنع ارتداد الحالة، ثم حذفه نهائياً من شيت الأرشيف.
+  const eventualStatus = updateObj.status || oldStatus;
+  const isEventualArchivable = ["تم التسليم", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(eventualStatus);
+  
+  if (archivedIndexForSave !== -1 && !isEventualArchivable) {
+    const updatedArchivedData = getTableData(sheets.archivedOrders);
+    const updatedOrderObj = updatedArchivedData.find(x => x.tracking === tracking);
+    
+    if (updatedOrderObj) {
+      if (activeIndexForSave === -1) {
+        const activeHeaders = ["tracking", "invoiceDate", "supplier", "gov", "region", "customer", "phone", "phone2", "address", "prodPrice", "shipPrice", "totalCOD", "prodType", "notes", "courier", "commission", "status", "delivDate", "retDate", "returnQueueStatus", "returnQueueAgent", "firstPostponedDate", "isPartial", "partialAmount", "actualReceivedCash", "returnShippingType", "updatedAt", "isSettled", "is_settled"];
+        appendToSheet(sheets.orders, activeHeaders, updatedOrderObj);
+      }
+      
+      // حذفه نهائياً من الأرشيف لسلامة مخزون عهد المندوبين
+      let freshArchivedIndex = findRowIndex(sheets.archivedOrders, "tracking", tracking);
+      if (freshArchivedIndex !== -1) {
+        sheets.archivedOrders.deleteRow(freshArchivedIndex);
+      }
+    }
+  }
 
   // إثبات التغيير في سجل الحركات والأمان
   appendToSheet(sheets.statusHistory, ["tracking", "oldStatus", "newStatus", "updatedBy", "dateTime"], {
@@ -994,14 +1023,11 @@ function updateOrder(sheets, d) {
   const o = d.order;
   if (!o || !o.tracking) return { ok: false, error: "بيانات الأوردر المطلوب تعديله غير صحيحة" };
 
-  let orderIndex = findRowIndex(sheets.orders, "tracking", o.tracking);
-  let targetSheet = sheets.orders;
-  if (orderIndex === -1) {
-    orderIndex = findRowIndex(sheets.archivedOrders, "tracking", o.tracking);
-    if (orderIndex !== -1) {
-      targetSheet = sheets.archivedOrders;
-    }
-  }
+  let activeIndex = findRowIndex(sheets.orders, "tracking", o.tracking);
+  let archivedIndex = findRowIndex(sheets.archivedOrders, "tracking", o.tracking);
+  let orderIndex = activeIndex !== -1 ? activeIndex : archivedIndex;
+  let targetSheet = activeIndex !== -1 ? sheets.orders : sheets.archivedOrders;
+  
   if (orderIndex === -1) return { ok: false, error: "الأوردر غير موجود" };
 
   const orders = getTableData(targetSheet);
@@ -1092,7 +1118,42 @@ function updateOrder(sheets, d) {
   }
 
   o.updatedAt = now();
-  updateRowByObject(targetSheet, orderIndex, o);
+
+  // إتمام الحفظ والتعديل (التحديث الثنائي المتزامن للـ Active والأرشيف)
+  let activeIndexForSave = findRowIndex(sheets.orders, "tracking", o.tracking);
+  let archivedIndexForSave = findRowIndex(sheets.archivedOrders, "tracking", o.tracking);
+  
+  if (activeIndexForSave !== -1) {
+    updateRowByObject(sheets.orders, activeIndexForSave, o);
+  }
+  if (archivedIndexForSave !== -1) {
+    updateRowByObject(sheets.archivedOrders, archivedIndexForSave, o);
+  }
+
+  // منطق ترحيل البضائع الصارم والاسترجاع من الأرشيف:
+  // إذا تغيرت حالة الأوردر إلى حالة نشطة غير صالحة للأرشفة جراء التعديل،
+  // فيتم إرجاعه للشيت النشط فوراً لضمان عدم ضياع عهدة البضائع ومنع ارتداد الحالة، ثم حذفه نهائياً من شيت الأرشيف.
+  const eventualStatus = o.status || order.status;
+  const isEventualArchivable = ["تم التسليم", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(eventualStatus);
+  
+  if (archivedIndexForSave !== -1 && !isEventualArchivable) {
+    const updatedArchivedData = getTableData(sheets.archivedOrders);
+    const updatedOrderObj = updatedArchivedData.find(x => x.tracking === o.tracking);
+    
+    if (updatedOrderObj) {
+      if (activeIndexForSave === -1) {
+        const activeHeaders = ["tracking", "invoiceDate", "supplier", "gov", "region", "customer", "phone", "phone2", "address", "prodPrice", "shipPrice", "totalCOD", "prodType", "notes", "courier", "commission", "status", "delivDate", "retDate", "returnQueueStatus", "returnQueueAgent", "firstPostponedDate", "isPartial", "partialAmount", "actualReceivedCash", "returnShippingType", "updatedAt", "isSettled", "is_settled"];
+        appendToSheet(sheets.orders, activeHeaders, updatedOrderObj);
+      }
+      
+      // حذفه نهائياً من الأرشيف لسلامة مخزون عهد المندوبين
+      let freshArchivedIndex = findRowIndex(sheets.archivedOrders, "tracking", o.tracking);
+      if (freshArchivedIndex !== -1) {
+        sheets.archivedOrders.deleteRow(freshArchivedIndex);
+      }
+    }
+  }
+
   return { ok: true, msg: "تم حفظ وتحديث الأوردر بالكامل بنجاح" };
 }
 

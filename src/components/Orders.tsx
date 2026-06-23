@@ -160,6 +160,16 @@ function SearchableCourierSelect({ value, onChange, couriers, placeholder = "ا�
 
 export default function Orders({ token, role, username, orders, setOrders, couriers, onRefresh }: OrdersProps) {
   const [pendingTrackings, setPendingTrackings] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState("");
+  const [mobileDrawerOrder, setMobileDrawerOrder] = useState<any | null>(null);
+  const [barcodeScannerOpen, setBarcodeScannerOpen] = useState<boolean>(false);
+  const [activeFilter, setActiveFilter] = useState("all");
+  
+  // Status History states for order level audit logs
+  const [histories, setHistories] = useState<Record<string, any[]>>({});
+  const [loadingHistories, setLoadingHistories] = useState<Record<string, boolean>>({});
+  const [expandedHistories, setExpandedHistories] = useState<Record<string, boolean>>({});
+
   const isAdmin = (role || "").toString().trim() === "مدير" || (role || "").toString().trim().includes("مدير");
   const isSuper = (role || "").toString().trim() === "مشرف" || (role || "").toString().trim().includes("مشرف");
   const isOps = (role || "").toString().trim() === "موظف عمليات" || (role || "").toString().trim().includes("عمليات");
@@ -212,13 +222,17 @@ export default function Orders({ token, role, username, orders, setOrders, couri
   };
 
   const roleFilteredOrders = React.useMemo(() => {
-    // Strip settled orders out of active daily operations completely
+    const isSearching = search.trim().length > 0;
+
+    // Strip settled orders out of active daily operations completely, EXCEPT when searching
     const activeUnsettledOrders = orders.filter((o: any) => {
+      if (isSearching) return true; // Include archived/settled orders during active search queries
       const isS = o.isSettled === true || o.isSettled === "true" || o.is_settled === "true" || o.is_settled === true;
       return !isS;
     });
 
     if (isReturnsOfficer) {
+      if (isSearching) return orders; // Allow returns officer to search all matching orders
       return orders.filter((o: any) => {
         const isHandedOver = ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status);
         if (isHandedOver) {
@@ -232,6 +246,15 @@ export default function Orders({ token, role, username, orders, setOrders, couri
 
     if (isAgent || isOps) {
       return activeUnsettledOrders.filter((o: any) => {
+        if (isSearching) {
+          if (isAgent) {
+            // Courier can search all their assigned orders
+            const oCou = (o.courier || o.lastCourier || "").toString().trim().toLowerCase();
+            return oCou === username.trim().toLowerCase();
+          }
+          return true; // Ops can search everything including settled
+        }
+
         const orderDateYMD = normalizeDateToYMD(o.orderDate || o.createdAt);
         const updateDateYMD = o.updatedAt ? normalizeDateToYMD(o.updatedAt) : "";
         const delivDateYMD = o.delivDate ? normalizeDateToYMD(o.delivDate) : "";
@@ -248,7 +271,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       });
     }
     return activeUnsettledOrders;
-  }, [orders, isAgent, isReturnsOfficer, isOps, todayDateStr]);
+  }, [orders, isAgent, isReturnsOfficer, isOps, todayDateStr, search, username]);
 
   const todayDeliveredOrders = roleFilteredOrders.filter((o: any) => {
     const isMyDeliv = o.courier === username && o.status === "تم التسليم";
@@ -260,15 +283,6 @@ export default function Orders({ token, role, username, orders, setOrders, couri
   const todayDeliveredCount = todayDeliveredOrders.length;
   const todayCommissions = todayDeliveredCount * rawCommission;
 
-  const [search, setSearch] = useState("");
-  const [mobileDrawerOrder, setMobileDrawerOrder] = useState<any | null>(null);
-  const [barcodeScannerOpen, setBarcodeScannerOpen] = useState<boolean>(false);
-  const [activeFilter, setActiveFilter] = useState("all");
-  
-  // Status History states for order level audit logs
-  const [histories, setHistories] = useState<Record<string, any[]>>({});
-  const [loadingHistories, setLoadingHistories] = useState<Record<string, boolean>>({});
-  const [expandedHistories, setExpandedHistories] = useState<Record<string, boolean>>({});
 
   const toggleHistory = async (tracking: string) => {
     const isExpanded = !expandedHistories[tracking];
