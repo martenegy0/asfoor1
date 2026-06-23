@@ -25,6 +25,10 @@ interface SupplierAccount {
   returnsCount: number;
   balance: number;
   rate: number;
+  phone?: string;
+  price?: number;
+  notes?: string;
+  openingBalance?: number;
 }
 
 interface LedgerEntry {
@@ -73,6 +77,15 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
   const [isSettling, setIsSettling] = useState(false);
   const [isSettleModalOpen, setIsSettleModalOpen] = useState(false);
   const [settleTransType, setSettleTransType] = useState<"payout" | "withdrawal">("payout");
+
+  // Edit Supplier Profile States
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editSupplierName, setEditSupplierName] = useState("");
+  const [editSupplierPhone, setEditSupplierPhone] = useState("");
+  const [editSupplierPrice, setEditSupplierPrice] = useState("");
+  const [editSupplierNotes, setEditSupplierNotes] = useState("");
+  const [editSupplierOpeningBalance, setEditSupplierOpeningBalance] = useState("");
+  const [isSavingSupplier, setIsSavingSupplier] = useState(false);
 
   // --- Supplier Fast Query States ---
   const [querySupplier, setQuerySupplier] = useState("");
@@ -373,6 +386,46 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
 
   const isAdminOrAccountant = role === "مدير" || role === "محاسب";
 
+  function handleEditSupplierClick(supplierName: string) {
+    const sup = allRegisteredSuppliers.find(s => s.name === supplierName) || 
+                accounts.find(a => a.name === supplierName);
+    
+    setEditSupplierName(supplierName);
+    setEditSupplierPhone(sup?.phone || "");
+    setEditSupplierPrice(sup?.price !== undefined ? sup.price.toString() : "0");
+    setEditSupplierNotes(sup?.notes || "");
+    setEditSupplierOpeningBalance(sup?.openingBalance !== undefined ? sup.openingBalance.toString() : "0");
+    setIsEditModalOpen(true);
+  }
+
+  async function handleSaveSupplierSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editSupplierName) return;
+    setIsSavingSupplier(true);
+    setSuccessMsg("");
+    setErrorMsg("");
+    try {
+      const res = await apiCall("saveSupplier", token, {
+        name: editSupplierName,
+        phone: editSupplierPhone,
+        price: Number(editSupplierPrice || 0),
+        notes: editSupplierNotes,
+        openingBalance: Number(editSupplierOpeningBalance || 0)
+      });
+      if (res && res.ok) {
+        setSuccessMsg("تم حفظ وتعديل بيانات المورد بنجاح ✓");
+        setIsEditModalOpen(false);
+        initializeData();
+      } else {
+        setErrorMsg(res?.error || "خطأ أثناء حفظ البيانات.");
+      }
+    } catch (err: any) {
+      setErrorMsg("حدث خطأ غير متوقع: " + err.message);
+    } finally {
+      setIsSavingSupplier(false);
+    }
+  }
+
   // Statement print view trigger
   function handlePrintStatement() {
     window.print();
@@ -542,9 +595,20 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
                     <div className="space-y-4">
                       {/* Name Header and rate bar */}
                       <div className="flex justify-between items-start border-b border-white/6 pb-3">
-                        <span className="text-[10px] font-black text-emerald-400 bg-emerald-950/30 border border-emerald-900/30 px-2.5 py-1 rounded-lg">
-                          🟢 تسليم {acc.rate || 0}%
-                        </span>
+                        <div className="flex items-center gap-2">
+                          {isAdminOrAccountant && (
+                            <button
+                              onClick={() => handleEditSupplierClick(acc.name)}
+                              className="p-1 text-slate-400 hover:text-amber-500 rounded transition-colors bg-slate-950 border border-white/10"
+                              title="تعديل بيانات المورد"
+                            >
+                              <Edit3 className="w-3 h-3" />
+                            </button>
+                          )}
+                          <span className="text-[10px] font-black text-emerald-400 bg-emerald-950/30 border border-emerald-900/30 px-2.5 py-1 rounded-lg">
+                            🟢 تسليم {acc.rate || 0}%
+                          </span>
+                        </div>
                         <h3 className="text-xs font-black text-slate-100">{acc.name}</h3>
                       </div>
 
@@ -581,8 +645,18 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
                           <span className="text-slate-300 font-bold font-mono">
                             {Number(acc.payments || 0).toLocaleString()} ج.م
                           </span>
-                          <span className="text-slate-400">: الدفعات النقدية المسددة</span>
+                          <span className="text-slate-440 text-slate-400">: الدفعات النقدية المسددة</span>
                         </div>
+
+                        {/* Opening Balance */}
+                        {acc.openingBalance !== undefined && Number(acc.openingBalance) !== 0 && (
+                          <div className="flex justify-between border-t border-dashed border-white/4 pt-2">
+                            <span className="text-amber-450 text-amber-500 font-bold font-mono">
+                              {Number(acc.openingBalance).toLocaleString()} ج.م
+                            </span>
+                            <span className="text-slate-400">: رصيد افتتاحي (سابق)</span>
+                          </div>
+                        )}
 
                         {/* Reverse Adjustments on supplier */}
                         {acc.adjustments !== undefined && acc.adjustments !== null && Number(acc.adjustments) !== 0 && (
@@ -1125,6 +1199,111 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
                   }`}
                 >
                   {isSettling ? "جاري الحفظ..." : settleTransType === "withdrawal" ? "تأكيد السحب العكسي ⚠️" : "تأكيد وصرف النقديّة ✅"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ───────────────────────────────────────────────────────────── */}
+      {/* EDIT SUPPLIER PROFILE MODAL (Admin/Accountant Only) */}
+      {/* ───────────────────────────────────────────────────────────── */}
+      {isEditModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-white/10 rounded-2xl p-6 max-w-md w-full text-right space-y-4 shadow-2xl">
+            <div className="flex justify-between items-center border-b border-white/6 pb-3">
+              <button 
+                onClick={() => setIsEditModalOpen(false)}
+                className="text-slate-500 hover:text-slate-300 text-sm font-black cursor-pointer bg-transparent border-none"
+              >
+                ✕
+              </button>
+              <h3 className="text-xs font-black text-slate-100 flex items-center gap-1.5">
+                <Edit3 className="text-amber-500" size={14} />
+                <span>تعديل الملف المالي وبيانات المورد</span>
+              </h3>
+            </div>
+
+            <form onSubmit={handleSaveSupplierSubmit} className="space-y-4">
+              {/* Supplier Name (Readonly or display label since it's the primary key/ID) */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 mb-1.5">اسم المورد (معرّف ثابت لا يمكن تغييره)</label>
+                <input
+                  type="text"
+                  disabled
+                  value={editSupplierName}
+                  className="w-full bg-slate-950/60 border border-white/4 rounded-xl px-4 py-2.5 text-xs font-extrabold text-slate-400 outline-none text-right cursor-not-allowed"
+                />
+              </div>
+
+              {/* Phone */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 mb-1.5">رقم الهاتف للتاجر</label>
+                <input
+                  type="text"
+                  value={editSupplierPhone}
+                  onChange={(e) => setEditSupplierPhone(e.target.value)}
+                  className="w-full bg-slate-950 border border-white/6 rounded-xl px-4 py-2.5 text-xs font-bold text-slate-100 outline-none text-right placeholder:text-slate-700 focus:border-amber-500"
+                  placeholder="مثال: 01000000000"
+                />
+              </div>
+
+              {/* Price / Commission */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 mb-1.5">سعر شحن الشركة / تكلفة التوصيل المتفق عليها (ج.م)*</label>
+                <input
+                  type="number"
+                  required
+                  value={editSupplierPrice}
+                  onChange={(e) => setEditSupplierPrice(e.target.value)}
+                  className="w-full bg-slate-950 border border-white/6 rounded-xl px-4 py-2.5 text-xs font-extrabold text-slate-100 outline-none text-right font-mono focus:border-amber-500"
+                  placeholder="سعر التوصيل الثابت للتاجر"
+                />
+              </div>
+
+              {/* Opening Balance */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 mb-1.5">الرصيد الافتتاحي المبدئي (سابقة أعمال / مستحق مرحّل) (ج.م)*</label>
+                <input
+                  type="number"
+                  required
+                  value={editSupplierOpeningBalance}
+                  onChange={(e) => setEditSupplierOpeningBalance(e.target.value)}
+                  className="w-full bg-slate-950 border border-white/6 rounded-xl px-4 py-2.5 text-xs font-extrabold text-amber-500 outline-none text-right font-mono focus:border-amber-500"
+                  placeholder="الرصيد الافتتاحي"
+                />
+                <p className="text-[9px] text-slate-500 mt-1 leading-normal font-bold">
+                  * رصيد البداية المسجل للمورد قبل استخدام السيستم (يمكن تعديله لتسوية الفروق التاريخية).
+                </p>
+              </div>
+
+              {/* Notes */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 mb-1.5">ملاحظات ومقرر الاتفاق</label>
+                <textarea
+                  value={editSupplierNotes}
+                  onChange={(e) => setEditSupplierNotes(e.target.value)}
+                  className="w-full bg-slate-950 border border-white/6 rounded-xl px-3 py-2.5 text-xs text-slate-100 font-bold outline-none text-right placeholder:text-slate-600 min-h-[50px] focus:border-amber-500"
+                  placeholder="عنوان المورد، تفاصيل الاتفاق التجاري إلخ..."
+                />
+              </div>
+
+              {/* Action buttons */}
+              <div className="flex gap-3 pt-3 border-t border-white/6">
+                <button
+                  type="button"
+                  onClick={() => setIsEditModalOpen(false)}
+                  className="flex-1 py-2.5 bg-slate-950 hover:bg-slate-950/80 border border-white/6 rounded-xl text-[11px] font-extrabold text-slate-400 text-center cursor-pointer transition-all"
+                >
+                  إلغاء الأمر
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingSupplier}
+                  className="flex-1 py-2.5 text-slate-950 rounded-xl text-[10px] font-black text-center cursor-pointer transition-all disabled:opacity-50 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700"
+                >
+                  {isSavingSupplier ? "جاري الحفظ..." : "حفظ التحديثات ✓"}
                 </button>
               </div>
             </form>

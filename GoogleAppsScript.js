@@ -90,6 +90,7 @@ function doPost(e) {
       case "getArchivedOrders":
         result = getArchivedOrders(sheets);
         break;
+      case "addSingleOrder":
       case "addOrder":
         result = addOrder(sheets, requestData);
         break;
@@ -125,6 +126,9 @@ function doPost(e) {
         break;
       case "settleSupplierDay":
         result = settleSupplierDay(sheets, requestData);
+        break;
+      case "saveSupplier":
+        result = saveSupplier(sheets, requestData);
         break;
       case "supplierDashboard":
         result = getSupplierDashboard(sheets, requestData);
@@ -224,7 +228,7 @@ function initSheets() {
   const defs = {
     users: ["name", "role", "pass", "active", "email", "perms"],
     couriers: ["name", "phone", "commission", "salary", "region", "base_fixed_salary", "commission_success", "commission_return"],
-    suppliers: ["name", "phone", "price", "notes"],
+    suppliers: ["name", "phone", "price", "notes", "openingBalance"],
     orders: [
       "tracking", "createdAt", "updatedAt", "orderDate", "supplier", "customer", 
       "phone", "phone2", "gov", "region", "address", "prodPrice", "shipPrice", 
@@ -467,31 +471,16 @@ function addOrder(sheets, d) {
   const o = d.order;
   if (!o) return { ok: false, error: "بيانات الأوردر مفقودة" };
 
-  // Generate tracking ID if missing
-  if (!o.tracking) {
-    const lastRow = sheets.orders.getLastRow();
-    let counter = 1000 + lastRow;
-    const yearSuffix = Utilities.formatDate(new Date(), "GMT+3", "yy");
-    let candidate = "FP-" + counter + "-" + yearSuffix;
-    while (findRowIndex(sheets.orders, "tracking", candidate) !== -1) {
-      counter++;
-      candidate = "FP-" + counter + "-" + yearSuffix;
-    }
-    o.tracking = candidate;
-  }
-
-  // فحص عدم تكرار التتبع
-  if (findRowIndex(sheets.orders, "tracking", o.tracking) !== -1) {
-    return { ok: false, error: "رقم التتبع المسجل مستخدم بالفعل لأوردر آخر" };
-  }
+  // Use already generated or supplied tracking id immediately without scanning sheet
+  const trackingId = o.tracking || d.tracking || ("FP-" + Math.floor(100000 + Math.random() * 900000));
+  o.tracking = trackingId;
 
   const sPrice = Number(o.shipPrice || 60);
   const tCOD = Number(o.totalCOD || (Number(o.prodPrice || 0) + sPrice));
-  // Formula: Supplier_Net_Balance = Total_Collected - Shipping_Fees
   const pPrice = tCOD - sPrice;
 
   const newOrder = {
-    tracking: o.tracking,
+    tracking: trackingId,
     createdAt: now(),
     updatedAt: now(),
     orderDate: o.orderDate || nowDay(),
@@ -520,23 +509,7 @@ function addOrder(sheets, d) {
     "موقع العميل/الخريطة": ""
   };
 
-  // Automatic registration of new supplier if they are not in sheets.suppliers
-  const orderSupplier = (newOrder.supplier || "").toString().trim();
-  if (orderSupplier) {
-    const registeredSuppliers = getTableData(sheets.suppliers);
-    const matchedSup = registeredSuppliers.find(function(s) {
-      return s.name && s.name.trim().toLowerCase() === orderSupplier.toLowerCase();
-    });
-    if (!matchedSup) {
-      appendToSheet(sheets.suppliers, ["name", "phone", "price", "notes"], {
-        name: orderSupplier,
-        phone: "—",
-        price: 60,
-        notes: "تم تسجيله تلقائياً عن طريق إضافة أوردر يدوي"
-      });
-    }
-  }
-
+  // Append directly to the orders sheet using simple appendRow mapping
   const lastCol = sheets.orders.getLastColumn();
   const headers = sheets.orders.getRange(1, 1, 1, lastCol > 0 ? lastCol : 1).getValues()[0].map(function(h) { return h ? h.toString().trim() : ""; });
   appendToSheet(sheets.orders, headers, newOrder);
@@ -548,17 +521,7 @@ function addOrder(sheets, d) {
     Logger.log("Failed to trigger location webhook simulation: " + errLocation.toString());
   }
 
-  // Record Supplier Ledger
-  appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
-    supplier: newOrder.supplier,
-    date: now(),
-    type: "أوردر مستلم",
-    tracking: newOrder.tracking,
-    amount: pPrice,
-    desc: `أوردر جديد مستلم من المورد: ${newOrder.tracking} (صافي حساب المورد: ${pPrice} = المحصل ${tCOD} - الشحن ${sPrice})`
-  });
-
-  // Record Status History
+  // Record Status History (fast append)
   appendToSheet(sheets.statusHistory, ["tracking", "oldStatus", "newStatus", "updatedBy", "dateTime"], {
     tracking: newOrder.tracking,
     oldStatus: "",
@@ -702,16 +665,6 @@ function addBulk(sheets, d) {
       };
 
       appendToSheet(sheets.orders, headers, draft);
-
-      // Record Supplier Ledger (with detailed informative description for balance calculation)
-      appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
-        supplier: orderSupplier,
-        date: now(),
-        type: "أوردر مستلم",
-        tracking: draft.tracking,
-        amount: pPrice,
-        desc: `رفع أوردر مستلم جماعياً ${draft.tracking} (صافي حساب المورد: ${pPrice} = المحصل ${tCOD} - الشحن ${sPrice})`
-      });
 
       // Record Status History
       appendToSheet(sheets.statusHistory, ["tracking", "oldStatus", "newStatus", "updatedBy", "dateTime"], {
@@ -1744,9 +1697,9 @@ function getSupplierLedgerData(sheets, d) {
     var dayDate = dayDates[i];
     var dayOrders = ordersByDay[dayDate];
 
-    // A. Total COD or Work Value
+    // A. Total Product Price Only as Work Value (No Shipping)
     var totalWorkValue = dayOrders.reduce(function(sum, o) {
-      return sum + getOrderFinancials(o).totalCOD;
+      return sum + getOrderFinancials(o).prodPrice;
     }, 0);
 
     // B. Delivered cash collected
@@ -1872,7 +1825,17 @@ function getSupplierLedgerData(sheets, d) {
     return sum + Math.abs(Number(l.amount || 0));
   }, 0);
 
-  var finalUnifiedOutstanding = totalGoodsUploadedVal - returnsDeliveredVal - directPaymentsVal;
+  // Fetch opening balance from sheets.suppliers
+  var suppliersList = [];
+  try {
+    suppliersList = getTableData(sheets.suppliers) || [];
+  } catch (e) {}
+  var supplierProfile = suppliersList.find(function(s) {
+    return s.name && isSameSupplier(s.name, supplier);
+  });
+  var openingBalance = supplierProfile ? Number(supplierProfile.openingBalance || supplierProfile.opening_balance || 0) : 0;
+
+  var finalUnifiedOutstanding = openingBalance + totalGoodsUploadedVal - returnsDeliveredVal - directPaymentsVal;
 
   var overallNetProductValue = supplierOrders.reduce(function(sum, o) {
     var status = (o.status || "").toString().trim();
@@ -1893,11 +1856,12 @@ function getSupplierLedgerData(sheets, d) {
   return {
     ok: true,
     days: daysList,
-    outstandingBalance: Math.max(0, finalUnifiedOutstanding),
+    outstandingBalance: finalUnifiedOutstanding,
     totalGoodsUploaded: totalGoodsUploadedVal,
     returnsDeliveredValue: returnsDeliveredVal,
     overallNetProductValue: overallNetProductValue,
     globalPayments: directPaymentsVal,
+    openingBalance: openingBalance,
     paymentEntries: ledgerEntries.filter(function(l) {
       var lSup = l.supplier || l["المورد"] || "";
       if (!isSameSupplier(lSup, supplier)) return false;
@@ -2167,8 +2131,9 @@ function getSupplierAccounts(sheets) {
     // 3. Cash payments paid to supplier
     const paid = sLedger.filter(isHumanPayout).reduce(function(sum, l) { return sum + Math.abs(Number(l.amount || 0)); }, 0);
 
-    // 4. Current outstanding balance based on final formula: Outstanding = TotalGoodsUploaded - Returned - Paid
-    const balance = totalGoodsUploaded - returnsDeliveredValue - paid;
+    // 4. Current outstanding balance based on final formula: Outstanding = OpeningBalance + TotalGoodsUploaded - Returned - Paid
+    const openingBalance = sObj ? Number(sObj.openingBalance || sObj.opening_balance || 0) : 0;
+    const balance = openingBalance + totalGoodsUploaded - returnsDeliveredValue - paid;
 
     const totalOrders = sOrders.length;
     const deliveredOrders = sOrders.filter(function(o) { return o.status === "تم التسليم"; }).length;
@@ -2184,7 +2149,8 @@ function getSupplierAccounts(sheets) {
       payments: paid,
       balance: balance,
       totalOrders: totalOrders,
-      deliveredOrders: deliveredOrders
+      deliveredOrders: deliveredOrders,
+      openingBalance: openingBalance
     };
   });
 
@@ -3172,4 +3138,33 @@ function simulateCustomerLocationReply(sheets, d) {
     msg: "نجحت محاكاة استقبال اللوكيشن للعميل بالواتس تفاعلياً وتحديث شيت جوجل مباشرة",
     customerLocation: lat + "," + lng
   };
+}
+
+function saveSupplier(sheets, d) {
+  var name = d.name;
+  var phone = d.phone;
+  var price = d.price;
+  var notes = d.notes;
+  var openingBalance = d.openingBalance;
+
+  if (!name) return { ok: false, error: "اسم المورد مطلوب" };
+
+  var rowIndex = findRowIndex(sheets.suppliers, "name", name);
+  var headers = ["name", "phone", "price", "notes", "openingBalance"];
+
+  var updateObj = {
+    name: name,
+    phone: phone || "",
+    price: Number(price || 0),
+    notes: notes || "",
+    openingBalance: Number(openingBalance || 0)
+  };
+
+  if (rowIndex !== -1) {
+    updateRowByObject(sheets.suppliers, rowIndex, updateObj);
+  } else {
+    appendToSheet(sheets.suppliers, headers, updateObj);
+  }
+
+  return { ok: true, msg: "تم حفظ وتحديث بيانات المورد بنجاح ✓" };
 }

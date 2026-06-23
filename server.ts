@@ -864,10 +864,10 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
   const daysList: any[] = [];
 
   for (const [dayDate, dayOrders] of ordersByDay.entries()) {
-    // A. إجمالي قيمة الشغل: مجموع الـ COD الأصلي لكل الشحنات المستلمة منه في هذا التاريخ
+    // A. إجمالي قيمة الشغل: مجموع أسعار المنتجات فقط (صافي بدون شحن)
     const totalWorkValue = dayOrders.reduce((sum, o) => {
       const financials = getOrderFinancials(o);
-      return sum + financials.totalCOD;
+      return sum + financials.prodPrice;
     }, 0);
 
     // B. إجمالي التحصيل الفعلي اليومي: (مجموع الأوردرات المسلمة كلياً) + (المبالغ الفعلية المحصلة من خانات التسليم جزئياً)
@@ -1004,8 +1004,12 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
 
   daysList.sort((a, b) => b.date.localeCompare(a.date));
 
+  // Fetch opening balance from supplier profile in db.suppliers
+  const supplierProfile = (db.suppliers || []).find((s: any) => sameSup(s.name, supplierName));
+  const openingBalance = supplierProfile ? Number(supplierProfile.openingBalance || supplierProfile.opening_balance || 0) : 0;
+
   // Let's compute outstandingBalance via the exact Unified Ledger Equation
-  // Net Supplier Due = [إجمالي البضاعة المرفوعة (الطلبات المسلمة والجزئية الفعالة)] - [المرتجع المعتمد المستلم] - [إجمالي الدفعات النقدية المسددة للمورد]
+  // Net Supplier Due = Opening + [إجمالي البضاعة المرفوعة (صافي بضاعة فقط بدون شحن)] - [المرتجع المعتمد المستلم] - [إجمالي الدفعات النقدية والخصومات المسددة للمورد]
   const totalGoodsUploaded = supplierOrders.reduce((sum: number, o: any) => {
     return sum + getOrderFinancials(o).prodPrice;
   }, 0);
@@ -1023,7 +1027,7 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
   }, 0);
 
   const finalUnifiedOutstanding =
-    totalGoodsUploaded - returnsDeliveredValue - totalPaid;
+    openingBalance + totalGoodsUploaded - returnsDeliveredValue - totalPaid;
 
   const overallNetProductValue = supplierOrders.reduce(
     (sum: number, o: any) => {
@@ -1084,9 +1088,13 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
         reverseAdjustmentsValue: 0,
         outstanding: 0,
         rate: 0,
+        openingBalance: 0,
       },
     };
   }
+
+  const supplierProfile = (db.suppliers || []).find((s: any) => sameSup(s.name, supplierName));
+  const openingBalance = supplierProfile ? Number(supplierProfile.openingBalance || supplierProfile.opening_balance || 0) : 0;
 
   const allOrdersList = [...(db.orders || []), ...(db.archivedOrders || [])];
   const rawOrders = allOrdersList.filter((o: any) =>
@@ -1231,9 +1239,10 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
     0,
   );
 
-  // 5. Calculate outstanding balance based on the approved formula: Net Balance = Total Goods Uploaded (Product value only, excluding shipping fees!) - Total Delivered back to Supplier - (Outgoing Cash Payments + Adjustments)
+  // 5. Calculate outstanding balance based on the approved formula: Net Balance = Opening Balance + Total Goods Uploaded (Product value only, excluding shipping fees!) - Total Delivered back to Supplier - (Outgoing Cash Payments + Adjustments)
   const totalCOD = totalGoodsUploaded;
   const outstanding =
+    openingBalance +
     totalCOD -
     returnsDeliveredValue -
     (paymentsValue + reverseAdjustmentsValue);
@@ -1285,6 +1294,17 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
     });
   }
 
+  // D. Include opening balance as the first transaction if present
+  if (openingBalance !== 0) {
+    entries.push({
+      date: "2026-01-01", // Default early date for chronological sorting
+      type: "رصيد افتتاحي",
+      tracking: "OPENING-BALANCE",
+      amount: openingBalance,
+      desc: `الرصيد الافتتاحي المرحل (سابق): ${openingBalance} ج.م`,
+    });
+  }
+
   // Sort entries chronologically to compute running balance correctly
   entries.sort((a, b) => {
     const dateA = a.date || "";
@@ -1292,11 +1312,12 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
     if (dateA < dateB) return -1;
     if (dateA > dateB) return 1;
     const typeOrder: { [key: string]: number } = {
+      "رصيد افتتاحي": 0,
       "حقوق بضاعة أوردر": 1,
       "مرتجع مخصوم": 2,
     };
-    const orderA = typeOrder[a.type] || 3;
-    const orderB = typeOrder[b.type] || 3;
+    const orderA = typeOrder[a.type] !== undefined ? typeOrder[a.type] : 3;
+    const orderB = typeOrder[b.type] !== undefined ? typeOrder[b.type] : 3;
     return orderA - orderB;
   });
 
@@ -1327,6 +1348,7 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
       reverseAdjustmentsValue,
       outstanding,
       rate,
+      openingBalance,
     },
   };
 }
@@ -3172,17 +3194,6 @@ app.post("/api", async (req: Request, res: Response) => {
 
         db.orders.push(newOrder);
 
-        // Record Supplier Ledger (COD values tracking)
-        // Order addition adds product sum as supplier ledger row
-        db.supplierLedger.push({
-          supplier: newOrder.supplier,
-          date: tNow,
-          type: "أوردر مستلم",
-          tracking: id,
-          amount: prodPrice,
-          desc: `أوردر جديد مستلم من المورد: ${id} (صافي حساب المورد: ${prodPrice} = المطلوب تحصيله ${totalCOD} - مصاريف الشحن ${shipPrice})`,
-        });
-
         // Add to audit trail
         db.statusHistory.push({
           tracking: id,
@@ -3357,16 +3368,6 @@ app.post("/api", async (req: Request, res: Response) => {
           );
 
           db.orders.push(newObj);
-
-          // Supplier Ledger Transaction (automatically records the cash/outstanding balance instantly)
-          db.supplierLedger.push({
-            supplier: orderSupplier,
-            date: tNow,
-            type: "أوردر مستلم",
-            tracking: id,
-            amount: pPrice,
-            desc: `رفع أوردر مستلم جماعياً ${id} (صافي حساب المورد: ${pPrice} = المطلوب تحصيله ${tCOD} - الشحن ${sPrice})`,
-          });
 
           // History Log
           db.statusHistory.push({
@@ -4810,10 +4811,12 @@ app.post("/api", async (req: Request, res: Response) => {
         const supplierName = isSupplierRole(currentRole)
           ? currentUser
           : d.supplier || "";
+        const unified = getSupplierUnifiedLedger(db, supplierName);
         const dailyData = getSupplierDailyLedger(db, supplierName);
         return ok(res, {
-          entries: db.supplierLedger || [],
-          balance: dailyData.outstandingBalance,
+          entries: unified.entries || [],
+          balance: unified.balance,
+          stats: unified.stats,
           dailyLedger: dailyData,
         });
       }
@@ -5013,6 +5016,7 @@ app.post("/api", async (req: Request, res: Response) => {
             returnsCount: unified.stats.returnsDeliveredCount,
             balance: dailyData.outstandingBalance,
             rate: unified.stats.rate,
+            openingBalance: unified.stats.openingBalance,
           };
         });
 
@@ -6503,6 +6507,31 @@ app.post("/api", async (req: Request, res: Response) => {
 
       case "getSuppliers": {
         return ok(res, { suppliers: db.suppliers });
+      }
+
+      case "saveSupplier": {
+        if (!["مدير", "محاسب"].includes(currentRole)) {
+          return err(res, "فقط المدير والمحاسب يمتلك صلاحية تعديل بيانات الموردين");
+        }
+
+        const { name, phone, price, notes, openingBalance } = d;
+        if (!name) return err(res, "اسم المورد مطلوب");
+
+        if (!db.suppliers) db.suppliers = [];
+        let sup = db.suppliers.find((s: any) => sameSup(s.name, name));
+        if (!sup) {
+          sup = { name };
+          db.suppliers.push(sup);
+        }
+
+        sup.phone = phone || "";
+        sup.price = Number(price || 0);
+        sup.notes = notes || "";
+        sup.openingBalance = Number(openingBalance || 0);
+        sup.updatedAt = now();
+
+        writeDB(db);
+        return ok(res, { msg: "تم حفظ وتحديث بيانات المورد بنجاح" });
       }
 
       case "report": {
