@@ -936,11 +936,11 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
               {/* Cumulative Daily Earnings Ledger (Live chronologically tracked table) */}
               <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 space-y-3">
                 <div className="flex items-center justify-between border-b border-white/6 pb-2">
-                  <h3 className="text-xs font-black text-amber-500 flex items-center gap-1.5">
+                  <h3 className="text-xs font-black text-amber-500 flex items-center gap-1.5 font-sans">
                     <Calendar size={14} />
                     <span>📅 دفتر يومية الأرباح التراكمية (Cumulative Daily Ledger)</span>
                   </h3>
-                  <span className="text-[9px] font-bold bg-amber-950/20 text-amber-500 border border-amber-900/40 px-2 py-0.5 rounded">
+                  <span className="text-[9px] font-bold bg-amber-950/20 text-amber-500 border border-amber-900/40 px-2 py-0.5 rounded font-mono">
                      محدث لـ {new Date().getFullYear()}/{String(new Date().getMonth() + 1).padStart(2, "0")}
                   </span>
                 </div>
@@ -949,49 +949,70 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
                   رصد يومي مستمر للمعادلة المعتمدة: الراتب اليومي الثابت (الراتب الأساسي / أيام الشهر) + (عدد التسليمات × {courierSummary.commission_success || 25}) + (عدد المرتجعات × {courierSummary.commission_return || 10}).
                 </p>
 
-                <div className="overflow-x-auto max-h-[450px] overflow-y-auto">
+                <div className="space-y-4">
+                  {/* Action Bar for Settle / Zero Courier */}
+                  {["مدير", "محاسب"].includes(role) && (
+                    <div className="flex justify-start items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={handleSettleCourierOrders}
+                        disabled={submittingLedger}
+                        className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-black py-2.5 px-5 rounded-xl text-xs flex items-center justify-center gap-2 cursor-pointer transition-all border border-emerald-400/20 active:scale-98 shadow-md"
+                      >
+                        <CheckCircle2 size={15} />
+                        <span>🟢 تصفية وتصفير المندوب (Settle & Zero)</span>
+                      </button>
+                    </div>
+                  )}
+
                   {/* Desktop view: Traditional table */}
-                  <div className="hidden md:block">
+                  <div className="hidden md:block overflow-x-auto max-h-[450px] overflow-y-auto border border-white/6 rounded-xl">
                     <table className="w-full text-right text-xs border-collapse">
                       <thead className="sticky top-0 bg-slate-900 z-10">
                         <tr className="border-b border-white/10 text-slate-400 font-extrabold text-[10px]">
-                          <th className="py-2 px-3 text-right">اليوم والتاريخ</th>
-                          <th className="py-2 px-3 text-center">التسليمات</th>
-                          <th className="py-2 px-3 text-center">المرتجعات</th>
-                          <th className="py-2 px-3 text-center">حصة الراتب اليومي</th>
-                          <th className="py-2 px-3 text-center">العمولات المكتسبة</th>
-                          <th className="py-2 px-3 text-left">صافي اليوم</th>
-                          <th className="py-2 px-3 text-left">التراكمي المتراكم</th>
+                          <th className="py-2.5 px-3 text-right">اليوم والتاريخ</th>
+                          <th className="py-2.5 px-3 text-center">التسليمات</th>
+                          <th className="py-2.5 px-3 text-center">المرتجعات</th>
+                          <th className="py-2.5 px-3 text-center">حصة الراتب اليومي</th>
+                          <th className="py-2.5 px-3 text-center">العمولات المكتسبة</th>
+                          <th className="py-2.5 px-3 text-center">الكاش المستحق بذمته</th>
+                          <th className="py-2.5 px-3 text-left">صافي اليوم</th>
+                          <th className="py-2.5 px-3 text-left">التراكمي المتراكم</th>
                         </tr>
                       </thead>
                       <tbody>
                         {(!courierSummary.dailyEarnings || courierSummary.dailyEarnings.length === 0) ? (
                           <tr>
-                            <td colSpan={7} className="py-6 text-center text-slate-500 text-xs">
-                              لا يوجد سجل حركات يومية متاح لهذا الشهر للأن
+                            <td colSpan={8} className="py-6 text-center text-slate-500 text-xs">
+                              لا يوجد سجل حركات ورديات يومية للمندوب حالياً
                             </td>
                           </tr>
                         ) : (
                           courierSummary.dailyEarnings.map((dItem: any, idx: number) => {
                             const dailyCommissions = (dItem.delivered * (courierSummary.commission_success || 25)) + (dItem.returned * (courierSummary.commission_return || 10));
+                            const isToday = idx === 0;
+                            const isSettled = dItem.isSettled !== undefined ? dItem.isSettled : true;
+
                             return (
-                              <tr key={idx} className={`border-b border-white/4 text-[11px] hover:bg-slate-950/40 transition-colors ${idx === 0 ? "bg-amber-500/5 animate-pulse" : ""}`}>
-                                <td className="py-3 px-3 font-bold text-slate-200">{dItem.date} {idx === 0 ? " (اليوم)" : ""}</td>
-                                <td className={`py-3 px-3 text-center font-black ${dItem.delivered > 0 ? "text-emerald-400" : "text-slate-500"}`}>
-                                  {dItem.delivered} شحنة
+                              <tr key={`c-day-row-${idx}`} className="border-b border-white/5 hover:bg-white/2">
+                                <td className="py-2.5 px-3 font-semibold text-slate-300 text-right">
+                                  {dItem.date} {isToday && <span className="text-[9px] bg-amber-500/15 text-amber-500 px-1 py-0.25 rounded mr-1">اليوم</span>}
                                 </td>
-                                <td className={`py-3 px-3 text-center font-black ${dItem.returned > 0 ? "text-amber-500" : "text-slate-500"}`}>
-                                  {dItem.returned} شحنة
+                                <td className="py-2.5 px-3 text-center font-bold text-emerald-400">{dItem.delivered}</td>
+                                <td className="py-2.5 px-3 text-center font-bold text-amber-500">{dItem.returned}</td>
+                                <td className="py-2.5 px-3 text-center font-mono text-slate-400">{(dItem.baseEarning || 0).toFixed(2)} ج.م</td>
+                                <td className="py-2.5 px-3 text-center font-mono text-emerald-400">+{dailyCommissions.toLocaleString("ar")} ج.م</td>
+                                <td className="py-2.5 px-3 text-center font-mono font-bold text-emerald-400">
+                                  {(dItem.cashCollected || 0).toLocaleString("ar")} ج.م
                                 </td>
-                                <td className="py-3 px-3 text-center font-mono text-slate-400">{(dItem.baseEarning || 0).toFixed(2)} ج.م</td>
-                                <td className={`py-3 px-3 text-center font-mono ${dailyCommissions > 0 ? "text-emerald-400 font-bold" : "text-slate-500"}`}>
-                                  {dailyCommissions > 0 ? `+${dailyCommissions.toLocaleString("ar")}` : "0"} ج.م
-                                </td>
-                                <td className="py-3 px-3 text-left font-mono font-black text-amber-500">
-                                  {dItem.total.toLocaleString("ar")} ج.م
-                                </td>
-                                <td className="py-3 px-3 text-left font-mono font-black text-emerald-400 bg-emerald-950/5">
-                                  {dItem.cumulative.toLocaleString("ar")} ج.م
+                                <td className="py-2.5 px-3 text-left font-mono font-bold text-slate-100">{(dItem.total || 0).toLocaleString("ar")} ج.م</td>
+                                <td className="py-2.5 px-3 text-left font-mono font-bold text-emerald-300">
+                                  <div className="flex items-center justify-end gap-2">
+                                    <span>{(dItem.cumulative || 0).toLocaleString("ar")} ج.م</span>
+                                    <span className={`text-[9px] px-1.5 py-0.25 rounded font-black ${isSettled ? "bg-emerald-950/60 text-emerald-400 border border-emerald-900/30" : "bg-amber-950/60 text-amber-500 border border-amber-900/40"}`}>
+                                      {isSettled ? "🟢 مصفى" : "🔴 معلق"}
+                                    </span>
+                                  </div>
                                 </td>
                               </tr>
                             );
@@ -1001,11 +1022,11 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
                     </table>
                   </div>
 
-                  {/* Mobile view: Collapsible Accordion Card layout */}
+                  {/* Mobile view: Professional Collapsed Accordion Cards */}
                   <div className="block md:hidden space-y-3">
                     {(!courierSummary.dailyEarnings || courierSummary.dailyEarnings.length === 0) ? (
-                      <div className="py-6 text-center text-slate-500 text-xs font-bold">
-                        لا يوجد سجل حركات يومية متاح لهذا الشهر للأن
+                      <div className="py-8 bg-slate-950/40 border border-white/4 rounded-xl text-center text-slate-500 text-xs font-bold">
+                        📱 لا يوجد سجل ورديات يومية للمندوب حالياً
                       </div>
                     ) : (
                       courierSummary.dailyEarnings.map((dItem: any, idx: number) => {
@@ -1013,44 +1034,45 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
                         const courierDateStr = dItem.date || "";
                         const isCourierOpen = !!expandedCourierDays[courierDateStr];
                         const isToday = idx === 0;
+                        const isSettled = dItem.isSettled !== undefined ? dItem.isSettled : true;
 
                         return (
                           <div
                             key={`c-day-mobile-${idx}`}
                             className={`border rounded-xl shadow-sm transition-all text-right overflow-hidden ${
                               isToday
-                                ? "bg-amber-950/10 border-amber-500/20"
+                                ? "bg-amber-950/15 border-amber-500/30"
                                 : "bg-slate-950/60 border-white/6 hover:border-white/12"
                             }`}
                           >
-                            {/* Outward Card Shell */}
+                            {/* Card exterior: [Date] | [Cash collected/due] | [Status: Settled/Outstanding] */}
                             <div
                               onClick={() => toggleCourierDay(courierDateStr)}
-                              className="p-3.5 flex items-center justify-between cursor-pointer select-none gap-3 hover:bg-slate-950 transition-all"
+                              className="p-3.5 flex items-center justify-between cursor-pointer select-none gap-3 hover:bg-slate-950 transition-colors"
                             >
-                              <div className="flex flex-col text-right">
+                              <div className="flex flex-col text-right space-y-1">
                                 <span className="text-xs font-black text-slate-200 flex items-center gap-1.5">
                                   {isToday && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>}
-                                  <span>{courierDateStr} {isToday ? " (اليوم)" : ""}</span>
+                                  <span>{courierDateStr} {isToday ? "(اليوم)" : ""}</span>
                                 </span>
-                                <span className="text-[10px] text-slate-400 font-bold mt-1">
-                                  المندوب: {selectedCourier || "غير محدد"}
+                                <span className={`inline-block px-2 py-0.5 text-[9px] font-black rounded-md w-fit ${
+                                  isSettled
+                                    ? "bg-emerald-950/50 border border-emerald-900/40 text-emerald-400"
+                                    : "bg-amber-950/50 border border-amber-900/40 text-amber-500"
+                                }`}>
+                                  {isSettled ? "🟢 تم التصفية بالمستودع" : "🔴 عهدة نقدية معلقة"}
                                 </span>
                               </div>
 
                               <div className="flex items-center gap-2.5">
                                 <div className="text-right">
-                                  <span className="text-[9px] text-slate-450 block font-bold leading-none">صافي اليوم:</span>
-                                  <span className="text-xs font-mono font-black text-amber-500 mt-0.5 block">
-                                    {Number(dItem.total || 0).toLocaleString("ar")} ج.م
+                                  <span className="text-[9px] text-slate-450 block font-bold leading-none">الكاش الفعلي بذمته:</span>
+                                  <span className="text-xs font-mono font-black text-emerald-400 mt-1 block">
+                                    {(dItem.cashCollected || 0).toLocaleString("ar")} ج.م
                                   </span>
                                 </div>
-                                <div className="bg-slate-900 border border-white/5 p-1 rounded-md text-slate-400">
-                                  {isCourierOpen ? (
-                                    <ChevronUp size={14} />
-                                  ) : (
-                                    <ChevronDown size={14} />
-                                  )}
+                                <div className="bg-slate-900 border border-white/5 p-1 rounded-md text-slate-450">
+                                  {isCourierOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                                 </div>
                               </div>
                             </div>
@@ -1058,33 +1080,71 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
                             {/* Collapsible Details */}
                             <div
                               className={`transition-all duration-300 ease-in-out ${
-                                isCourierOpen ? "max-h-[500px] border-t border-white/6 p-4 bg-slate-950/90 opacity-100" : "max-h-0 overflow-hidden opacity-0 pointer-events-none"
+                                isCourierOpen ? "max-h-[600px] border-t border-white/6 p-4 bg-slate-950/90 opacity-100 space-y-3" : "max-h-0 overflow-hidden opacity-0 pointer-events-none"
                               }`}
                             >
                               <div className="grid grid-cols-2 gap-3">
                                 <div className="bg-slate-900 border border-white/4 p-2.5 rounded-lg text-right">
-                                  <span className="text-[9.5px] text-slate-410 block font-bold">التسليمات الفيلية:</span>
+                                  <span className="text-[9.5px] text-slate-400 block font-bold">التسليمات الميدانية:</span>
                                   <span className="text-xs font-black text-emerald-400 mt-0.5 block">{dItem.delivered} شحنة</span>
                                 </div>
                                 <div className="bg-slate-900 border border-white/4 p-2.5 rounded-lg text-right">
-                                  <span className="text-[9.5px] text-slate-410 block font-bold">المرتجعات المرتجعة:</span>
-                                  <span className="text-xs font-black text-amber-500 mt-0.5 block">{dItem.returned} شحنة</span>
+                                  <span className="text-[9.5px] text-slate-400 block font-bold">المرتجعات المكتملة:</span>
+                                  <span className="text-xs font-black text-amber-505 mt-0.5 block">{dItem.returned} شحنة</span>
                                 </div>
                                 <div className="bg-slate-900 border border-white/4 p-2.5 rounded-lg text-right">
-                                  <span className="text-[9.5px] text-slate-410 block font-bold">حصة الراتب الثابت:</span>
+                                  <span className="text-[9.5px] text-slate-400 block font-bold">صورة المعاش اليومي:</span>
                                   <span className="text-xs font-mono font-bold text-slate-300 mt-0.5 block">{(dItem.baseEarning || 0).toFixed(2)} ج.م</span>
                                 </div>
                                 <div className="bg-slate-900 border border-white/4 p-2.5 rounded-lg text-right">
-                                  <span className="text-[9.5px] text-slate-410 block font-bold">العمولات الإضافية:</span>
+                                  <span className="text-[9.5px] text-slate-400 block font-bold">صافي عمولات اليوم:</span>
                                   <span className="text-xs font-mono font-black text-emerald-400 mt-0.5 block">+{dailyCommissions.toLocaleString("ar")} ج.م</span>
                                 </div>
-                                <div className="bg-slate-900 border border-emerald-500/10 p-2.5 rounded-lg col-span-2 flex justify-between items-center text-right">
-                                  <span className="text-[10px] text-slate-350 font-bold">الرصيد التراكمي المتبقي:</span>
+                                <div className="bg-slate-905 border border-emerald-500/10 p-2.5 rounded-lg col-span-2 flex justify-between items-center text-right">
+                                  <span className="text-[10px] text-slate-350 font-bold">الرصيد التراكمي المتبقي للراتب:</span>
                                   <span className="text-sm font-mono font-black text-emerald-300">
                                     {Number(dItem.cumulative || 0).toLocaleString("ar")} ج.م
                                   </span>
                                 </div>
                               </div>
+
+                              {/* Native WhatsApp Dispatcher Button for Courier Shift */}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const matched = allCouriers.find(c => c && c.name && c.name.toString().trim().toLowerCase() === selectedCourier.toString().trim().toLowerCase());
+                                  let phoneNum = "";
+                                  if (matched && matched.phone && matched.phone !== "—" && matched.phone.trim() !== "") {
+                                    phoneNum = matched.phone.toString().trim();
+                                  }
+                                  
+                                  if (!phoneNum) {
+                                    const userInput = window.prompt("⚠️ لم يتم العثور على رقم هاتف مسجل لهذا المندوب. يرجى إدخال الرقم لبدء محادثة واتساب (مثال: 01012345678):");
+                                    if (!userInput) return;
+                                    phoneNum = userInput.trim();
+                                  }
+
+                                  let cleanedPhone = phoneNum.replace(/[+\s\-]/g, "");
+                                  if (cleanedPhone.startsWith("0") && cleanedPhone.length === 11) {
+                                    cleanedPhone = "2" + cleanedPhone;
+                                  }
+
+                                  const text = `السلام عليكم يا فندم، تفاصيل تقرير وعمولة الوردية ليوم ${courierDateStr} للمندوب (${selectedCourier}):\n` +
+                                    `- 🛵 شحنات مسلَّمة اليوم: ${dItem.delivered} شحنة\n` +
+                                    `- 🔄 شحنات مرتجعة اليوم: ${dItem.returned} شحنة\n` +
+                                    `- 💵 الكاش المستحق بذمتكم للشركة: ${(dItem.cashCollected || 0).toLocaleString("ar")} ج.م\n` +
+                                    `- 💰 أرباح ومستحقات اليوم: ${dItem.total.toLocaleString("ar")} ج.م\n` +
+                                    `- 🔒 حالة الوردية والمطابقة: ${isSettled ? "مصفاة تماماً ✓" : "معلقة قيد المراجعة والمطابقة ⚠️"}\n\n` +
+                                    `شكراً لتعاملكم وتمنياتنا بالتوفيق لك.`;
+
+                                  const encodedText = encodeURIComponent(text);
+                                  const whatsappUrl = `https://api.whatsapp.com/send?phone=${cleanedPhone}&text=${encodedText}`;
+                                  window.open(whatsappUrl, "_blank");
+                                }}
+                                className="w-full bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-black py-2 px-4 rounded-xl text-[11px] flex items-center justify-center gap-2 cursor-pointer transition-all border border-emerald-400/20 active:scale-98 shadow-md"
+                              >
+                                <span>📦 إرسال كشف اليومية بالواتساب</span>
+                              </button>
                             </div>
                           </div>
                         );

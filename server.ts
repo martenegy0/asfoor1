@@ -1578,7 +1578,7 @@ function getCacheKey(payload: any): string {
 async function fetchWithTimeout(
   url: string,
   options: any = {},
-  timeoutMs = 30000,
+  timeoutMs = 10000,
   retries = 1,
 ): Promise<any> {
   const delay = (ms: number) =>
@@ -5105,9 +5105,15 @@ app.post("/api", async (req: Request, res: Response) => {
         );
         if (!courierProfile) return err(res, "المندوب غير مسجل");
 
-        // Filter courier orders
-        const courierOrders = db.orders.filter(
-          (o: any) => o.courier === courierName,
+        // Filter courier orders from both live and archived orders to ensure complete financial and historical logs
+        const courierOrders = [
+          ...(db.orders || []),
+          ...(db.archivedOrders || []),
+        ].filter(
+          (o: any) =>
+            o.courier &&
+            o.courier.toString().trim().toLowerCase() ===
+              courierName.toString().trim().toLowerCase()
         );
 
         // Calculations - using new persistent configs with backward-compatible defaults
@@ -5386,6 +5392,78 @@ app.post("/api", async (req: Request, res: Response) => {
           const deliveredDay = deliveredList.length;
           const returnedDay = returnedList.length;
 
+          // Compute literal cash collected (حساب الكاش الفعلي المستحق بذمة المندوب لليوم)
+          const dayFullDeliveredOrders = courierOrders.filter(
+            (o: any) =>
+              [
+                "تم التسليم",
+                "تم التسليم بنجاح",
+                "تم التسليم (ناجح كاش)",
+              ].includes(o.status) &&
+              o.delivDate &&
+              o.delivDate.substring(0, 10) === dStr,
+          );
+          const dayFullDeliveredCash = dayFullDeliveredOrders.reduce(
+            (sum: number, o: any) =>
+              sum +
+              Number(
+                o.totalCOD || Number(o.prodPrice || 0) + Number(o.shipPrice || 0),
+              ),
+            0,
+          );
+
+          const dayPartialDeliveredOrders = courierOrders.filter(
+            (o: any) =>
+              ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].includes(o.status) &&
+              o.delivDate &&
+              o.delivDate.substring(0, 10) === dStr,
+          );
+          const dayPartialDeliveredCash = dayPartialDeliveredOrders.reduce(
+            (sum: number, o: any) => {
+              const amt =
+                o.partialAmount !== undefined &&
+                o.partialAmount !== null &&
+                o.partialAmount !== ""
+                  ? Number(o.partialAmount)
+                  : o.actualReceivedCash !== undefined &&
+                      o.actualReceivedCash !== null &&
+                      o.actualReceivedCash !== ""
+                    ? Number(o.actualReceivedCash)
+                    : Number(o.totalCOD || 0);
+              return sum + amt;
+            },
+            0,
+          );
+
+          const dayReturnedPaidOrders = courierOrders.filter(
+            (o: any) =>
+              (o.status === "مرتجع والعميل دفع الشحن" ||
+                o.status === "مرتجع مدفوع الشحن" ||
+                (o.status === "مرتجع" && o.returnShippingType === "paid")) &&
+              o.retDate &&
+              o.retDate.substring(0, 10) === dStr,
+          );
+          const dayReturnedPaidCash = dayReturnedPaidOrders.reduce(
+            (sum: number, o: any) => sum + Number(o.shipPrice || o.shipCost || 0),
+            0,
+          );
+
+          const dayTotalCashCollected = dayFullDeliveredCash + dayPartialDeliveredCash + dayReturnedPaidCash;
+
+          // Check if the day is settled by seeing if any orders for this courier on this day are still in the live db.orders list
+          const hasLiveUnsettledOrdersForDay = db.orders.some(
+            (o: any) =>
+              o.courier &&
+              o.courier.toString().trim().toLowerCase() === courierName.toString().trim().toLowerCase() &&
+              (
+                (o.delivDate && o.delivDate.substring(0, 10) === dStr) ||
+                (o.retDate && o.retDate.substring(0, 10) === dStr) ||
+                (o.orderDate && o.orderDate.substring(0, 10) === dStr) ||
+                (o.createdAt && o.createdAt.substring(0, 10) === dStr)
+              )
+          );
+          const isSettled = !hasLiveUnsettledOrdersForDay;
+
           const baseEarning = Number((basicSalary / daysCount).toFixed(2));
 
           // Strict Financial Logic: Zero out past days' commissions since they have already been closed and paid.
@@ -5440,6 +5518,8 @@ app.post("/api", async (req: Request, res: Response) => {
             retEarning,
             total: Number(total.toFixed(2)),
             cumulative: Number(runningCumulative.toFixed(2)),
+            cashCollected: dayTotalCashCollected,
+            isSettled: isSettled,
           };
         });
 
