@@ -796,8 +796,8 @@ function updateStatus(sheets, d) {
     return { ok: false, error: "قفل أمان: لا يمكن إرجاع حالة الأوردر إلى جديد بعد تعديله وتعديل حالته" };
   }
 
-  if (oldStatus === "تم التسليم") {
-    return { ok: false, error: "لا يمكن تعديل حالة أوردر تم تسليمه مسبقاً" };
+  if ((oldStatus === "تم التسليم" || oldStatus === "التسليم للمورد" || oldStatus === "تم تسليم المرتجع للمورد") && !isAdmin && cleanRole !== "محاسب") {
+    return { ok: false, error: "لا يمكن تعديل حالة الأوردر المغلق مسبقاً إلا للمسؤولين والمدير" };
   }
 
   // الحالات الافتراضية للتحديث
@@ -994,10 +994,17 @@ function updateOrder(sheets, d) {
   const o = d.order;
   if (!o || !o.tracking) return { ok: false, error: "بيانات الأوردر المطلوب تعديله غير صحيحة" };
 
-  const orderIndex = findRowIndex(sheets.orders, "tracking", o.tracking);
+  let orderIndex = findRowIndex(sheets.orders, "tracking", o.tracking);
+  let targetSheet = sheets.orders;
+  if (orderIndex === -1) {
+    orderIndex = findRowIndex(sheets.archivedOrders, "tracking", o.tracking);
+    if (orderIndex !== -1) {
+      targetSheet = sheets.archivedOrders;
+    }
+  }
   if (orderIndex === -1) return { ok: false, error: "الأوردر غير موجود" };
 
-  const orders = getTableData(sheets.orders);
+  const orders = getTableData(targetSheet);
   const order = orders.find(x => x.tracking === o.tracking);
 
   const oldProd = Number(order.prodPrice || 0);
@@ -1085,16 +1092,23 @@ function updateOrder(sheets, d) {
   }
 
   o.updatedAt = now();
-  updateRowByObject(sheets.orders, orderIndex, o);
+  updateRowByObject(targetSheet, orderIndex, o);
   return { ok: true, msg: "تم حفظ وتحديث الأوردر بالكامل بنجاح" };
 }
 
 function deleteOrder(sheets, d) {
   const { tracking, currentUser } = d;
-  const orderIndex = findRowIndex(sheets.orders, "tracking", tracking);
+  let orderIndex = findRowIndex(sheets.orders, "tracking", tracking);
+  let targetSheet = sheets.orders;
+  if (orderIndex === -1) {
+    orderIndex = findRowIndex(sheets.archivedOrders, "tracking", tracking);
+    if (orderIndex !== -1) {
+      targetSheet = sheets.archivedOrders;
+    }
+  }
   if (orderIndex === -1) return { ok: false, error: "الأوردر غير موجود لحذفه" };
 
-  sheets.orders.deleteRow(orderIndex);
+  targetSheet.deleteRow(orderIndex);
 
   // تسجيل عملية الحذف في سجلات المراقبة الأمنية
   appendToSheet(sheets.auditLog, ["user", "type", "dateTime", "oldVal", "newVal", "reason"], {
@@ -3015,17 +3029,6 @@ function settleCourierOrders(sheets, d) {
         }
         rowDataMap["updatedAt"] = nowCairoStr;
 
-        // Populate values based on archive headers
-        const archiveRowValues = [];
-        for (let h = 0; h < archiveHeaders.length; h++) {
-          const headerName = archiveHeaders[h];
-          const val = rowDataMap[headerName] !== undefined ? rowDataMap[headerName] : "";
-          archiveRowValues.push(val);
-        }
-
-        // Write row into archive sheet
-        archiveSheet.appendRow(archiveRowValues);
-
         // Record status change event
         appendToSheet(sheets.statusHistory, ["tracking", "oldStatus", "newStatus", "updatedBy", "dateTime"], {
           tracking: trackingVal,
@@ -3035,9 +3038,46 @@ function settleCourierOrders(sheets, d) {
           dateTime: nowCairoStr
         });
 
-        // Delete row from orders sheet
-        sheet.deleteRow(rowIndex);
-        settledCount++;
+        // Strict Archiving Logic:
+        // Only "تم التسليم" and "التسليم للمورد" are allowed to be archived and deleted from the live sheets.
+        // Orders with other warehouse states (like "مرتجع بالمستودع", "مرتجع جزئي بالمستودع", "مؤجل بالمستودع", "لا يوجد رد بالمستودع") MUST remain in the active sheet.
+        var shouldArchive = false;
+        if (nextStatus === "تم التسليم" || nextStatus === "تم التسليم بنجاح" || nextStatus === "تم التسليم (ناجح كاش)" || nextStatus === "التسليم للمورد" || nextStatus === "تم تسليم المرتجع للمورد") {
+          shouldArchive = true;
+        }
+
+        if (shouldArchive) {
+          // Populate values based on archive headers
+          const archiveRowValues = [];
+          for (let h = 0; h < archiveHeaders.length; h++) {
+            const headerName = archiveHeaders[h];
+            const val = rowDataMap[headerName] !== undefined ? rowDataMap[headerName] : "";
+            archiveRowValues.push(val);
+          }
+
+          // Write row into archive sheet
+          archiveSheet.appendRow(archiveRowValues);
+
+          // Verify row duplication before deletion to protect logistics data integrity
+          let lastArchRow = archiveSheet.getLastRow();
+          let trColIdx = archiveHeaders.indexOf("tracking") + 1;
+          let confirmTracking = "";
+          if (trColIdx > 0 && lastArchRow > 0) {
+            confirmTracking = archiveSheet.getRange(lastArchRow, trColIdx).getValue().toString().trim();
+          }
+
+          if (confirmTracking.toUpperCase() === trackingVal.toUpperCase()) {
+            // Delete row from active orders sheet
+            sheet.deleteRow(rowIndex);
+            settledCount++;
+          } else {
+            // Verification failed, fallback: preserve in active sheet but update properties
+            updateRowByObject(sheet, rowIndex, rowDataMap);
+          }
+        } else {
+          // Keep in active sheet, just update in place!
+          updateRowByObject(sheet, rowIndex, rowDataMap);
+        }
       }
     }
 
