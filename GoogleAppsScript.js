@@ -1547,18 +1547,7 @@ function isHumanPayout(l) {
 
 function isReturnedDeliveredToSupplier(status) {
   var s = (status || "").toString().trim();
-  var patterns = [
-    "تم تسليم المرتجع للمورد",
-    "مرتجع تم تسليمه للمورد",
-    "التسليم للمورد",
-    "تم تسليم المرتجع للمورد وتصفية حسابه",
-    "تسليم المرتجع للمورد",
-    "تسليمه للمورد",
-    "تصفية حسابه"
-  ];
-  return patterns.some(function(p) {
-    return s.indexOf(p) !== -1;
-  });
+  return s === "تم تسليم المرتجع للمورد" || s === "تم تسليم المرتجع للمورد وتصفية حسابه";
 }
 
 function isSomeReturn(status) {

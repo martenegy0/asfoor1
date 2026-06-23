@@ -536,16 +536,7 @@ function writeDB(data: any): void {
 
 function isReturnedDeliveredToSupplier(status: string): boolean {
   const s = (status || "").toString().trim();
-  const patterns = [
-    "تم تسليم المرتجع للمورد",
-    "مرتجع تم تسليمه للمورد",
-    "التسليم للمورد",
-    "تم تسليم المرتجع للمورد وتصفية حسابه",
-    "تسليم المرتجع للمورد",
-    "تسليمه للمورد",
-    "تصفية حسابه",
-  ];
-  return patterns.some((p) => s.includes(p));
+  return s === "تم تسليم المرتجع للمورد" || s === "تم تسليم المرتجع للمورد وتصفية حسابه";
 }
 
 function isSomeReturn(status: string): boolean {
@@ -1994,11 +1985,26 @@ app.post("/api", async (req: Request, res: Response) => {
           }
         }
 
-        // Fast Local Pre-screening duplicate check to prevent duplicates in Sheets mode completely
-        if (d.action === "addOrder" && !d.force) {
-          const oInput = d.order || {};
-          const phoneClean = fixPhone(oInput.phone || "");
-          if (phoneClean) {
+        // Fast Optimistic UI & Asynchronous Background Sync for Manual Order Insertion (addOrder / addSingleOrder)
+        if (d.action === "addOrder" || d.action === "addSingleOrder") {
+          if (
+            currentRole !== "مدير" &&
+            currentRole !== "مشرف" &&
+            currentRole !== "موظف عمليات" &&
+            currentRole !== "مورد"
+          ) {
+            return err(res, "ليس لديك صلاحية إضافة أوردرات");
+          }
+
+          const o = d.order || {};
+          const phoneClean = fixPhone(o.phone || "");
+
+          if (!phoneClean) {
+            return err(res, "رقم الهاتف مطلوب");
+          }
+
+          // Duplicate pre-screening (unless forced)
+          if (!d.force) {
             try {
               const db = readDB();
               const dupOrders = db.orders.filter(
@@ -2024,6 +2030,104 @@ app.post("/api", async (req: Request, res: Response) => {
               console.error("Local duplicate screening failed:", dupErr);
             }
           }
+
+          // Invalidate cached data instantly
+          READ_CACHE.clear();
+          ACTIVE_FETCHES.clear();
+
+          // Read local db and generate local ID and order
+          const db = readDB();
+          const id = generateID(db);
+          const tNow = now();
+          const shipPrice = Number(o.shipPrice || 60);
+          const totalCOD = Number(o.totalCOD || (Number(o.prodPrice || 0) + shipPrice));
+          const prodPrice = totalCOD - shipPrice;
+
+          const newOrder = {
+            tracking: id,
+            createdAt: tNow,
+            updatedAt: tNow,
+            orderDate: tod(),
+            supplier: isSupplierRole(currentRole) ? currentUser : o.supplier || "",
+            prodType: o.prodType || "",
+            customer: o.customer || "",
+            phone: phoneClean,
+            phone2: fixPhone(o.phone2 || ""),
+            gov: o.gov || "",
+            region: o.region || "",
+            address: o.address || "",
+            prodPrice: prodPrice,
+            shipPrice: shipPrice,
+            totalCOD: totalCOD,
+            shipCost: shipPrice,
+            courier: "", // Empty during creation
+            status: "جديد", // Always starts as "جديد"
+            notes: o.notes || "",
+            delivDate: "",
+            retDate: "",
+            addedBy: currentUser,
+            commission: 0,
+            returnShippingType: "",
+            returnQueueStatus: "",
+            returnQueueAgent: "",
+            "موقع العميل/الخريطة": "",
+          };
+
+          // Register supplier dynamically in local cache if not exists
+          const orderSupplier = (newOrder.supplier || "").toString().trim();
+          if (orderSupplier) {
+            if (!db.suppliers) db.suppliers = [];
+            const matchedSup = db.suppliers.find(
+              (s: any) =>
+                s.name &&
+                s.name.trim().toLowerCase() === orderSupplier.toLowerCase(),
+            );
+            if (!matchedSup) {
+              db.suppliers.push({
+                name: orderSupplier,
+                phone: "—",
+                price: shipPrice,
+                notes: "تم تسجيله تلقائياً عن طريق إضافة أوردر يدوي",
+              });
+            }
+          }
+
+          db.orders.push(newOrder);
+
+          if (!db.statusHistory) db.statusHistory = [];
+          db.statusHistory.push({
+            tracking: id,
+            oldStatus: "",
+            newStatus: "جديد",
+            updatedBy: currentUser,
+            dateTime: tNow,
+          });
+
+          writeDB(db);
+
+          // Update payload to sheet with the generated tracking ID
+          payloadToSheet.order = {
+            ...o,
+            tracking: id,
+            supplier: newOrder.supplier,
+            phone: phoneClean,
+            prodPrice,
+            shipPrice,
+            totalCOD,
+            status: "جديد",
+          };
+          payloadToSheet.tracking = id;
+
+          // Dispatch the heavy append to Google Sheets asynchronously in the background
+          executeProxyRequest(gscriptUrl, payloadToSheet).catch((syncErr) => {
+            console.error(
+              `Async Google Sheets synchronization for ${d.action} failed:`,
+              syncErr,
+            );
+          });
+
+          // Return extremely fast success response to client
+          return ok(res, { id, msg: `تم تسجيل الأوردر الجديد بنجاح برقم تتبع: ${id} ويتم مزامنته بالخلفية` });
         }
 
         if (d.action === "updateUser" && !payloadToSheet.user) {
