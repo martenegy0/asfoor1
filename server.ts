@@ -3480,6 +3480,7 @@ app.post("/api", async (req: Request, res: Response) => {
             "مؤجل",
             "لا يوجد رد",
             "العميل رد وجاري التسليم",
+            "خارج مع المندوب",
           ];
           if (!agentAllowedStatuses.includes(status)) {
             return err(res, "غير مسموح للمندوب باختيار هذه الحالة");
@@ -3497,6 +3498,7 @@ app.post("/api", async (req: Request, res: Response) => {
             "مؤجل",
             "لا يوجد رد",
             "جديد",
+            "خارج مع المندوب",
           ];
           if (!opsAllowedStatuses.includes(status)) {
             return err(
@@ -4059,6 +4061,7 @@ app.post("/api", async (req: Request, res: Response) => {
             "مؤجل",
             "لا يوجد رد",
             "جديد",
+            "خارج مع المندوب",
           ];
           if (status && !opsAllowed.includes(status)) {
             return err(
@@ -4073,7 +4076,16 @@ app.post("/api", async (req: Request, res: Response) => {
             );
           }
         } else if (currentRole === "مندوب") {
-          const agentAllowed = ["تم التسليم", "مؤجل", "لا يوجد رد", "مرتجع"];
+          const agentAllowed = [
+            "تم التسليم",
+            "مؤجل",
+            "لا يوجد رد",
+            "مرتجع",
+            "خارج مع المندوب",
+            "تسليم جزئي",
+            "تسليم جزئي - معلق للجرد",
+            "العميل رد وجاري التسليم",
+          ];
           if (status && !agentAllowed.includes(status)) {
             return err(
               res,
@@ -4373,6 +4385,7 @@ app.post("/api", async (req: Request, res: Response) => {
                 "مؤجل",
                 "لا يوجد رد",
                 "جديد",
+                "خارج مع المندوب",
               ];
               if (!opsAllowed.includes(status)) continue;
             } else if (currentRole === "مندوب") {
@@ -4381,6 +4394,10 @@ app.post("/api", async (req: Request, res: Response) => {
                 "مؤجل",
                 "لا يوجد رد",
                 "مرتجع",
+                "خارج مع المندوب",
+                "تسليم جزئي",
+                "تسليم جزئي - معلق للجرد",
+                "العميل رد وجاري التسليم",
               ];
               if (!agentAllowed.includes(status)) continue;
             }

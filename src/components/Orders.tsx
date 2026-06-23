@@ -264,6 +264,30 @@ export default function Orders({ token, role, username, orders, setOrders, couri
   const [mobileDrawerOrder, setMobileDrawerOrder] = useState<any | null>(null);
   const [barcodeScannerOpen, setBarcodeScannerOpen] = useState<boolean>(false);
   const [activeFilter, setActiveFilter] = useState("all");
+  
+  // Status History states for order level audit logs
+  const [histories, setHistories] = useState<Record<string, any[]>>({});
+  const [loadingHistories, setLoadingHistories] = useState<Record<string, boolean>>({});
+  const [expandedHistories, setExpandedHistories] = useState<Record<string, boolean>>({});
+
+  const toggleHistory = async (tracking: string) => {
+    const isExpanded = !expandedHistories[tracking];
+    setExpandedHistories(prev => ({ ...prev, [tracking]: isExpanded }));
+    if (isExpanded && !histories[tracking]) {
+      setLoadingHistories(prev => ({ ...prev, [tracking]: true }));
+      try {
+        const res = await apiCall("statusHistory", token, { tracking });
+        if (res && res.ok !== false && res.history) {
+          setHistories(prev => ({ ...prev, [tracking]: res.history }));
+        }
+      } catch (e) {
+        console.error("Error loading status history for: " + tracking, e);
+      } finally {
+        setLoadingHistories(prev => ({ ...prev, [tracking]: false }));
+      }
+    }
+  };
+
   const [selectedDate, setSelectedDate] = useState<string>(getTodayDateStr());
   const [selectedSupplierFilter, setSelectedSupplierFilter] = useState<string>("");
   const [selectedCourierFilter, setSelectedCourierFilter] = useState<string>("");
@@ -530,6 +554,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
           const status = (o.status || "").toString().trim();
           if (activeFilter === "جديد" && status !== "جديد") return false;
           if (activeFilter === "مسند" && !["تم الإسناد", "مسند", "تم الاسناد"].includes(status)) return false;
+          if (activeFilter === "خارج مع المندوب" && !["خارج مع المندوب", "خارج للتسليم", "خارج للتوصيل", "مع المندوب"].includes(status)) return false;
           if (activeFilter === "العميل رد وجاري التسليم" && !["تم رد العميل وجاري التنسيق", "العميل رد وجاري التسليم"].includes(status) && !status.includes("رد وجاري")) return false;
           if (activeFilter === "تم التسليم" && !["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(status)) return false;
           if (activeFilter === "تسليم جزئي" && !["تسليم جزئي", "تسليم جزئي - معلق للجرد"].includes(status)) return false;
@@ -539,7 +564,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
           if (activeFilter === "تم تسليمه للمورد" && !["تم تسليم المرتجع للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "جاري الرجوع للمورد", "التسليم للمورد", "تم تسليمه للمورد"].includes(status)) return false;
           
           // Non-standard fallback filter matching
-          if (!["جديد", "مسند", "العميل رد وجاري التسليم", "تم التسليم", "تسليم جزئي", "مؤجل", "العميل لا يرد", "مرتجع بالمستودع", "تم تسليمه للمورد"].includes(activeFilter)) {
+          if (!["جديد", "مسند", "العميل رد وجاري التسليم", "تم التسليم", "تسليم جزئي", "مؤجل", "العميل لا يرد", "مرتجع بالمستودع", "تم تسليمه للمورد", "خارج مع المندوب"].includes(activeFilter)) {
             if (status !== activeFilter) return false;
           }
         }
@@ -633,6 +658,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       all: dayOrders.length,
       "جديد": 0,
       "مسند": 0,
+      "خارج مع المندوب": 0,
       "العميل رد وجاري التسليم": 0,
       "تم التسليم": 0,
       "تسليم جزئي": 0,
@@ -646,6 +672,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       const status = (o.status || "").toString().trim();
       if (status === "جديد") counts["جديد"]++;
       else if (["تم الإسناد", "مسند", "تم الاسناد"].includes(status)) counts["مسند"]++;
+      else if (["خارج مع المندوب", "خارج للتسليم", "خارج للتوصيل", "مع المندوب"].includes(status)) counts["خارج مع المندوب"]++;
       else if (["تم رد العميل وجاري التنسيق", "العميل رد وجاري التسليم"].includes(status) || status.includes("رد وجاري")) counts["العميل رد وجاري التسليم"]++;
       else if (["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(status)) counts["تم التسليم"]++;
       else if (["تسليم جزئي", "تسليم جزئي - معلق للجرد"].includes(status)) counts["تسليم جزئي"]++;
@@ -1283,6 +1310,65 @@ export default function Orders({ token, role, username, orders, setOrders, couri
     }
   };
 
+  const renderChangeHistory = (tracking: string) => {
+    const list = histories[tracking] || [];
+    const isLoading = !!loadingHistories[tracking];
+    const isExpanded = !!expandedHistories[tracking];
+
+    return (
+      <div className="border-t border-white/6 pt-3 mt-3 space-y-2">
+        <button
+          type="button"
+          onClick={() => toggleHistory(tracking)}
+          className="flex items-center gap-1.5 text-[10.5px] text-amber-500 hover:text-amber-400 font-black cursor-pointer bg-slate-950/40 hover:bg-slate-950 px-2.5 py-1.5 rounded-lg border border-white/6 select-none transition-all"
+        >
+          <span>📜 {isExpanded ? "إخفاء سجل حركة الشحنة" : "عرض سجل حركة الشحنة (حالة الأوردر)"}</span>
+          {isLoading && <Loader2 size={10} className="animate-spin text-amber-500" />}
+        </button>
+
+        {isExpanded && (
+          <div className="bg-slate-950/60 rounded-xl p-3 border border-white/4 space-y-2 text-right" dir="rtl">
+            {isLoading ? (
+              <div className="flex items-center justify-center gap-2 py-4 text-[10.5px] text-slate-500 font-bold">
+                <Loader2 size={12} className="animate-spin" />
+                <span>جاري تحميل سجل الحركات...</span>
+              </div>
+            ) : list.length === 0 ? (
+              <p className="text-[10px] text-slate-550 font-bold py-1">لا توجد حركات مسجلة لهذه الشحنة حتى الآن.</p>
+            ) : (
+              <div className="space-y-2.5 relative border-r-2 border-slate-800 pr-3.5 mr-1.5 py-1">
+                {list.map((h, i) => (
+                  <div key={i} className="relative text-[10px]">
+                    {/* Circle marker */}
+                    <span className="absolute right-[-19.5px] top-[4px] w-2.5 h-2.5 rounded-full bg-amber-500 border border-slate-900 shadow-sm" />
+                    
+                    <div className="flex items-center justify-between flex-wrap gap-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-extrabold text-slate-200">{h.dateTime}</span>
+                        <span className="text-slate-505 text-slate-400">· بواسطة:</span>
+                        <span className="font-black text-indigo-400">{h.updatedBy}</span>
+                      </div>
+                    </div>
+                    <div className="mt-1 flex items-center gap-2 flex-wrap text-[10px] text-slate-305">
+                      <span>القديمة:</span>
+                      <span className="px-1.5 py-0.5 rounded bg-slate-900 border border-white/4 text-slate-400 font-bold">
+                        {h.oldStatus || "غير محدد"}
+                      </span>
+                      <span>◀</span>
+                      <span className="px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/20 text-amber-500 font-black">
+                        {h.newStatus || "جديد"}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderOrderCard = (o: any) => {
     const isSel = selected.has(o.tracking);
     const statusType = (o.status || "").toString();
@@ -1792,6 +1878,9 @@ export default function Orders({ token, role, username, orders, setOrders, couri
             </div>
           );
         })()}
+
+        {/* Dynamic collapsible audit log change history */}
+        {renderChangeHistory(o.tracking)}
       </div>
     );
   };
@@ -1947,6 +2036,10 @@ export default function Orders({ token, role, username, orders, setOrders, couri
         setSelectedReturnOrder={setSelectedReturnOrder}
         setDeliveryChoiceOrder={setDeliveryChoiceOrder}
         setPartialAmountInput={setPartialAmountInput}
+        histories={histories}
+        loadingHistories={loadingHistories}
+        expandedHistories={expandedHistories}
+        toggleHistory={toggleHistory}
       />
 
       {/* 🖥️ Desktop Interface (visible on hidden md:block) */}
@@ -2087,11 +2180,12 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       )}
 
       {/* Category filters Grid */}
-      <div className="grid grid-cols-2 xs:grid-cols-2 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-10 gap-2 px-4 font-sans">
+      <div className="grid grid-cols-2 xs:grid-cols-2 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-11 gap-2 px-4 font-sans">
         {[
           { key: "all", label: "الكل" },
           { key: "جديد", label: "🆕 جديد" },
           { key: "مسند", label: "📋 مسند" },
+          { key: "خارج مع المندوب", label: "🚚 مع المندوب" },
           { key: "العميل رد وجاري التسليم", label: "📞 لرد وجاري" },
           { key: "تم التسليم", label: "✅ تم التسليم" },
           { key: "تسليم جزئي", label: "📦 تسليم جزئي" },

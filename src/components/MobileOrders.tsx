@@ -1,5 +1,5 @@
 import React, { useState, useRef, useMemo, useEffect } from "react";
-import { Phone, MessageSquare, Search, Trash2, MapPin, ChevronDown, ChevronUp } from "lucide-react";
+import { Phone, MessageSquare, Search, Trash2, MapPin, ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import { apiCall } from "../utils";
 
 interface SearchableCourierSelectProps {
@@ -174,6 +174,10 @@ interface MobileOrdersProps {
   setSelectedReturnOrder: (val: any) => void;
   setDeliveryChoiceOrder: (val: any) => void;
   setPartialAmountInput: (val: string) => void;
+  histories?: Record<string, any[]>;
+  loadingHistories?: Record<string, boolean>;
+  expandedHistories?: Record<string, boolean>;
+  toggleHistory?: (tracking: string) => Promise<void>;
 }
 
 export default function MobileOrders({
@@ -209,7 +213,11 @@ export default function MobileOrders({
   setReturnedSelectOpen,
   setSelectedReturnOrder,
   setDeliveryChoiceOrder,
-  setPartialAmountInput
+  setPartialAmountInput,
+  histories = {},
+  loadingHistories = {},
+  expandedHistories = {},
+  toggleHistory
 }: MobileOrdersProps) {
   const [mobileDrawerOrder, setMobileDrawerOrder] = useState<any | null>(null);
   const isSupplier = (role || "").toString().trim() === "مورد" || (role || "").toString().trim().includes("مورد");
@@ -651,6 +659,52 @@ export default function MobileOrders({
                               فتح لوحة العمليات الشاملة ⚙️
                             </button>
                           </div>
+
+                          {/* Dynamic collapsible audit log change history */}
+                          {toggleHistory && (
+                            <div className="border-t border-white/5 pt-3.5 mt-2.5 space-y-2">
+                              <button
+                                type="button"
+                                onClick={() => toggleHistory(o.tracking)}
+                                className="flex items-center gap-1 text-[10px] text-amber-500 hover:text-amber-400 font-extrabold cursor-pointer bg-slate-950/40 hover:bg-slate-950 px-2.5 py-2 rounded-lg border border-white/6 select-none transition-all w-full justify-center"
+                              >
+                                <span>📜 {(expandedHistories || {})[o.tracking] ? "إخفاء سجل حركة الشحنة" : "عرض سجل حركة الشحنة (تتبع)"}</span>
+                                {(loadingHistories || {})[o.tracking] && <Loader2 size={10} className="animate-spin text-amber-500 mr-1" />}
+                              </button>
+
+                              {(expandedHistories || {})[o.tracking] && (
+                                <div className="bg-slate-950/80 rounded-xl p-3 border border-white/4 space-y-2 text-right text-[10px]" dir="rtl">
+                                  {(loadingHistories || {})[o.tracking] ? (
+                                    <div className="flex items-center justify-center gap-2 py-4 text-slate-500 font-bold">
+                                      <Loader2 size={12} className="animate-spin" />
+                                      <span>جاري التحميل...</span>
+                                    </div>
+                                  ) : (histories || {})[o.tracking]?.length === 0 || !(histories || {})[o.tracking] ? (
+                                    <p className="text-slate-550 font-bold py-1">لا توجد حركات مسجلة للطلب.</p>
+                                  ) : (
+                                    <div className="space-y-2.5 relative border-r border-slate-800 pr-3.5 mr-1 py-1">
+                                      {(histories || {})[o.tracking].map((h, idx) => (
+                                        <div key={idx} className="relative text-[9.5px]">
+                                          <span className="absolute right-[-17.5px] top-[3px] w-2 h-2 rounded-full bg-amber-500 border border-slate-900 shadow-sm" />
+                                          <div className="flex items-center gap-1 flex-wrap">
+                                            <span className="font-extrabold text-slate-200">{h.dateTime}</span>
+                                            <span className="text-slate-400">· بواسطة:</span>
+                                            <span className="font-black text-indigo-400">{h.updatedBy}</span>
+                                          </div>
+                                          <div className="mt-0.5 flex items-center gap-1.5 flex-wrap text-slate-350">
+                                            <span>القديمة:</span>
+                                            <span className="px-1 rounded bg-slate-900 text-slate-400 font-extrabold">{h.oldStatus || "غير محدد"}</span>
+                                            <span>◀</span>
+                                            <span className="px-1 rounded bg-amber-500/10 text-amber-500 font-extrabold">{h.newStatus || "جديد"}</span>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </>
                       )}
                     </div>
