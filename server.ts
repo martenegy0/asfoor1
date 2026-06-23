@@ -2760,6 +2760,11 @@ app.post("/api", async (req: Request, res: Response) => {
 
               if (isAgent || isReturnsOfficer || isOps) {
                 const todayStr = tod(); // Cairo YYYY-MM-DD
+                const bypassTodayFilter =
+                  d.includeArchived === true ||
+                  d.includeArchived === "true" ||
+                  !!d.search ||
+                  !!d.tracking;
                 ordersList = ordersList.filter((o: any) => {
                   // 1. Role boundaries
                   if (isAgent) {
@@ -2780,6 +2785,10 @@ app.post("/api", async (req: Request, res: Response) => {
                         "تم تسليم المرتجع للمورد",
                       ].includes(o.status) || o.returnQueueStatus;
                     if (!isRet) return false;
+                  }
+
+                  if (bypassTodayFilter) {
+                    return true;
                   }
 
                   // 2. Strict Today's Filter - Filter out orders completed and completed on previous days
@@ -2927,8 +2936,13 @@ app.post("/api", async (req: Request, res: Response) => {
           currentRole === "موظف عمليات" ||
           (currentRole || "").toString().includes("عمليات");
 
+        const needArchived =
+          d.includeArchived === true ||
+          d.includeArchived === "true" ||
+          !!d.search ||
+          !!d.tracking;
         let ordersList = [...db.orders];
-        if (d.includeArchived === true || d.includeArchived === "true") {
+        if (needArchived) {
           const archived = db.archivedOrders || [];
           ordersList = [...db.orders, ...archived];
         }
@@ -2936,8 +2950,7 @@ app.post("/api", async (req: Request, res: Response) => {
         // Apply role filter
         if (isAgent || isReturnsOfficer || isOps) {
           const todayStr = tod(); // Cairo YYYY-MM-DD
-          const bypassTodayFilter =
-            d.includeArchived === true || d.includeArchived === "true";
+          const bypassTodayFilter = needArchived;
           ordersList = ordersList.filter((o: any) => {
             // 1. Role boundaries
             if (isAgent) {

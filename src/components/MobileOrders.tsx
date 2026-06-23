@@ -487,7 +487,12 @@ export default function MobileOrders({
                         <span className="text-white/40 text-xs">|</span>
                         <span className="text-sm font-black text-slate-100 truncate max-w-[140px] xs:max-w-[180px]">{o.customer || "بدون اسم عميل"}</span>
                       </div>
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1.5 font-sans">
+                        {(o.isArchived === true || o.isArchived === "true" || o.isSettled === true || o.isSettled === "true" || o.is_settled === true || o.is_settled === "true") && (
+                          <span className="text-[8.5px] font-extrabold bg-indigo-950 text-amber-500 border border-amber-500/20 px-1 py-0.5 rounded shadow-sm">
+                            📦 مؤرشف
+                          </span>
+                        )}
                         <span className={`text-[9.5px] font-black px-2 py-0.5 rounded-full ${getBadgeStyle(o.status)}`}>
                           {o.status}
                         </span>

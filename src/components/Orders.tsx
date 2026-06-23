@@ -526,7 +526,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
         const hasSearch = !!search.trim();
 
         // Exclude delayed / unanswered hold-ups from the main "all" (الكل) tab list globally (do not hide from courier)
-        if (!isAgent && activeFilter === "all" && ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)) {
+        if (!hasSearch && !isAgent && activeFilter === "all" && ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)) {
           return false;
         }
 
@@ -545,11 +545,11 @@ export default function Orders({ token, role, username, orders, setOrders, couri
         }
 
         // Operational Daily Report Mode (groups New, Assigned, Pending, Coordinating statuses)
-        if (showOperationalReport) {
+        if (!hasSearch && showOperationalReport) {
           const status = (o.status || "").toString().trim();
           const isOperational = ["جديد", "تم الإسناد", "مسند", "تم الاسناد", "مؤجل", "لا يوجد رد", "العميل لم يقم بالرد", "تم رد العميل وجاري التنسيق", "العميل رد وجاري التسليم"].includes(status) || status.includes("رد وجاري");
           if (!isOperational) return false;
-        } else if (activeFilter !== "all") {
+        } else if (!hasSearch && activeFilter !== "all") {
           // Logistic Status Categorization & Fallback mapping
           const status = (o.status || "").toString().trim();
           if (activeFilter === "جديد" && status !== "جديد") return false;
@@ -570,7 +570,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
         }
 
         // Dynamic Date Filter - Filter by orderDate (or fallback to createdAt) matching selectedDateYMD (do not hide from courier view to capture complete custody)
-        if (!isAgent && selectedDate !== "all") {
+        if (!hasSearch && !isAgent && selectedDate !== "all") {
           const orderDayStr = normalizeDateToYMD(o.orderDate || o.createdAt);
           if (orderDayStr !== selectedDate) return false;
         }
@@ -1456,6 +1456,11 @@ export default function Orders({ token, role, username, orders, setOrders, couri
           </div>
 
           <div className="flex items-center gap-1.5 flex-wrap">
+            {(o.isArchived === true || o.isArchived === "true" || o.isSettled === true || o.isSettled === "true" || o.is_settled === true || o.is_settled === "true") && (
+              <span className="text-[9px] font-extrabold bg-indigo-950 text-amber-400 border border-amber-500/30 px-2 py-0.5 rounded shadow-sm">
+                📦 مؤرشف
+              </span>
+            )}
             {o.returnShippingType && (
               <span className="text-[8.5px] font-black bg-purple-950 text-purple-400 border border-purple-900/30 px-1.5 py-0.5 rounded">
                 شحن مرتجع: {o.returnShippingType === "paid" ? "مدفوع بالكامل" : "غير مدفوع"}

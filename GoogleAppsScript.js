@@ -440,8 +440,17 @@ function updateRowByObject(sheet, rowIndex, obj) {
 // ───────────────────────────────────────────────
 
 function getOrders(sheets) {
-  const orders = getTableData(sheets.orders);
-  return { ok: true, orders: orders };
+  var orders = getTableData(sheets.orders) || [];
+  orders.forEach(function(o) { if (o) o.isArchived = false; });
+  var archived = [];
+  try {
+    archived = getTableData(sheets.archivedOrders) || [];
+    archived.forEach(function(o) { if (o) o.isArchived = true; });
+  } catch (e) {
+    // Graceful fallback
+  }
+  var merged = orders.concat(archived);
+  return { ok: true, orders: merged };
 }
 
 function getArchivedOrders(sheets) {
@@ -762,10 +771,17 @@ function updateStatus(sheets, d) {
     }
   }
 
-  const orderIndex = findRowIndex(sheets.orders, "tracking", tracking);
+  let orderIndex = findRowIndex(sheets.orders, "tracking", tracking);
+  let targetSheet = sheets.orders;
+  if (orderIndex === -1) {
+    orderIndex = findRowIndex(sheets.archivedOrders, "tracking", tracking);
+    if (orderIndex !== -1) {
+      targetSheet = sheets.archivedOrders;
+    }
+  }
   if (orderIndex === -1) return { ok: false, error: "الأوردر المطلوب غير موجود" };
 
-  const orders = getTableData(sheets.orders);
+  const orders = getTableData(targetSheet);
   const order = orders.find(x => x.tracking === tracking);
 
   // Rider can only touch their own orders
@@ -960,7 +976,7 @@ function updateStatus(sheets, d) {
   }
 
   // إتمام الحفظ والتعديل
-  updateRowByObject(sheets.orders, orderIndex, updateObj);
+  updateRowByObject(targetSheet, orderIndex, updateObj);
 
   // إثبات التغيير في سجل الحركات والأمان
   appendToSheet(sheets.statusHistory, ["tracking", "oldStatus", "newStatus", "updatedBy", "dateTime"], {
