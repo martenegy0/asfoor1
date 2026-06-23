@@ -221,19 +221,32 @@ export default function Orders({ token, role, username, orders, setOrders, couri
     }
   };
 
+  const deDuplicatedOrders = React.useMemo(() => {
+    if (!Array.isArray(orders)) return [];
+    const seen = new Set();
+    return orders.filter((o: any) => {
+      if (!o) return false;
+      const key = (o.tracking || o.id || "").toString().trim().toUpperCase();
+      if (!key) return true;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [orders]);
+
   const roleFilteredOrders = React.useMemo(() => {
     const isSearching = search.trim().length > 0;
 
     // Strip settled orders out of active daily operations completely, EXCEPT when searching
-    const activeUnsettledOrders = orders.filter((o: any) => {
+    const activeUnsettledOrders = deDuplicatedOrders.filter((o: any) => {
       if (isSearching) return true; // Include archived/settled orders during active search queries
       const isS = o.isSettled === true || o.isSettled === "true" || o.is_settled === "true" || o.is_settled === true;
       return !isS;
     });
 
     if (isReturnsOfficer) {
-      if (isSearching) return orders; // Allow returns officer to search all matching orders
-      return orders.filter((o: any) => {
+      if (isSearching) return deDuplicatedOrders; // Allow returns officer to search all matching orders
+      return deDuplicatedOrders.filter((o: any) => {
         const isHandedOver = ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status);
         if (isHandedOver) {
           const updateDateYMD = o.updatedAt ? normalizeDateToYMD(o.updatedAt) : o.retDate ? normalizeDateToYMD(o.retDate) : "";
@@ -271,7 +284,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       });
     }
     return activeUnsettledOrders;
-  }, [orders, isAgent, isReturnsOfficer, isOps, todayDateStr, search, username]);
+  }, [deDuplicatedOrders, isAgent, isReturnsOfficer, isOps, todayDateStr, search, username]);
 
   const todayDeliveredOrders = roleFilteredOrders.filter((o: any) => {
     const isMyDeliv = o.courier === username && o.status === "تم التسليم";

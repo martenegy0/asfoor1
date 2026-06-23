@@ -2035,9 +2035,19 @@ app.post("/api", async (req: Request, res: Response) => {
           READ_CACHE.clear();
           ACTIVE_FETCHES.clear();
 
-          // Read local db and generate local ID and order
+          // Read local db and verify / generate local ID
           const db = readDB();
-          const id = generateID(db);
+          let id = o.tracking || d.tracking;
+          if (id) {
+            const idExists = (db.orders || []).some((x: any) => x.tracking === id) || 
+                             (db.archivedOrders || []).some((x: any) => x.tracking === id);
+            if (idExists) {
+              return err(res, "هذا الأوردر مسجل بالفعل في النظام المركزي");
+            }
+          } else {
+            id = generateID(db);
+          }
+
           const tNow = now();
           const shipPrice = Number(o.shipPrice || 60);
           const totalCOD = Number(o.totalCOD || (Number(o.prodPrice || 0) + shipPrice));
@@ -2882,7 +2892,19 @@ app.post("/api", async (req: Request, res: Response) => {
               const isOps =
                 (currentRole || "").toString().trim() === "موظف عمليات" ||
                 (currentRole || "").toString().trim().includes("عمليات");
-              let ordersList = [...resData.orders];
+              // De-duplicate orders by tracking ID to prevent UI duplicate bugs
+              const uniqueSeen = new Map();
+              for (const o of resData.orders) {
+                if (!o) continue;
+                const key = (o.tracking || "").toString().trim().toUpperCase();
+                if (!key) {
+                  continue;
+                }
+                if (!uniqueSeen.has(key)) {
+                  uniqueSeen.set(key, o);
+                }
+              }
+              let ordersList = Array.from(uniqueSeen.values());
 
               if (isAgent || isReturnsOfficer || isOps) {
                 const todayStr = tod(); // Cairo YYYY-MM-DD
@@ -3072,6 +3094,18 @@ app.post("/api", async (req: Request, res: Response) => {
           const archived = db.archivedOrders || [];
           ordersList = [...db.orders, ...archived];
         }
+
+        // De-duplicate local orders by tracking ID to prevent UI duplicates
+        const uniqueLocalSeen = new Map();
+        for (const o of ordersList) {
+          if (!o) continue;
+          const key = (o.tracking || "").toString().trim().toUpperCase();
+          if (!key) continue;
+          if (!uniqueLocalSeen.has(key)) {
+            uniqueLocalSeen.set(key, o);
+          }
+        }
+        ordersList = Array.from(uniqueLocalSeen.values());
 
         // Apply role filter
         if (isAgent || isReturnsOfficer || isOps) {

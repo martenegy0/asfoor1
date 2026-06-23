@@ -97,6 +97,7 @@ export default function Inputs({ token, role, user, onSuccess }: InputsProps) {
 
   // --- Submit single manual order (Workflow constraints) ---
   async function submitManual(force = false) {
+    if (loading) return;
     if (!formCustomer.trim() || !formPhone.trim() || !formProdPrice) {
       alert("يرجى ملء الحقول المطلوبة: العميل، الهاتف، سعر المنتج");
       return;
@@ -284,6 +285,7 @@ export default function Inputs({ token, role, user, onSuccess }: InputsProps) {
   }
 
   async function submitBulkExcel() {
+    if (loading) return;
     if (excelData.length === 0) {
       alert("الرجاء تحديد ملف Excel/CSV أولاً");
       return;

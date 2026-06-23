@@ -454,7 +454,25 @@ function getOrders(sheets) {
     // Graceful fallback
   }
   var merged = orders.concat(archived);
-  return { ok: true, orders: merged };
+  
+  // De-duplicate by tracking ID to ensure no double-counting or duplicate entries
+  var seen = {};
+  var uniqueMerged = [];
+  for (var i = 0; i < merged.length; i++) {
+    var o = merged[i];
+    if (!o) continue;
+    var track = (o.tracking || "").toString().trim().toUpperCase();
+    if (!track) {
+      uniqueMerged.push(o);
+      continue;
+    }
+    if (!seen[track]) {
+      seen[track] = true;
+      uniqueMerged.push(o);
+    }
+  }
+  
+  return { ok: true, orders: uniqueMerged };
 }
 
 function getArchivedOrders(sheets) {
@@ -473,6 +491,13 @@ function addOrder(sheets, d) {
 
   // Use already generated or supplied tracking id immediately without scanning sheet
   const trackingId = o.tracking || d.tracking || ("FP-" + Math.floor(100000 + Math.random() * 900000));
+
+  // Strict backend check in sheets.orders and sheets.archivedOrders to completely block duplicates
+  if (findRowIndex(sheets.orders, "tracking", trackingId) !== -1 ||
+      (sheets.archivedOrders && findRowIndex(sheets.archivedOrders, "tracking", trackingId) !== -1)) {
+    return { ok: false, error: "هذا الأوردر مسجل بالفعل" };
+  }
+
   o.tracking = trackingId;
 
   const sPrice = Number(o.shipPrice || 60);
