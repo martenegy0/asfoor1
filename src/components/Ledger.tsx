@@ -30,6 +30,7 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
   const [supplierStats, setSupplierStats] = useState<any>(null);
   const [selectedSupplier, setSelectedSupplier] = useState(isSupplier ? user : "");
   const [allSuppliers, setAllSuppliers] = useState<any[]>([]);
+  const [suppliersDetails, setSuppliersDetails] = useState<any[]>([]);
   const [payAmount, setPayAmount] = useState("");
   const [payDesc, setPayDesc] = useState("");
   const [supplierTransType, setSupplierTransType] = useState<"payout" | "withdrawal">("payout");
@@ -75,6 +76,15 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
 
   // Populate drop-downs for Admin/Accountant
   async function fetchResourceLists() {
+    try {
+      const resDetails = await apiCall("getSuppliers", token);
+      if (resDetails.ok && resDetails.suppliers) {
+        setSuppliersDetails(resDetails.suppliers);
+      }
+    } catch (e) {
+      console.error("Failed to load raw suppliers list", e);
+    }
+
     if (isFinancial || role === "مشرف") {
       try {
         const resSuppliers = await apiCall("supplierAccounts", token);
@@ -735,6 +745,44 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
                                 {Number(item.netDues || 0).toLocaleString("ar")} ج.م
                               </div>
                             </div>
+
+                            {/* Native WhatsApp Dispatcher Button */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const targetSup = isSupplier ? user : selectedSupplier;
+                                const matched = suppliersDetails.find(s => s && s.name && s.name.toString().trim().toLowerCase() === targetSup.toString().trim().toLowerCase());
+                                let phoneNum = "";
+                                if (matched && matched.phone && matched.phone !== "—" && matched.phone.trim() !== "") {
+                                  phoneNum = matched.phone.toString().trim();
+                                }
+                                
+                                if (!phoneNum) {
+                                  const userInput = window.prompt("⚠️ لم يتم العثور على رقم هاتف مسجل لهذا المورد. يرجى إدخال رقم هاتف المورد لبدء محادثة واتساب (مثال: 01012345678):");
+                                  if (!userInput) return;
+                                  phoneNum = userInput.trim();
+                                }
+
+                                // clean the phone number: remove any leading +, spaces, or dashes
+                                let cleanedPhone = phoneNum.replace(/[+\s\-]/g, "");
+                                
+                                // If it starts with 0 and is an Egyptian number (usually 11 digits starting with 01), prepend 2
+                                if (cleanedPhone.startsWith("0") && cleanedPhone.length === 11) {
+                                  cleanedPhone = "2" + cleanedPhone;
+                                }
+
+                                const totalPayoutsOnDay = Math.max(0, (item.totalActualCollected || 0) - (item.returnedValueRefunded || 0) - (item.netDues || 0));
+                                
+                                const msg = `السلام عليكم يا فندم، تفاصيل كشف حسابكم ليوم ${item.date} طرف شركة الشحن:\n- 📦 إجمالي الطلبات المرفوعة: ${item.orderCount} بقيمة ${(item.totalWorkValue || 0).toLocaleString("ar")} ج.م\n- 💰 صافي قيمة البضاعة (بدون شحن): ${(item.netProductValue || 0).toLocaleString("ar")} ج.م\n- 🔄 المرتجعات المستلمة: ${(item.returnedValueRefunded || 0).toLocaleString("ar")} ج.م\n- 💵 الدفعات النقدية والمسحوبات: ${totalPayoutsOnDay.toLocaleString("ar")} ج.م\n- 🔴 المتبقي والصافي المستحق لكم: ${(item.netDues || 0).toLocaleString("ar")} ج.م\n\nشكراً لتعاملكم معنا متاح للمراجعة.`;
+
+                                const encodedText = encodeURIComponent(msg);
+                                const whatsappUrl = `https://api.whatsapp.com/send?phone=${cleanedPhone}&text=${encodedText}`;
+                                window.open(whatsappUrl, "_blank");
+                              }}
+                              className="w-full bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-black py-2.5 px-4 rounded-xl text-xs flex items-center justify-center gap-2 cursor-pointer transition-all border border-emerald-400/20 active:scale-98 shadow-md hover:shadow-lg hover:-translate-y-0.5"
+                            >
+                              <span>📦 إرسال كشف الحساب بالواتساب</span>
+                            </button>
 
                             {/* Actions Inside Card */}
                             <div className="grid grid-cols-2 gap-2 pt-1">

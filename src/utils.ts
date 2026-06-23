@@ -89,7 +89,7 @@ export function validatePhone(ph: string): { valid: boolean; msg: string } {
 }
 
 // Unified API caller for the react fullstack container environment
-export async function apiCall(action: string, token: string, extraParams: any = {}, retries = 5): Promise<any> {
+export async function apiCall(action: string, token: string, extraParams: any = {}, retries = 3): Promise<any> {
   const payload = { action, token, ...extraParams };
   
   for (let i = 0; i <= retries; i++) {

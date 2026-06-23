@@ -105,6 +105,9 @@ function doPost(e) {
       case "deleteOrder":
         result = deleteOrder(sheets, requestData);
         break;
+      case "simulateCustomerLocationReply":
+        result = simulateCustomerLocationReply(sheets, requestData);
+        break;
       case "bulkUpdate":
         result = bulkUpdate(sheets, requestData);
         break;
@@ -226,13 +229,13 @@ function initSheets() {
       "tracking", "createdAt", "updatedAt", "orderDate", "supplier", "customer", 
       "phone", "phone2", "gov", "region", "address", "prodPrice", "shipPrice", 
       "totalCOD", "shipCost", "courier", "status", "prodType", "notes", "delivDate", "retDate", 
-      "addedBy", "commission", "returnShippingType", "returnQueueStatus", "returnQueueAgent"
+      "addedBy", "commission", "returnShippingType", "returnQueueStatus", "returnQueueAgent", "موقع العميل/الخريطة"
     ],
     archivedOrders: [
       "tracking", "createdAt", "updatedAt", "orderDate", "supplier", "customer", 
       "phone", "phone2", "gov", "region", "address", "prodPrice", "shipPrice", 
       "totalCOD", "shipCost", "courier", "status", "prodType", "notes", "delivDate", "retDate", 
-      "addedBy", "commission", "returnShippingType", "returnQueueStatus", "returnQueueAgent", "isSettled", "is_settled"
+      "addedBy", "commission", "returnShippingType", "returnQueueStatus", "returnQueueAgent", "isSettled", "is_settled", "موقع العميل/الخريطة"
     ],
     expenses: ["id", "date", "amount", "desc", "category", "addedBy"],
     cashbox: ["date", "desc", "type", "amount", "ref", "addedBy"],
@@ -504,7 +507,8 @@ function addOrder(sheets, d) {
     commission: 0,
     returnShippingType: "",
     returnQueueStatus: "",
-    returnQueueAgent: ""
+    returnQueueAgent: "",
+    "موقع العميل/الخريطة": ""
   };
 
   // Automatic registration of new supplier if they are not in sheets.suppliers
@@ -527,6 +531,13 @@ function addOrder(sheets, d) {
   const lastCol = sheets.orders.getLastColumn();
   const headers = sheets.orders.getRange(1, 1, 1, lastCol > 0 ? lastCol : 1).getValues()[0].map(function(h) { return h ? h.toString().trim() : ""; });
   appendToSheet(sheets.orders, headers, newOrder);
+
+  // Trigger simulated interactive WhatsApp Webhook for location confirmation
+  try {
+    triggerCustomerLocationRequest(newOrder.tracking, newOrder.phone, newOrder.supplier);
+  } catch (errLocation) {
+    Logger.log("Failed to trigger location webhook simulation: " + errLocation.toString());
+  }
 
   // Record Supplier Ledger
   appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
@@ -763,6 +774,11 @@ function updateStatus(sheets, d) {
   }
 
   const oldStatus = order.status;
+
+  // 🔒 Strict Status Workflow Lock: Prevent reverting back to 'جديد' once modified
+  if (finalStatus === "جديد" && oldStatus !== "جديد") {
+    return { ok: false, error: "قفل أمان: لا يمكن إرجاع حالة الأوردر إلى جديد بعد تعديله وتعديل حالته" };
+  }
 
   if (oldStatus === "تم التسليم") {
     return { ok: false, error: "لا يمكن تعديل حالة أوردر تم تسليمه مسبقاً" };
@@ -1019,7 +1035,8 @@ function updateOrder(sheets, d) {
         o.status = prevStatus; // remains تم التسليم
       } else {
         if (prevStatus !== "جديد") {
-          o.status = "جديد";
+          // Strict state lock: keep original status to prevent resetting to 'جديد'
+          o.status = prevStatus;
         }
       }
       
@@ -1303,7 +1320,7 @@ function updateOrdersStatusBulk(sheets, d) {
              nextStatus = oldStatus;
            } else {
              if (oldStatus !== "جديد") {
-               nextStatus = "جديد";
+               nextStatus = oldStatus;
              }
            }
            if (statusIdx !== -1 && nextStatus !== oldStatus) {
@@ -1696,7 +1713,25 @@ function getSupplierLedgerData(sheets, d) {
     // E. Net dues = cash collected - returned value refunded - total payouts on day
     var netDues = totalActualCollected - returnedValueRefunded - totalPayoutsOnDay;
 
-    // F. Settle status
+    // F. صافي ثمن البضاعة (دون شحن) للطلبات المسلمة والجزئية اليوم
+    var netProductValue = dayOrders.reduce(function(sum, o) {
+      var status = (o.status || "").toString().trim();
+      var fin = getOrderFinancials(o);
+      var isDelivered = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].indexOf(status) !== -1;
+      var isPartial = ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(status) !== -1;
+      if (isDelivered) {
+        var netProduct = Number(fin.totalCOD) - Number(fin.shipPrice);
+        return sum + (isNaN(netProduct) ? 0 : netProduct);
+      } else if (isPartial) {
+        var cash = Number(o.actualReceivedCash || o.partialAmount || o["المبلغ المحصل"] || 0);
+        if (isNaN(cash)) cash = 0;
+        var netProduct = cash - Number(fin.shipPrice);
+        return sum + Math.max(0, isNaN(netProduct) ? 0 : netProduct);
+      }
+      return sum;
+    }, 0);
+
+    // G. Settle status
     var isSettled = !!settledDaysSet[dayDate];
     var statusLabel = isSettled ? "🟢 تم تصفية الكاش والمرتجع" : "🔴 معلق لم يصفى";
 
@@ -1708,6 +1743,7 @@ function getSupplierLedgerData(sheets, d) {
       returnedValueRefunded: returnedValueRefunded,
       returnShippingFees: returnShippingFees,
       netDues: netDues,
+      netProductValue: netProductValue,
       isSettled: isSettled,
       status: statusLabel,
       orders: dayOrders.map(function(o) {
@@ -1752,12 +1788,29 @@ function getSupplierLedgerData(sheets, d) {
 
   var finalUnifiedOutstanding = totalGoodsUploadedVal - returnsDeliveredVal - directPaymentsVal;
 
+  var overallNetProductValue = supplierOrders.reduce(function(sum, o) {
+    var status = (o.status || "").toString().trim();
+    var financials = getOrderFinancials(o);
+    var isDelivered = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].indexOf(status) !== -1;
+    var isPartial = ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(status) !== -1;
+    if (isDelivered) {
+      return sum + (Number(financials.totalCOD) - Number(financials.shipPrice));
+    }
+    if (isPartial) {
+      var cash = Number(o.actualReceivedCash || o.partialAmount || o["المبلغ المحصل"] || 0);
+      if (isNaN(cash)) cash = 0;
+      return sum + Math.max(0, cash - Number(financials.shipPrice));
+    }
+    return sum;
+  }, 0);
+
   return {
     ok: true,
     days: daysList,
     outstandingBalance: Math.max(0, finalUnifiedOutstanding),
     totalGoodsUploaded: totalGoodsUploadedVal,
     returnsDeliveredValue: returnsDeliveredVal,
+    overallNetProductValue: overallNetProductValue,
     globalPayments: directPaymentsVal,
     paymentEntries: ledgerEntries.filter(function(l) {
       var lSup = l.supplier || l["المورد"] || "";
@@ -1838,6 +1891,16 @@ function settleSupplierDay(sheets, d) {
   return { ok: true, msg: "تم تسجيل تصفية اليوم وقفل حساب " + dateStr + " بنجاح" };
 }
 
+function parseSafeNumber(val) {
+  if (val === undefined || val === null) return 0;
+  if (typeof val === "number") return val;
+  var s = String(val).trim();
+  if (s === "") return 0;
+  var cleaned = s.replace(/,/g, "").replace(/[^\d.-]/g, "").trim();
+  var num = Number(cleaned);
+  return isNaN(num) ? 0 : num;
+}
+
 function getOrderFinancials(o) {
   if (!o) return { prodPrice: 0, shipPrice: 0, totalCOD: 0 };
   
@@ -1851,12 +1914,13 @@ function getOrderFinancials(o) {
                 o["ship_price"])))));
                 
   if (rawShip !== undefined && rawShip !== null && rawShip !== "") {
-    shipPrice = Number(rawShip);
+    shipPrice = parseSafeNumber(rawShip);
   }
   if (isNaN(shipPrice)) shipPrice = 0;
 
   var totalCOD = 0;
-  var rawTotal = o["المطلوب تحصيله"] !== undefined ? o["المطلوب تحصيله"] :
+  var rawTotal = o["المطلب تحصيله"] !== undefined ? o["المطلب تحصيله"] :
+                 (o["المطلوب تحصيله"] !== undefined ? o["المطلوب تحصيله"] :
                  (o["التحصيل"] !== undefined ? o["التحصيل"] :
                  (o["المطلوب"] !== undefined ? o["المطلوب"] :
                  (o["إجمالي الكود"] !== undefined ? o["إجمالي الكود"] :
@@ -1867,10 +1931,10 @@ function getOrderFinancials(o) {
                  (o["totalCOD"] !== undefined ? o["totalCOD"] :
                  (o["total_cod"] !== undefined ? o["total_cod"] :
                  (o["cash_to_be_collected"] !== undefined ? o["cash_to_be_collected"] :
-                 o["cash"]))))))))));
+                 o["cash"])))))))))));
                  
   if (rawTotal !== undefined && rawTotal !== null && rawTotal !== "") {
-    totalCOD = Number(rawTotal);
+    totalCOD = parseSafeNumber(rawTotal);
   }
   if (isNaN(totalCOD)) totalCOD = 0;
 
@@ -1883,7 +1947,7 @@ function getOrderFinancials(o) {
                 o["product_price"]))));
                 
   if (rawProd !== undefined && rawProd !== null && rawProd !== "") {
-    prodPrice = Number(rawProd);
+    prodPrice = parseSafeNumber(rawProd);
   }
   if (isNaN(prodPrice)) prodPrice = 0;
 
@@ -2968,4 +3032,32 @@ function settleCourierOrders(sheets, d) {
   } finally {
     lock.releaseLock();
   }
+}
+
+function triggerCustomerLocationRequest(orderId, customerPhone, supplierName) {
+  Logger.log("[WhatsApp Bot Trigger] Sending location prompt to customer: " + customerPhone + " for order: " + orderId + " from: " + supplierName);
+  var textMsg = "مرحباً بك يا فندم، معك شركة Asfoor للوجيستيات. لديك شحنة قادمة من [" + supplierName + "]. لتأكيد موافقتك على الشحنة وتسهيل وصول المندوب، برجاء الضغط على زر (إرسال الموقع الحقيقي / Share Location) أسفل هذه الرسالة.";
+  Logger.log("Simulated interactive WhatsApp payload: " + textMsg);
+}
+
+function simulateCustomerLocationReply(sheets, d) {
+  var tracking = d.tracking;
+  var lat = d.lat || 30.0440;
+  var lng = d.lng || 31.2350;
+  if (!tracking) return { ok: false, error: "رقم التتبع مفقود" };
+
+  var rIndex = findRowIndex(sheets.orders, "tracking", tracking);
+  if (rIndex === -1) return { ok: false, error: "الأوردر المطلوب غير موجود بالشيت" };
+
+  var updateObj = {
+    "موقع العميل/الخريطة": lat + "," + lng,
+    "updatedAt": now()
+  };
+
+  updateRowByObject(sheets.orders, rIndex, updateObj);
+  return { 
+    ok: true, 
+    msg: "نجحت محاكاة استقبال اللوكيشن للعميل بالواتس تفاعلياً وتحديث شيت جوجل مباشرة",
+    customerLocation: lat + "," + lng
+  };
 }

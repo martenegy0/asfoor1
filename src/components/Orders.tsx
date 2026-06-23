@@ -193,6 +193,24 @@ export default function Orders({ token, role, username, orders, setOrders, couri
 
   const todayDateStr = getTodayDateStr();
 
+  const handleSimulateLocation = async (tracking: string) => {
+    const lat = (30.0444 + (Math.random() - 0.5) * 0.1).toFixed(6);
+    const lng = (31.2357 + (Math.random() - 0.5) * 0.1).toFixed(6);
+    try {
+      const res = await apiCall("simulateCustomerLocationReply", token, { tracking, lat, lng });
+      if (res && res.mapsUrl) {
+        setOrders((prev: any[]) =>
+          prev.map((o) =>
+            o.tracking === tracking ? { ...o, "موقع العميل/الخريطة": res.mapsUrl } : o
+          )
+        );
+        if (onRefresh) onRefresh();
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const roleFilteredOrders = React.useMemo(() => {
     // Strip settled orders out of active daily operations completely
     const activeUnsettledOrders = orders.filter((o: any) => {
@@ -1096,7 +1114,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
             const extra: any = {};
             if (bulkCourier === "reset_warehouse") {
               if (!["مرتجع", "تسليم جزئي", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع بالمستودع", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد"].includes(o.status)) {
-                extra.status = "جديد";
+                extra.status = o.status;
               }
             }
             return { ...o, ...updatedFields, ...extra };
@@ -1195,7 +1213,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
             const extra: any = {};
             if (floatingCourier === "reset_warehouse") {
               if (!["مرتجع", "تسليم جزئي", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع بالمستودع", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد"].includes(o.status)) {
-                extra.status = "جديد";
+                extra.status = o.status;
               }
             }
             return { ...o, ...updatedFields, ...extra };
@@ -1377,18 +1395,39 @@ export default function Orders({ token, role, username, orders, setOrders, couri
           </div>
 
           <div className="space-y-1.5 border-t md:border-t-0 md:border-r border-white/4 pt-3.5 md:pt-0 md:pr-3.5 flex flex-col justify-between col-span-1">
-            <div className="flex items-start gap-1.5">
-              <MapPin size={13} className="text-slate-500 mt-0.5 shrink-0" />
-              <span className="text-xs">العنوان: <span className="font-bold text-slate-200">{o.gov} · {o.region} · {o.address}</span></span>
+            <div className="flex items-start gap-1.5 flex-col">
+              <div className="flex items-start gap-1.5">
+                <MapPin size={13} className="text-slate-500 mt-0.5 shrink-0" />
+                <span className="text-xs">العنوان: <span className="font-bold text-slate-200">{o.gov} · {o.region} · {o.address}</span></span>
+              </div>
+              
+              {o["موقع العميل/الخريطة"] ? (
+                <span className="inline-flex items-center gap-1.5 text-[9.5px] text-emerald-400 bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-900/30 font-bold font-mono mt-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  📍 تم ربط الموقع الفعلي للعميل عبر واتساب
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => handleSimulateLocation(o.tracking)}
+                  className="mt-1.5 text-[9px] bg-amber-500/10 hover:bg-amber-500/25 border border-amber-500/35 text-amber-300 font-bold px-2 py-1 rounded-lg flex items-center gap-1 transition active:scale-95 cursor-pointer"
+                >
+                  💬 محاكاة استقبال موقع العميل (واتساب)
+                </button>
+              )}
             </div>
             <a
-              href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${o.gov} ${o.region} ${o.address}`)}`}
+              href={o["موقع العميل/الخريطة"] || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${o.gov} ${o.region} ${o.address}`)}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="shrink-0 bg-indigo-500/20 hover:bg-indigo-500/35 border border-indigo-500/30 text-indigo-300 font-bold text-[10px] px-2.5 py-1.5 rounded-lg flex items-center gap-1 transition active:scale-95 cursor-pointer max-w-fit mt-1"
+              className={`shrink-0 border font-bold text-[10px] px-2.5 py-1.5 rounded-lg flex items-center gap-1 transition active:scale-95 cursor-pointer max-w-fit mt-1 ${
+                o["موقع العميل/الخريطة"]
+                  ? "bg-emerald-500/20 hover:bg-emerald-500/35 border-emerald-500/35 text-emerald-300"
+                  : "bg-indigo-500/20 hover:bg-indigo-500/35 border-indigo-500/30 text-indigo-300"
+              }`}
             >
-              <MapPin size={11} className="text-indigo-400 shrink-0" />
-              <span>توجيه الخرائط GPS</span>
+              <MapPin size={11} className={o["موقع العميل/الخريطة"] ? "text-emerald-400 shrink-0" : "text-indigo-400 shrink-0"} />
+              <span>{o["موقع العميل/الخريطة"] ? "عرض لوكيشن العميل الفعلي" : "توجيه الخرائط GPS"}</span>
             </a>
           </div>
         </div>
@@ -1488,7 +1527,9 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                     <option value="تم رد العميل وجاري التنسيق">تم رد العميل وجاري التنسيق</option>
                     <option value="مؤجل">مؤجل (تأجيل الطلب)</option>
                     <option value="لا يوجد رد">لا يوجد رد (محاولة تواصل)</option>
-                    <option value="جديد">إرجاع الأوردر لحالة "جديد"</option>
+                    {o.status === "جديد" && (
+                      <option value="جديد">إرجاع الأوردر لحالة "جديد"</option>
+                    )}
                   </select>
                 </div>
               </div>
@@ -2511,7 +2552,9 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                 {(isAdmin || isSuper) && (
                   <>
                     <option value="">-- اختر حالة الأوردرات المحددة --</option>
-                    <option value="جديد">جديد (إعادة للانتظار)</option>
+                    {Array.from(selected).every(tr => orders.find(x => x.tracking === tr)?.status === "جديد") && (
+                      <option value="جديد">جديد (إعادة للانتظار)</option>
+                    )}
                     <option value="تم الإسناد">تم الإسناد</option>
                     <option value="خارج مع المندوب">خارج مع المندوب</option>
                     <option value="تم التسليم">تم التسليم (ناجح كاش)</option>
@@ -2787,19 +2830,40 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                   )}
 
                   {/* Shipping address details */}
-                  <div className="flex items-center justify-between gap-2 text-slate-350 bg-slate-900/40 p-2.5 rounded-xl border border-white/5">
-                    <div className="flex items-center gap-2">
-                      <MapPin size={14} className="text-slate-500" />
-                      <span className="text-xs">العنوان: <span className="font-bold text-slate-250">{o.gov} · {o.region} · {o.address}</span></span>
+                  <div className="flex items-center justify-between gap-2 text-slate-350 bg-slate-900/40 p-2.5 rounded-xl border border-white/5 flex-col md:flex-row align-start md:align-center">
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-center gap-2">
+                        <MapPin size={14} className="text-slate-500" />
+                        <span className="text-xs">العنوان: <span className="font-bold text-slate-250">{o.gov} · {o.region} · {o.address}</span></span>
+                      </div>
+                      
+                      {o["موقع العميل/الخريطة"] ? (
+                        <div className="inline-flex items-center gap-1.5 text-[9.5px] text-emerald-400 bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-900/30 font-bold font-mono max-w-fit mt-0.5">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                          📍 تم ربط الموقع الفعلي للعميل عبر واتساب
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleSimulateLocation(o.tracking)}
+                          className="mt-1 text-[9px] bg-amber-500/10 hover:bg-amber-500/25 border border-amber-500/35 text-amber-300 font-bold px-2 py-0.5 rounded-lg flex items-center gap-1 transition active:scale-95 cursor-pointer max-w-fit"
+                        >
+                          💬 محاكاة استقبال موقع العميل (واتساب)
+                        </button>
+                      )}
                     </div>
                     <a
-                      href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${o.gov} ${o.region} ${o.address}`)}`}
+                      href={o["موقع العميل/الخريطة"] || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${o.gov} ${o.region} ${o.address}`)}`}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="shrink-0 bg-indigo-500/20 hover:bg-indigo-500/35 border border-indigo-500/30 text-indigo-300 font-bold text-[10px] px-2.5 py-1.5 rounded-lg flex items-center gap-1 transition active:scale-95 cursor-pointer"
+                      className={`shrink-0 border font-bold text-[10px] px-2.5 py-1.5 rounded-lg flex items-center gap-1 transition active:scale-95 cursor-pointer ${
+                        o["موقع العميل/الخريطة"]
+                          ? "bg-emerald-500/20 hover:bg-emerald-500/35 border-emerald-500/35 text-emerald-300"
+                          : "bg-indigo-500/20 hover:bg-indigo-500/35 border-indigo-500/30 text-indigo-300"
+                      }`}
                     >
-                      <MapPin size={11} className="text-indigo-400" />
-                      <span>توجيه الخرائط GPS</span>
+                      <MapPin size={11} className={o["موقع العميل/الخريطة"] ? "text-emerald-400" : "text-indigo-400"} />
+                      <span>{o["موقع العميل/الخريطة"] ? "عرض لوكيشن العميل الفعلي" : "توجيه الخرائط GPS"}</span>
                     </a>
                   </div>
 
@@ -2890,7 +2954,9 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                               <option value="تم رد العميل وجاري التنسيق">تم رد العميل وجاري التنسيق</option>
                               <option value="مؤجل">مؤجل (تأجيل الطلب)</option>
                               <option value="لا يوجد رد">لا يوجد رد (محاولة تواصل)</option>
-                              <option value="جديد">إرجاع الأوردر لحالة "جديد"</option>
+                              {o.status === "جديد" && (
+                                <option value="جديد">إرجاع الأوردر لحالة "جديد"</option>
+                              )}
                             </select>
                           </div>
                         </div>

@@ -218,6 +218,24 @@ export default function MobileOrders({
   const [displayLimit, setDisplayLimit] = useState<number>(25);
   const [expandedOrder, setExpandedOrder] = useState<string | null>(null);
 
+  const handleSimulateLocation = async (tracking: string) => {
+    const lat = (30.0444 + (Math.random() - 0.5) * 0.1).toFixed(6);
+    const lng = (31.2357 + (Math.random() - 0.5) * 0.1).toFixed(6);
+    try {
+      const res = await apiCall("simulateCustomerLocationReply", token, { tracking, lat, lng });
+      if (res && res.mapsUrl) {
+        setOrders((prev: any[]) =>
+          prev.map((o) =>
+            o.tracking === tracking ? { ...o, "موقع العميل/الخريطة": res.mapsUrl } : o
+          )
+        );
+        if (onRefresh) onRefresh();
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   useEffect(() => {
     // Automatically lift restricted date filters on mobile to guarantee immediate, complete active orders loading without manual search
     if (selectedDate !== "all") {
@@ -537,16 +555,37 @@ export default function MobileOrders({
                             );
                           })()}
 
-                          {/* Map Action Button */}
-                          <a
-                            href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent([o.gov, o.region, o.address].filter(Boolean).join(" "))}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="px-3 py-1.5 bg-slate-950 hover:bg-slate-850 text-amber-400 text-xs rounded-lg border border-white/6 flex items-center justify-center gap-1.5 cursor-pointer font-bold"
-                          >
-                            <MapPin size={12} />
-                            <span>موقع العميل</span>
-                          </a>
+                          {/* Map Action Button and WhatsApp simulator */}
+                          {o["موقع العميل/الخريطة"] ? (
+                            <a
+                              href={o["موقع العميل/الخريطة"]}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="px-3 py-1.5 bg-emerald-950 hover:bg-emerald-900 text-emerald-400 text-[10px] rounded-lg border border-emerald-500/20 flex items-center justify-center gap-1.5 cursor-pointer font-bold animate-pulse"
+                            >
+                              <MapPin size={12} className="text-emerald-400 animate-bounce" />
+                              <span>📍 اللوكيشن الفعلي</span>
+                            </a>
+                          ) : (
+                            <>
+                              <a
+                                href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent([o.gov, o.region, o.address].filter(Boolean).join(" "))}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="px-3 py-1.5 bg-slate-950 hover:bg-slate-850 text-amber-400 text-xs rounded-lg border border-white/6 flex items-center justify-center gap-1.5 cursor-pointer font-bold"
+                              >
+                                <MapPin size={12} />
+                                <span>موقع العميل</span>
+                              </a>
+                              <button
+                                type="button"
+                                onClick={() => handleSimulateLocation(o.tracking)}
+                                className="px-2.5 py-1.5 bg-amber-950/40 hover:bg-amber-900/40 text-amber-400 text-[9px] rounded-lg border border-amber-500/25 flex items-center justify-center gap-1 cursor-pointer font-extrabold"
+                              >
+                                💬 محاكاة اللوكيشن
+                              </button>
+                            </>
+                          )}
                         </div>
                       </div>
 
@@ -596,7 +635,9 @@ export default function MobileOrders({
                               <option value="مرتجع">↩️ تسجيل كمرتجع</option>
                               <option value="مؤجل">⏳ تأجيل الأوردر</option>
                               <option value="لا يوجد رد">📵 لا يوجد رد</option>
-                              <option value="جديد">🔄 إرجاع إلى جديد</option>
+                              {o.status === "جديد" && (
+                                <option value="جديد">🔄 إرجاع إلى جديد</option>
+                              )}
                             </select>
                           </div>
 
@@ -746,15 +787,17 @@ export default function MobileOrders({
                     📵 لا يوجد رد
                   </button>
 
-                  <button
-                    onClick={() => {
-                      triggerStatusUpdate(mobileDrawerOrder.tracking, "جديد");
-                      setMobileDrawerOrder(null);
-                    }}
-                    className="py-2.5 bg-slate-950 border border-white/8 text-blue-400 font-semibold text-xs rounded-xl cursor-pointer text-center"
-                  >
-                    🔄 إرجاع إلى جديد
-                  </button>
+                  {mobileDrawerOrder.status === "جديد" && (
+                    <button
+                      onClick={() => {
+                        triggerStatusUpdate(mobileDrawerOrder.tracking, "جديد");
+                        setMobileDrawerOrder(null);
+                      }}
+                      className="py-2.5 bg-slate-950 border border-white/8 text-blue-400 font-semibold text-xs rounded-xl cursor-pointer text-center"
+                    >
+                      🔄 إرجاع إلى جديد
+                    </button>
+                  )}
 
                   {mobileDrawerOrder.courier && (
                     <button
