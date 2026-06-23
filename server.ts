@@ -4355,7 +4355,12 @@ app.post("/api", async (req: Request, res: Response) => {
           const t = item.tracking;
           if (!t) continue;
 
-          const order = db.orders.find((o: any) => o.tracking === t);
+          let order = db.orders.find((o: any) => o.tracking === t);
+          let fromArchive = false;
+          if (!order) {
+            order = (db.archivedOrders || []).find((o: any) => o.tracking === t);
+            if (order) fromArchive = true;
+          }
           if (!order) continue;
 
           // Double check that the rider can only touch their OWN assigned orders
@@ -4556,6 +4561,19 @@ app.post("/api", async (req: Request, res: Response) => {
           }
 
           order.updatedAt = now();
+
+          // منطق ترحيل البضائع الصارم والاسترجاع:
+          // إذا كان الأوردر في الأرشيف وتغيرت حالته إلى حالة نشطة غير صالحة للأرشفة،
+          // فيتم إرجاعه للشحنات النشطة فوراً لضمان عدم ضياع عهدة البضائع ومنع ارتداد الحالة، ثم حذفه نهائياً من شيت الأرشيف.
+          const isEventualArchivable = ["تم التسليم", "التسليم للمورد", "تم تسليم المرتجع للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(order.status);
+          if (fromArchive && !isEventualArchivable) {
+            const alreadyInActive = db.orders.some((o: any) => o.tracking === t);
+            if (!alreadyInActive) {
+              db.orders.push(order);
+            }
+            db.archivedOrders = (db.archivedOrders || []).filter((o: any) => o.tracking !== t);
+          }
+
           modified++;
         }
 

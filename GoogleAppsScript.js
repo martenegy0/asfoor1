@@ -995,7 +995,7 @@ function updateStatus(sheets, d) {
     
     if (updatedOrderObj) {
       if (activeIndexForSave === -1) {
-        const activeHeaders = ["tracking", "invoiceDate", "supplier", "gov", "region", "customer", "phone", "phone2", "address", "prodPrice", "shipPrice", "totalCOD", "prodType", "notes", "courier", "commission", "status", "delivDate", "retDate", "returnQueueStatus", "returnQueueAgent", "firstPostponedDate", "isPartial", "partialAmount", "actualReceivedCash", "returnShippingType", "updatedAt", "isSettled", "is_settled"];
+        const activeHeaders = ["tracking", "createdAt", "updatedAt", "orderDate", "supplier", "customer", "phone", "phone2", "gov", "region", "address", "prodPrice", "shipPrice", "totalCOD", "shipCost", "courier", "status", "prodType", "notes", "delivDate", "retDate", "addedBy", "commission", "returnShippingType", "returnQueueStatus", "returnQueueAgent", "موقع العميل/الخريطة"];
         appendToSheet(sheets.orders, activeHeaders, updatedOrderObj);
       }
       
@@ -1142,7 +1142,7 @@ function updateOrder(sheets, d) {
     
     if (updatedOrderObj) {
       if (activeIndexForSave === -1) {
-        const activeHeaders = ["tracking", "invoiceDate", "supplier", "gov", "region", "customer", "phone", "phone2", "address", "prodPrice", "shipPrice", "totalCOD", "prodType", "notes", "courier", "commission", "status", "delivDate", "retDate", "returnQueueStatus", "returnQueueAgent", "firstPostponedDate", "isPartial", "partialAmount", "actualReceivedCash", "returnShippingType", "updatedAt", "isSettled", "is_settled"];
+        const activeHeaders = ["tracking", "createdAt", "updatedAt", "orderDate", "supplier", "customer", "phone", "phone2", "gov", "region", "address", "prodPrice", "shipPrice", "totalCOD", "shipCost", "courier", "status", "prodType", "notes", "delivDate", "retDate", "addedBy", "commission", "returnShippingType", "returnQueueStatus", "returnQueueAgent", "موقع العميل/الخريطة"];
         appendToSheet(sheets.orders, activeHeaders, updatedOrderObj);
       }
       
@@ -1314,46 +1314,26 @@ function updateOrdersStatusBulk(sheets, d) {
       return { ok: false, error: "Unauthorized Action: ليس للمورد صلاحية التعديل الجماعي" };
     }
 
-    const sheet = sheets.orders;
-    const lastRow = sheet.getLastRow();
-    if (lastRow <= 1) return { ok: true, msg: "لا توجد أوردرات للتحديث", done: 0 };
-
-    const lastCol = sheet.getLastColumn();
-    const range = sheet.getRange(1, 1, lastRow, lastCol);
-    const data = range.getValues();
-    
-    const headers = data[0].map(h => h.toString().trim());
-    const trackingIdx = headers.indexOf("tracking");
-    const updatedAtIdx = headers.indexOf("updatedAt");
-    const courierIdx = headers.indexOf("courier");
-    const statusIdx = headers.indexOf("status");
-    const notesIdx = headers.indexOf("notes");
-    const delivDateIdx = headers.indexOf("delivDate");
-    const retDateIdx = headers.indexOf("retDate");
-    const returnShippingTypeIdx = headers.indexOf("returnShippingType");
-    const commissionIdx = headers.indexOf("commission");
-
-    if (trackingIdx === -1) return { ok: false, error: "عمود الكود التتبعي غير موجود في شيت الأوردرات" };
-
-    // Build a rows index map
-    const rowsMap = {};
-    for (let r = 1; r < data.length; r++) {
-      const trStr = data[r][trackingIdx].toString().trim().toUpperCase();
-      if (trStr) {
-        rowsMap[trStr] = r;
-      }
-    }
-
     let updatedCount = 0;
     const couriers = getTableData(sheets.couriers);
     
     for (var i = 0; i < updates.length; i++) {
       const item = updates[i];
       const tr = (item.tracking || "").toString().trim().toUpperCase();
-      const r = rowsMap[tr];
-      if (r === undefined) continue;
+      if (!tr) continue;
 
-      const rowCourierName = courierIdx !== -1 ? data[r][courierIdx].toString().trim() : "";
+      let activeRowIndex = findRowIndex(sheets.orders, "tracking", tr);
+      let archivedRowIndex = findRowIndex(sheets.archivedOrders, "tracking", tr);
+      let orderIndex = activeRowIndex !== -1 ? activeRowIndex : archivedRowIndex;
+      let targetSheet = activeRowIndex !== -1 ? sheets.orders : sheets.archivedOrders;
+
+      if (orderIndex === -1) continue;
+
+      const orders = getTableData(targetSheet);
+      const order = orders.find(x => x.tracking === tr);
+      if (!order) continue;
+
+      const rowCourierName = order.courier ? order.courier.toString().trim() : "";
       if (isAgent && rowCourierName !== currentUser) {
         continue; // Security check
       }
@@ -1379,65 +1359,57 @@ function updateOrdersStatusBulk(sheets, d) {
         }
       }
 
-      const oldStatus = statusIdx !== -1 ? data[r][statusIdx].toString().trim() : "";
+      const oldStatus = order.status;
+      let updateObj = {
+        updatedAt: now()
+      };
 
-       // Courier Assignment
-       if (item.courier !== undefined && courierIdx !== -1 && (isAdmin || cleanRole === "محاسب")) {
-         const newCourier = item.courier;
-         if (newCourier === "reset_warehouse" || newCourier === "") {
-           const lastCourierIdx = headers.indexOf("lastCourier");
-           if (lastCourierIdx !== -1) {
-             data[r][lastCourierIdx] = data[r][courierIdx];
-           }
-           const lastCommissionIdx = headers.indexOf("lastCommission");
-           if (lastCommissionIdx !== -1 && commissionIdx !== -1) {
-             data[r][lastCommissionIdx] = data[r][commissionIdx];
-           }
-           if (courierIdx !== -1) {
-             data[r][courierIdx] = "";
-           }
-           if (commissionIdx !== -1) {
-             data[r][commissionIdx] = 0;
-           }
-           
-           var nextStatus = oldStatus;
-           if (oldStatus === "مرتجع") {
-             nextStatus = "مرتجع بالمستودع";
-           } else if (oldStatus === "تسليم جزئي") {
-             nextStatus = "مرتجع جزئي بالمستودع";
-           } else if (oldStatus === "مؤجل") {
-             nextStatus = "مؤجل";
-           } else if (oldStatus === "تم التسليم" || oldStatus === "تم التسليم بنجاح" || oldStatus === "تم التسليم (ناجح كاش)") {
-             nextStatus = oldStatus;
-           } else {
-             if (oldStatus !== "جديد") {
-               nextStatus = oldStatus;
-             }
-           }
-           if (statusIdx !== -1 && nextStatus !== oldStatus) {
-             data[r][statusIdx] = nextStatus;
-           }
-         } else if (newCourier !== rowCourierName) {
-          data[r][courierIdx] = newCourier;
+      // Courier Assignment
+      if (item.courier !== undefined && (isAdmin || cleanRole === "محاسب")) {
+        const newCourier = item.courier;
+        if (newCourier === "reset_warehouse" || newCourier === "") {
+          updateObj.lastCourier = order.courier;
+          updateObj.lastCommission = order.commission;
+          updateObj.courier = "";
+          updateObj.commission = 0;
+          
+          var nextStatus = oldStatus;
+          if (oldStatus === "مرتجع") {
+            nextStatus = "مرتجع بالمستودع";
+          } else if (oldStatus === "تسليم جزئي") {
+            nextStatus = "مرتجع جزئي بالمستودع";
+          } else if (oldStatus === "مؤجل") {
+            nextStatus = "مؤجل";
+          } else if (oldStatus === "تم التسليم" || oldStatus === "تم التسليم بنجاح" || oldStatus === "تم التسليم (ناجح كاش)") {
+            nextStatus = oldStatus;
+          } else {
+            if (oldStatus !== "جديد") {
+              nextStatus = oldStatus;
+            }
+          }
+          updateObj.status = nextStatus;
+        } else if (newCourier !== rowCourierName) {
+          updateObj.courier = newCourier;
           const cProfile = couriers.find(function(c) { return c.name === newCourier; });
           const comm = cProfile ? Number(cProfile.commission || 25) : 25;
-          if (commissionIdx !== -1) data[r][commissionIdx] = comm;
+          updateObj.commission = comm;
 
-          if (oldStatus === "جديد" && statusIdx !== -1) {
-            data[r][statusIdx] = "تم الإسناد";
+          if (oldStatus === "جديد") {
+            updateObj.status = "تم الإسناد";
           }
         }
       }
 
       // Apply Status Override
-      if (targetStatus !== undefined && statusIdx !== -1 && targetStatus !== oldStatus) {
-        data[r][statusIdx] = targetStatus;
+      const finalStatus = targetStatus || updateObj.status || oldStatus;
+      if (targetStatus !== undefined && targetStatus !== oldStatus) {
+        updateObj.status = targetStatus;
 
         if (targetStatus === "تم التسليم") {
           const itemDate = item.date || item.delivDate || item.postponedDate;
-          if (delivDateIdx !== -1) data[r][delivDateIdx] = itemDate || now();
+          updateObj.delivDate = itemDate || now();
           
-          const currentCourier = courierIdx !== -1 ? data[r][courierIdx].toString().trim() : "";
+          const currentCourier = updateObj.courier !== undefined ? updateObj.courier : (order.courier || "");
           const cProfile = couriers.find(function(c) { return c.name === currentCourier; });
           const comm = cProfile ? Number(cProfile.commission || 25) : 25;
 
@@ -1450,14 +1422,11 @@ function updateOrdersStatusBulk(sheets, d) {
             desc: "عمولة تسليم الأوردر جماعياً (الدفعة المجمعة): " + tr
           });
 
-          const totalCOD = headers.indexOf("totalCOD") !== -1 ? Number(data[r][headers.indexOf("totalCOD")] || 0) : 0;
-          // تم إلغاء التسجيل التلقائي هنا لمطابقة فصل كاش الشارع
-          // appendToSheet(sheets.cashbox, ["date", "desc", "type", "amount", "ref", "addedBy"], { ... });
-
-          const prodPrice = headers.indexOf("prodPrice") !== -1 ? Number(data[r][headers.indexOf("prodPrice")] || 0) : 0;
-          const shipPrice = headers.indexOf("shipPrice") !== -1 ? Number(data[r][headers.indexOf("shipPrice")] || 0) : 0;
+          const totalCOD = Number(order.totalCOD || 0);
+          const prodPrice = Number(order.prodPrice || 0);
+          const shipPrice = Number(order.shipPrice || 0);
           const supplierPrice = prodPrice !== 0 ? prodPrice : (totalCOD - shipPrice);
-          const supplierName = headers.indexOf("supplier") !== -1 ? data[r][headers.indexOf("supplier")].toString().trim() : "";
+          const supplierName = order.supplier || "";
           
           if (supplierName) {
             appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
@@ -1472,10 +1441,10 @@ function updateOrdersStatusBulk(sheets, d) {
         }
 
         if (["مرتجع", "تم تسليم المرتجع للمورد", "التسليم للمورد"].indexOf(targetStatus) !== -1) {
-          if (retDateIdx !== -1) data[r][retDateIdx] = now();
+          updateObj.retDate = now();
           if (targetStatus === "تم تسليم المرتجع للمورد" || targetStatus === "التسليم للمورد") {
-            const prodPrice = headers.indexOf("prodPrice") !== -1 ? Number(data[r][headers.indexOf("prodPrice")] || 0) : 0;
-            const supplierName = headers.indexOf("supplier") !== -1 ? data[r][headers.indexOf("supplier")].toString().trim() : "";
+            const prodPrice = Number(order.prodPrice || 0);
+            const supplierName = order.supplier || "";
             if (supplierName) {
               appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
                 supplier: supplierName,
@@ -1492,24 +1461,50 @@ function updateOrdersStatusBulk(sheets, d) {
         appendToSheet(sheets.statusHistory, ["tracking", "oldStatus", "newStatus", "updatedBy", "dateTime"], {
           tracking: tr,
           oldStatus: oldStatus,
-          newStatus: targetStatus || (statusIdx !== -1 ? data[r][statusIdx].toString().trim() : "جديد"),
+          newStatus: targetStatus,
           updatedBy: currentUser,
           dateTime: now()
         });
       }
 
-      if (item.notes !== undefined && notesIdx !== -1) {
-        data[r][notesIdx] = item.notes;
+      if (item.notes !== undefined) {
+        updateObj.notes = item.notes;
       }
-      if (updatedAtIdx !== -1) {
-        data[r][updatedAtIdx] = now();
+
+      // إتمام الحفظ والتعديل للسطر المستهدف (نشط أو أرشيف)
+      let freshActiveIdx = findRowIndex(sheets.orders, "tracking", tr);
+      let freshArchivedIdx = findRowIndex(sheets.archivedOrders, "tracking", tr);
+
+      if (freshActiveIdx !== -1) {
+        updateRowByObject(sheets.orders, freshActiveIdx, updateObj);
+      }
+      if (freshArchivedIdx !== -1) {
+        updateRowByObject(sheets.archivedOrders, freshArchivedIdx, updateObj);
+      }
+
+      // منطق ترحيل البضائع الصارم والاسترجاع من الأرشيف:
+      // إذا كان الأوردر في الأرشيف وتغيرت حالته إلى حالة نشطة غير صالحة للأرشفة (خارج مع المندوب، مؤجل، مرتجع في المستودع إلخ)،
+      // فيتم إرجاعه للشيت النشط فوراً لضمان عدم ضياع عهدة البضائع ومنع ارتداد الحالة، ثم حذفه نهائياً من شيت الأرشيف.
+      const eventualStatus = updateObj.status || oldStatus;
+      const isEventualArchivable = ["تم التسليم", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(eventualStatus);
+
+      if (freshArchivedIdx !== -1 && !isEventualArchivable) {
+        const updatedArchivedData = getTableData(sheets.archivedOrders);
+        const updatedOrderObj = updatedArchivedData.find(x => x.tracking === tr);
+        if (updatedOrderObj) {
+          let freshActiveIdxAfterSave = findRowIndex(sheets.orders, "tracking", tr);
+          if (freshActiveIdxAfterSave === -1) {
+            const activeHeaders = ["tracking", "createdAt", "updatedAt", "orderDate", "supplier", "customer", "phone", "phone2", "gov", "region", "address", "prodPrice", "shipPrice", "totalCOD", "shipCost", "courier", "status", "prodType", "notes", "delivDate", "retDate", "addedBy", "commission", "returnShippingType", "returnQueueStatus", "returnQueueAgent", "موقع العميل/الخريطة"];
+            appendToSheet(sheets.orders, activeHeaders, updatedOrderObj);
+          }
+          let freshArchivedIndexAfterSave = findRowIndex(sheets.archivedOrders, "tracking", tr);
+          if (freshArchivedIndexAfterSave !== -1) {
+            sheets.archivedOrders.deleteRow(freshArchivedIndexAfterSave);
+          }
+        }
       }
 
       updatedCount++;
-    }
-
-    if (updatedCount > 0) {
-      range.setValues(data);
     }
 
     return { ok: true, msg: "تم ترحيل وتحديث الفوج الجماعي لـ " + updatedCount + " أوردر دفعة واحدة بنجاح تام", done: updatedCount };
