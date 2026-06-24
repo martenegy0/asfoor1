@@ -892,31 +892,17 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
     // C. المرتجعات المستردة اليوم: قيمة البضاعة لتم تسليمها للمورد (صافي البضاعة بدون شحن)
     const returnedDeliveredOrders = dayOrders.filter((o: any) => {
       const status = getOrderStatus(o);
-      return [
-        "تم تسليم المرتجع للمورد",
-        "تم تسليمه للمورد",
-        "مرتجع تم تسليمه للمورد",
-        "تم تسليم المرتجع للمورد وتصفية حسابه",
-      ].includes(status);
+      return isReturnedDeliveredToSupplier(status);
     });
     const returnedValueRefunded = returnedDeliveredOrders.reduce((sum, o) => {
       const financials = getOrderFinancials(o);
       return sum + financials.prodPrice;
     }, 0);
 
-    // D. مصاريف شحن المرتجعات لأي أوردر مرتجع في هذا اليوم
+    // D. مصاريف شحن المرتجعات لأي أوردر مرتجع في هذا اليوم (for backwards compatibility/reference, though hidden from view)
     const returnedOrdersAll = dayOrders.filter((o: any) => {
       const status = getOrderStatus(o);
-      return [
-        "مرتجع",
-        "مرتجع جديد",
-        "مرتجع بالمستودع",
-        "مرتجع جزئي بالمستودع",
-        "تم تسليم المرتجع للمورد",
-        "تم تسليمه للمورد",
-        "مرتجع تم تسليمه للمورد",
-        "تم تسليم المرتجع للمورد وتصفية حسابه",
-      ].includes(status);
+      return isSomeReturn(status);
     });
     const returnShippingFees = returnedOrdersAll.reduce((sum, o) => {
       if (getOrderStatus(o) === "مرتجع والعميل دفع الشحن") return sum;
@@ -935,9 +921,9 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
       return sum + Math.abs(Number(l.amount || 0));
     }, 0);
 
-    // E. صافي حساب اليوم: (إجمالي التحصيل الفعلي لطلبات اليوم - المرتجعات المستلمة اليوم - النقدية المصروفة اليوم)
+    // E. الصافي المستحق للمورد اليوم: (إجمالي البضاعة المرفوعة اليومية - المدفوع كاش اليوم - المرتجعات المستلمة اليوم)
     const netDues =
-      totalActualCollected - returnedValueRefunded - totalPayoutsOnDay;
+      totalWorkValue - totalPayoutsOnDay - returnedValueRefunded;
 
     // صافي قيمة البضاعة/المنتجات بدون شحن للطلبات المسلمة والجزئية اليوم
     const netProductValue = dayOrders.reduce((sum, o) => {
@@ -976,6 +962,7 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
       totalActualCollected,
       returnedValueRefunded,
       returnShippingFees,
+      cashPaid: totalPayoutsOnDay,
       netDues,
       netProductValue,
       isSettled,
@@ -1591,7 +1578,7 @@ function getCacheKey(payload: any): string {
 async function fetchWithTimeout(
   url: string,
   options: any = {},
-  timeoutMs = 10000,
+  timeoutMs = 120000,
   retries = 1,
 ): Promise<any> {
   const delay = (ms: number) =>
@@ -2906,7 +2893,7 @@ app.post("/api", async (req: Request, res: Response) => {
               }
               let ordersList = Array.from(uniqueSeen.values());
 
-              if (isAgent || isReturnsOfficer || isOps) {
+              if (isAgent || isOps) {
                 const todayStr = tod(); // Cairo YYYY-MM-DD
                 const bypassTodayFilter =
                   d.includeArchived === true ||
@@ -3108,7 +3095,7 @@ app.post("/api", async (req: Request, res: Response) => {
         ordersList = Array.from(uniqueLocalSeen.values());
 
         // Apply role filter
-        if (isAgent || isReturnsOfficer || isOps) {
+        if (isAgent || isOps) {
           const todayStr = tod(); // Cairo YYYY-MM-DD
           const bypassTodayFilter = needArchived;
           ordersList = ordersList.filter((o: any) => {
@@ -4572,7 +4559,7 @@ app.post("/api", async (req: Request, res: Response) => {
           let status = item.status;
           if (status === "تم التسليم بنجاح") status = "تم التسليم";
           if (status === "مؤجل بناءً على طلب العميل") status = "مؤجل";
-          if (status === "تم تسليم المرتجع للمورد وتصفية حسابه")
+          if (status === "تم تسليم المرتجع للمورد وتصفية حسابه" || status === "تم تسليمه للمورد")
             status = "تم تسليم المرتجع للمورد";
 
           // Enforce role-based allowed status boundaries
@@ -5374,105 +5361,111 @@ app.post("/api", async (req: Request, res: Response) => {
 
         const todayDate = tod();
 
+        const returnStatuses = [
+          "مرتجع",
+          "مرتجع بالمستودع",
+          "مرتجع جديد",
+          "مرتجع جاري تسليمه للمكتب",
+          "جاري الرجوع للمورد",
+          "تم تسليم المرتجع للمورد",
+          "جاهز للتسليم للمورد",
+          "مرتجع تم تسليمه للمورد",
+          "تم تسليم المرتجع للمورد وتصفية حسابه",
+          "مرتجع جزئي بالمستودع",
+          "قيد المرتجع",
+          "التسليم للمورد",
+          "جاري تجهيز المرتجع",
+          "مرتجع والعميل دفع الشحن",
+          "مرتجع مدفوع الشحن"
+        ];
+
+        const getOrderActualCollection = (o: any): number => {
+          const status = (o.status || "").toString().trim();
+          const isFullDelivered = [
+            "تم التسليم",
+            "تم التسليم بنجاح",
+            "تم التسليم (ناجح كاش)"
+          ].includes(status);
+          const isPartialDelivered = [
+            "تسليم جزئي",
+            "تسليم جزئي - معلق للجرد"
+          ].includes(status);
+
+          if (isFullDelivered) {
+            return Number(o.totalCOD) || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
+          } else if (isPartialDelivered) {
+            if (o.partialAmount !== undefined && o.partialAmount !== null && o.partialAmount !== "") {
+              return Number(o.partialAmount);
+            }
+            if (o.actualReceivedCash !== undefined && o.actualReceivedCash !== null && o.actualReceivedCash !== "") {
+              return Number(o.actualReceivedCash);
+            }
+            return Number(o.totalCOD) || 0;
+          }
+          return 0;
+        };
+
         // Strict Courier Settlement Calculations (Today's performance):
-        // 1. Full COD from "تم التسليم" (Total Delivery)
-        const fullDeliveredOrders = courierOrders.filter(
+        const successOrdersToday = courierOrders.filter(
           (o: any) =>
             [
               "تم التسليم",
               "تم التسليم بنجاح",
               "تم التسليم (ناجح كاش)",
+              "تسليم جزئي",
+              "تسليم جزئي - معلق للجرد",
             ].includes(o.status) &&
             o.delivDate &&
             isDateToday(o.delivDate),
         );
-        const fullDeliveredCash = fullDeliveredOrders.reduce(
-          (sum: number, o: any) =>
-            sum +
-            Number(
-              o.totalCOD || Number(o.prodPrice || 0) + Number(o.shipPrice || 0),
-            ),
-          0,
-        );
 
-        // 2. Actual Amount Received from "تسليم جزئي"
-        const partialDeliveredOrders = courierOrders.filter(
+        const returnedOrdersToday = courierOrders.filter(
           (o: any) =>
-            ["تسليم جزئي", "تسليم جزئي - معلق للجرد"].includes(o.status) &&
-            o.delivDate &&
-            isDateToday(o.delivDate),
-        );
-        const partialDeliveredCash = partialDeliveredOrders.reduce(
-          (sum: number, o: any) => {
-            const amt =
-              o.partialAmount !== undefined &&
-              o.partialAmount !== null &&
-              o.partialAmount !== ""
-                ? Number(o.partialAmount)
-                : o.actualReceivedCash !== undefined &&
-                    o.actualReceivedCash !== null &&
-                    o.actualReceivedCash !== ""
-                  ? Number(o.actualReceivedCash)
-                  : Number(o.totalCOD || 0);
-            return sum + amt;
-          },
-          0,
-        );
-
-        // Combine Delivered count and cash
-        const todayDeliveredCount =
-          fullDeliveredOrders.length + partialDeliveredOrders.length;
-        const todayDeliveredCash = fullDeliveredCash + partialDeliveredCash;
-
-        // 3. Returned Shipping Cash (كاش شحن المرتجعات اليوم): (مصاريف الشحن فقط) لجميع الأوردرات "مرتجع مدفوع الشحن" اليوم
-        const todayReturnedPaidOrders = courierOrders.filter(
-          (o: any) =>
-            (o.status === "مرتجع والعميل دفع الشحن" ||
-              o.status === "مرتجع مدفوع الشحن" ||
-              (o.status === "مرتجع" && o.returnShippingType === "paid")) &&
+            returnStatuses.includes(o.status) &&
             o.retDate &&
             isDateToday(o.retDate),
         );
-        const todayReturnedPaidCount = todayReturnedPaidOrders.length;
-        const todayReturnedPaidCash = todayReturnedPaidOrders.reduce(
-          (sum: number, o: any) => sum + Number(o.shipPrice || o.shipCost || 0),
+
+        const todayDeliveredCount = successOrdersToday.length;
+        const todayReturnedCount = returnedOrdersToday.length;
+        const todayTotalCount = todayDeliveredCount + todayReturnedCount;
+
+        // 【إجمالي التحصيل الفعلي الميداني】: مجموع المبالغ الفعلية المستلمة من العملاء للأوردرات الناجحة فقط. المرتجع = 0.
+        const todayDeliveredCash = successOrdersToday.reduce(
+          (sum: number, o: any) => sum + getOrderActualCollection(o),
           0,
         );
 
-        // 4. Total Commission (عمولة المندوب الكلية اليوم): (deliveredCount * successRate) + (returnedPaidCount * successRate)
-        const todayTotalCommission =
-          todayDeliveredCount * commissionSuccess +
-          todayReturnedPaidCount * commissionSuccess;
+        // Strict field-collection rule: returned shipping cash is completely separate/ignored for handovers
+        const todayReturnedPaidCash = 0;
 
-        // Cumulative totals (for historical indicators)
-        const deliveredCount = courierOrders.filter(
+        // 【إجمالي عمولة المندوب】
+        const todayTotalCommission =
+          (todayDeliveredCount * commissionSuccess) +
+          (todayReturnedCount * commissionReturn);
+
+        // Cumulative historical counters
+        const historicalSuccessOrders = courierOrders.filter(
           (o: any) =>
             [
               "تم التسليم",
               "تم التسليم بنجاح",
               "تم التسليم (ناجح كاش)",
-            ].includes(o.status) ||
-            ["تسليم جزئي", "تسليم جزئي - معلق للجرد"].includes(o.status),
-        ).length;
-        const returnedCount = courierOrders.filter((o: any) =>
-          ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(
-            o.status,
-          ),
-        ).length;
-        const returnedPaidCount = courierOrders.filter(
-          (o: any) =>
-            ["مرتجع والعميل دفع الشحن", "مرتجع مدفوع الشحن"].includes(
-              o.status,
-            ) ||
-            (o.status === "مرتجع" && o.returnShippingType === "paid"),
-        ).length;
+              "تسليم جزئي",
+              "تسليم جزئي - معلق للجرد",
+            ].includes(o.status)
+        );
+        const deliveredCount = historicalSuccessOrders.length;
 
-        // Strict Financial Separation:
-        const delivCommission = todayDeliveredCount * commissionSuccess;
-        const returnShippingCommission =
-          todayReturnedPaidCount * commissionSuccess;
+        const historicalReturnedOrders = courierOrders.filter(
+          (o: any) => returnStatuses.includes(o.status)
+        );
+        const returnedCount = historicalReturnedOrders.length;
+        const returnedPaidCount = 0; // simplified to unified collection
 
-        // Fetch adjustments (Bonuses, Penalties) from courierLedger entries
+        const delivCommission = deliveredCount * commissionSuccess;
+        const returnShippingCommission = returnedCount * commissionReturn;
+
         const targetLedger = db.courierLedger.filter(
           (l: any) => l.courier === courierName,
         );
@@ -5482,7 +5475,6 @@ app.post("/api", async (req: Request, res: Response) => {
             (sum: number, x: any) => sum + Math.abs(Number(x.amount || 0)),
             0,
           );
-        // Force penaltiesSum to be a POSITIVE number in representation, avoiding double negative maths!
         const penaltiesSum = targetLedger
           .filter(
             (l: any) =>
@@ -5493,7 +5485,6 @@ app.post("/api", async (req: Request, res: Response) => {
             0,
           );
 
-        // 4. Adjustments for today:
         const todayBonuses = targetLedger
           .filter(
             (l: any) => l.type === "مكافأة" && l.date && isDateToday(l.date),
@@ -5514,53 +5505,14 @@ app.post("/api", async (req: Request, res: Response) => {
             0,
           );
 
-        // Final Settle Equation (الصافي المطلوب توريده للخزنة لليوم):
-        const requiredHandoverToday =
-          todayDeliveredCash +
-          todayReturnedPaidCash -
-          todayTotalCommission -
-          todayPenalties +
-          todayBonuses;
+        // 【الصافي المطلوب توريده من المندوب (العهدة)】: الصافي المطلوب = التحصيل الفعلي الميداني - عمولات المندوب اليومية
+        const requiredHandoverToday = todayDeliveredCash - todayTotalCommission;
 
-        // Compute COD Collection tracking for anti-deficit control
-        const totalCollected = courierOrders.reduce((sum: number, o: any) => {
-          if (
-            [
-              "تم التسليم",
-              "تم التسليم بنجاح",
-              "تم التسليم (ناجح كاش)",
-            ].includes(o.status)
-          ) {
-            return (
-              sum +
-              Number(
-                o.totalCOD ||
-                  Number(o.prodPrice || 0) + Number(o.shipPrice || 0),
-              )
-            );
-          } else if (
-            ["تسليم جزئي", "تسليم جزئي - معلق للجرد"].includes(o.status)
-          ) {
-            const amt =
-              o.partialAmount !== undefined &&
-              o.partialAmount !== null &&
-              o.partialAmount !== ""
-                ? Number(o.partialAmount)
-                : o.actualReceivedCash !== undefined &&
-                    o.actualReceivedCash !== null &&
-                    o.actualReceivedCash !== ""
-                  ? Number(o.actualReceivedCash)
-                  : Number(o.totalCOD || 0);
-            return sum + amt;
-          } else if (
-            o.status === "مرتجع والعميل دفع الشحن" ||
-            o.status === "مرتجع مدفوع الشحن" ||
-            (o.status === "مرتجع" && o.returnShippingType === "paid")
-          ) {
-            return sum + Number(o.shipPrice || o.shipCost || 0);
-          }
-          return sum;
-        }, 0);
+        // Cumulative COD Collection tracking (exact same math-solid pure formula)
+        const totalCollected = courierOrders.reduce(
+          (sum: number, o: any) => sum + getOrderActualCollection(o),
+          0,
+        );
 
         // Handed Over to company = Sum of "استلام عهدة مندوب" records in cashbox for this courier
         const totalPaidToCompany = db.cashbox
@@ -5634,63 +5586,11 @@ app.post("/api", async (req: Request, res: Response) => {
           const deliveredDay = deliveredList.length;
           const returnedDay = returnedList.length;
 
-          // Compute literal cash collected (حساب الكاش الفعلي المستحق بذمة المندوب لليوم)
-          const dayFullDeliveredOrders = courierOrders.filter(
-            (o: any) =>
-              [
-                "تم التسليم",
-                "تم التسليم بنجاح",
-                "تم التسليم (ناجح كاش)",
-              ].includes(o.status) &&
-              o.delivDate &&
-              o.delivDate.substring(0, 10) === dStr,
-          );
-          const dayFullDeliveredCash = dayFullDeliveredOrders.reduce(
-            (sum: number, o: any) =>
-              sum +
-              Number(
-                o.totalCOD || Number(o.prodPrice || 0) + Number(o.shipPrice || 0),
-              ),
+          // Pure cash collected from successful orders only on dStr
+          const dayTotalCashCollected = deliveredList.reduce(
+            (sum: number, o: any) => sum + getOrderActualCollection(o),
             0,
           );
-
-          const dayPartialDeliveredOrders = courierOrders.filter(
-            (o: any) =>
-              ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].includes(o.status) &&
-              o.delivDate &&
-              o.delivDate.substring(0, 10) === dStr,
-          );
-          const dayPartialDeliveredCash = dayPartialDeliveredOrders.reduce(
-            (sum: number, o: any) => {
-              const amt =
-                o.partialAmount !== undefined &&
-                o.partialAmount !== null &&
-                o.partialAmount !== ""
-                  ? Number(o.partialAmount)
-                  : o.actualReceivedCash !== undefined &&
-                      o.actualReceivedCash !== null &&
-                      o.actualReceivedCash !== ""
-                    ? Number(o.actualReceivedCash)
-                    : Number(o.totalCOD || 0);
-              return sum + amt;
-            },
-            0,
-          );
-
-          const dayReturnedPaidOrders = courierOrders.filter(
-            (o: any) =>
-              (o.status === "مرتجع والعميل دفع الشحن" ||
-                o.status === "مرتجع مدفوع الشحن" ||
-                (o.status === "مرتجع" && o.returnShippingType === "paid")) &&
-              o.retDate &&
-              o.retDate.substring(0, 10) === dStr,
-          );
-          const dayReturnedPaidCash = dayReturnedPaidOrders.reduce(
-            (sum: number, o: any) => sum + Number(o.shipPrice || o.shipCost || 0),
-            0,
-          );
-
-          const dayTotalCashCollected = dayFullDeliveredCash + dayPartialDeliveredCash + dayReturnedPaidCash;
 
           // Check if the day is settled by seeing if any orders for this courier on this day are still in the live db.orders list
           const hasLiveUnsettledOrdersForDay = db.orders.some(
@@ -5824,8 +5724,58 @@ app.post("/api", async (req: Request, res: Response) => {
         );
         if (!courierProfile) return err(res, "المندوب غير مسجل");
 
-        const ordersList = db.orders.filter(
-          (o: any) => o.courier === courierName,
+        const returnStatuses = [
+          "مرتجع",
+          "مرتجع بالمستودع",
+          "مرتجع جديد",
+          "مرتجع جاري تسليمه للمكتب",
+          "جاري الرجوع للمورد",
+          "تم تسليم المرتجع للمورد",
+          "جاهز للتسليم للمورد",
+          "مرتجع تم تسليمه للمورد",
+          "تم تسليم المرتجع للمورد وتصفية حسابه",
+          "مرتجع جزئي بالمستودع",
+          "قيد المرتجع",
+          "التسليم للمورد",
+          "جاري تجهيز المرتجع",
+          "مرتجع والعميل دفع الشحن",
+          "مرتجع مدفوع الشحن"
+        ];
+
+        const getOrderActualCollection = (o: any): number => {
+          const status = (o.status || "").toString().trim();
+          const isFullDelivered = [
+            "تم التسليم",
+            "تم التسليم بنجاح",
+            "تم التسليم (ناجح كاش)"
+          ].includes(status);
+          const isPartialDelivered = [
+            "تسليم جزئي",
+            "تسليم جزئي - معلق للجرد"
+          ].includes(status);
+
+          if (isFullDelivered) {
+            return Number(o.totalCOD) || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
+          } else if (isPartialDelivered) {
+            if (o.partialAmount !== undefined && o.partialAmount !== null && o.partialAmount !== "") {
+              return Number(o.partialAmount);
+            }
+            if (o.actualReceivedCash !== undefined && o.actualReceivedCash !== null && o.actualReceivedCash !== "") {
+              return Number(o.actualReceivedCash);
+            }
+            return Number(o.totalCOD) || 0;
+          }
+          return 0;
+        };
+
+        const ordersList = [
+          ...(db.orders || []),
+          ...(db.archivedOrders || []),
+        ].filter(
+          (o: any) =>
+            o.courier &&
+            o.courier.toString().trim().toLowerCase() ===
+              courierName.toString().trim().toLowerCase()
         );
         const total = ordersList.length;
         const delivered = ordersList.filter(
@@ -5834,20 +5784,13 @@ app.post("/api", async (req: Request, res: Response) => {
               "تم التسليم",
               "تم التسليم بنجاح",
               "تم التسليم (ناجح كاش)",
-            ].includes(o.status) ||
-            ["تسليم جزئي", "تسليم جزئي - معلق للجرد"].includes(o.status),
+              "تسليم جزئي",
+              "تسليم جزئي - معلق للجرد",
+            ].includes(o.status)
         ).length;
-        const returnedPaid = ordersList.filter(
-          (o: any) =>
-            ["مرتجع والعميل دفع الشحن", "مرتجع مدفوع الشحن"].includes(
-              o.status,
-            ) ||
-            (o.status === "مرتجع" && o.returnShippingType === "paid"),
-        ).length;
+        const returnedPaid = 0; // unified field-collection model ignores separate returned-paid shipping counts
         const returnedAll = ordersList.filter((o: any) =>
-          ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(
-            o.status,
-          ),
+          returnStatuses.includes(o.status)
         ).length;
 
         const basicSalary =
@@ -5886,74 +5829,42 @@ app.post("/api", async (req: Request, res: Response) => {
         const todayDate = tod();
 
         // Strict Courier Settlement Calculations (Today's performance):
-        // 1. Full COD from "تم التسليم" (Total Delivery)
-        const fullDeliveredOrders = ordersList.filter(
+        const successOrdersToday = ordersList.filter(
           (o: any) =>
             [
               "تم التسليم",
               "تم التسليم بنجاح",
               "تم التسليم (ناجح كاش)",
+              "تسليم جزئي",
+              "تسليم جزئي - معلق للجرد",
             ].includes(o.status) &&
             o.delivDate &&
             isDateToday(o.delivDate),
         );
-        const fullDeliveredCash = fullDeliveredOrders.reduce(
-          (sum: number, o: any) =>
-            sum +
-            Number(
-              o.totalCOD || Number(o.prodPrice || 0) + Number(o.shipPrice || 0),
-            ),
-          0,
-        );
 
-        // 2. Actual Amount Received from "تسليم جزئي"
-        const partialDeliveredOrders = ordersList.filter(
+        const returnedOrdersToday = ordersList.filter(
           (o: any) =>
-            ["تسليم جزئي", "تسليم جزئي - معلق للجرد"].includes(o.status) &&
-            o.delivDate &&
-            isDateToday(o.delivDate),
-        );
-        const partialDeliveredCash = partialDeliveredOrders.reduce(
-          (sum: number, o: any) => {
-            const amt =
-              o.partialAmount !== undefined &&
-              o.partialAmount !== null &&
-              o.partialAmount !== ""
-                ? Number(o.partialAmount)
-                : o.actualReceivedCash !== undefined &&
-                    o.actualReceivedCash !== null &&
-                    o.actualReceivedCash !== ""
-                  ? Number(o.actualReceivedCash)
-                  : Number(o.totalCOD || 0);
-            return sum + amt;
-          },
-          0,
-        );
-
-        // Combine Delivered count and cash
-        const todayDeliveredCount =
-          fullDeliveredOrders.length + partialDeliveredOrders.length;
-        const todayDeliveredCash = fullDeliveredCash + partialDeliveredCash;
-
-        // 3. Returned Shipping Cash (كاش شحن المرتجعات اليوم): (مصاريف الشحن فقط) لجميع الأوردرات "مرتجع مدفوع الشحن" اليوم
-        const todayReturnedPaidOrders = ordersList.filter(
-          (o: any) =>
-            (o.status === "مرتجع والعميل دفع الشحن" ||
-              o.status === "مرتجع مدفوع الشحن" ||
-              (o.status === "مرتجع" && o.returnShippingType === "paid")) &&
+            returnStatuses.includes(o.status) &&
             o.retDate &&
             isDateToday(o.retDate),
         );
-        const todayReturnedPaidCount = todayReturnedPaidOrders.length;
-        const todayReturnedPaidCash = todayReturnedPaidOrders.reduce(
-          (sum: number, o: any) => sum + Number(o.shipPrice || o.shipCost || 0),
+
+        const todayDeliveredCount = successOrdersToday.length;
+        const todayReturnedCount = returnedOrdersToday.length;
+
+        // 【إجمالي التحصيل الفعلي الميداني】
+        const todayDeliveredCash = successOrdersToday.reduce(
+          (sum: number, o: any) => sum + getOrderActualCollection(o),
           0,
         );
 
-        // 4. Total Commission (عمولة المندوب الكلية اليوم): (deliveredCount * successRate) + (returnedPaidCount * successRate)
+        // Strict field-collection rule: returned shipping cash is completely separate/ignored for handovers
+        const todayReturnedPaidCash = 0;
+
+        // 【إجمالي عمولة المندوب】
         const todayTotalCommission =
-          todayDeliveredCount * commissionSuccess +
-          todayReturnedPaidCount * commissionSuccess;
+          (todayDeliveredCount * commissionSuccess) +
+          (todayReturnedCount * commissionReturn);
 
         const todayBonuses = ledgerTr
           .filter(
@@ -5975,15 +5886,9 @@ app.post("/api", async (req: Request, res: Response) => {
             0,
           );
 
-        // Final Settle Equation (الصافي المطلوب توريده للخزنة لليوم):
-        const requiredHandoverToday =
-          todayDeliveredCash +
-          todayReturnedPaidCash -
-          todayTotalCommission -
-          todayPenalties +
-          todayBonuses;
+        // 【الصافي المطلوب توريده من المندوب (العهدة)】: الصافي المطلوب = التحصيل الفعلي الميداني - عمولات المندوب اليومية
+        const requiredHandoverToday = todayDeliveredCash - todayTotalCommission;
 
-        // Total commissions to pay consists of today's deliveries since past days are already closed & settled/paid.
         const totalCommission = todayTotalCommission;
         const totalEarnings =
           basicSalary + totalCommission + bonuses - penalties;
@@ -6178,8 +6083,8 @@ app.post("/api", async (req: Request, res: Response) => {
           totalEarnings,
           todayDelivered: todayDeliveredCount,
           todayDelivCommission: todayTotalCommission,
-          todayReturned: todayReturnedPaidCount,
-          todayReturnCommission: todayReturnedPaidCount * commissionSuccess,
+          todayReturned: todayReturnedCount,
+          todayReturnCommission: todayReturnedCount * commissionReturn,
           todayDeliveredCash,
           todayReturnedPaidCash,
           todayTotalCommission,

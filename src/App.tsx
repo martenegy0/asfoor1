@@ -309,7 +309,26 @@ export default function App() {
       } else if (isSupplier) {
         orderList = orderList.filter((o: any) => o.supplier && o.supplier.toString().trim().toLowerCase() === cleanUser);
       } else if (isReturnsOfficer) {
-        orderList = orderList.filter((o: any) => ["مرتجع", "التسليم للمورد", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) || o.returnQueueStatus);
+        orderList = orderList.filter((o: any) => 
+          [
+            "مرتجع",
+            "مرتجع بالمستودع",
+            "مرتجع جديد",
+            "مرتجع جاري تسليمه للمكتب",
+            "جاري الرجوع للمورد",
+            "تم تسليم المرتجع للمورد",
+            "جاهز للتسليم للمورد",
+            "مرتجع تم تسليمه للمورد",
+            "تم تسليم المرتجع للمورد وتصفية حسابه",
+            "مرتجع جزئي بالمستودع",
+            "قيد المرتجع",
+            "التسليم للمورد",
+            "جاري تجهيز المرتجع"
+          ].includes(o.status) || 
+          o.returnQueueStatus ||
+          (o.status || "").toString().includes("مرتجع") ||
+          (o.status || "").toString().includes("للمورد")
+        );
       }
 
       setOrders(orderList);

@@ -510,42 +510,36 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
 
             {/* Quick Metrics */}
             {dailyLedgers && (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3 max-w-5xl mx-auto pt-2">
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3 max-w-5xl mx-auto pt-2">
                 <div className="bg-slate-950/80 border border-white/4 p-3 rounded-xl text-center shadow-md">
                   <div className="text-[10px] font-black text-slate-400">إجمالي البضاعة المرفوعة</div>
                   <div className="text-sm font-mono font-bold text-slate-200 mt-1">
                     {Number(dailyLedgers.totalGoodsUploaded || 0).toLocaleString("ar")} ج.م
                   </div>
                 </div>
-                <div className="bg-slate-950/80 border border-amber-500/20 p-3 rounded-xl text-center shadow-md">
-                  <div className="text-[10px] font-black text-amber-500">صافي قيمة البضاعة (تسليم وجزئي)</div>
-                  <div className="text-sm font-mono font-bold text-amber-450 mt-1">
-                    {Number(dailyLedgers.overallNetProductValue || 0).toLocaleString("ar")} ج.م
+                <div className="bg-slate-950/80 border border-white/4 p-3 rounded-xl text-center shadow-md">
+                  <div className="text-[10px] font-black text-slate-405">إجمالي الدفعات المسددة</div>
+                  <div className="text-sm font-mono font-bold text-indigo-400 mt-1">
+                    {Number(dailyLedgers.globalPayments || 0).toLocaleString("ar")} ج.m
                   </div>
                 </div>
                 <div className="bg-slate-950/80 border border-white/4 p-3 rounded-xl text-center shadow-md">
-                  <div className="text-[10px] font-black text-slate-400">المرتجع المعتمد المستلم</div>
+                  <div className="text-[10px] font-black text-slate-400">إجمالي المرتجعات المستلمة</div>
                   <div className="text-sm font-mono font-bold text-red-400 mt-1">
                     {Number(dailyLedgers.returnsDeliveredValue || 0).toLocaleString("ar")} ج.م
                   </div>
                 </div>
-                <div className="bg-slate-950/80 border border-white/4 p-3 rounded-xl text-center shadow-md">
-                  <div className="text-[10px] font-black text-slate-400">إجمالي الدفعات المسددة</div>
-                  <div className="text-sm font-mono font-bold text-indigo-400 mt-1">
-                    {Number(dailyLedgers.globalPayments || 0).toLocaleString("ar")} ج.م
-                  </div>
-                </div>
-                <div className="bg-slate-950/85 border-2 border-emerald-500/20 p-3 rounded-xl text-center shadow-md">
-                  <div className="text-[10px] font-black text-emerald-400">مستحقات معلقة تصفية نهائية</div>
+                <div className="bg-slate-950/85 border border-emerald-500/20 p-3 rounded-xl text-center shadow-md">
+                  <div className="text-[10px] font-black text-emerald-400">إجمالي الصافي المستحق للمورد</div>
                   <div className="text-sm font-mono font-bold text-emerald-300 mt-1">
                     {Number(dailyLedgers.outstandingBalance || 0).toLocaleString("ar")} ج.م
                   </div>
                 </div>
-                <div className="bg-slate-950/80 border border-white/4 p-3 rounded-xl text-center col-span-2 sm:col-span-1 shadow-md">
+                <div className="bg-slate-950/80 border border-white/4 p-3 rounded-xl text-center col-span-2 md:col-span-1 shadow-md">
                   <div className="text-[10px] font-black text-slate-400">حالة الأيام</div>
                   <div className="text-[10px] font-bold text-slate-300 mt-1 flex justify-around border-t border-white/5 pt-1">
-                    <span className="text-red-350">🔴 {dailyLedgers.days.filter((d: any) => !d.isSettled).length} معلق</span>
-                    <span className="text-emerald-400">🟢 {dailyLedgers.days.filter((d: any) => d.isSettled).length} مصفى</span>
+                    <span className="text-red-350 font-bold">🔴 {dailyLedgers.days.filter((d: any) => !d.isSettled).length} معلق</span>
+                    <span className="text-emerald-400 font-bold">🟢 {dailyLedgers.days.filter((d: any) => d.isSettled).length} مصفى</span>
                   </div>
                 </div>
               </div>
@@ -712,34 +706,34 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
                         >
                           <div className="space-y-4">
                             {/* Day Financial Grid Stats */}
-                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                              <div className="bg-slate-950 border border-white/4 p-2.5 rounded-xl">
-                                <span className="text-[9.5px] text-slate-400 block font-bold">إجمالي قيمة الشغل (COD كلي)</span>
-                                <span className="text-xs font-mono font-black text-slate-200">{Number(item.totalWorkValue || 0).toLocaleString("ar")} ج.م</span>
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                              <div className="bg-slate-950/80 border border-white/4 p-3 rounded-xl text-center">
+                                <span className="text-[10px] text-slate-400 block font-black mb-1">【حساب البضاعة المرفوعة اليومية】</span>
+                                <span className="text-sm font-mono font-black text-slate-200">
+                                  {Number(item.totalWorkValue || 0).toLocaleString("ar")} ج.م
+                                </span>
                               </div>
-                              <div className="bg-slate-950 border border-amber-500/20 p-2.5 rounded-xl">
-                                <span className="text-[9.5px] text-amber-500 block font-bold">صافي ثمن البضاعة (بدون شحن)</span>
-                                <span className="text-xs font-mono font-bold text-amber-400">{Number(item.netProductValue || 0).toLocaleString("ar")} ج.م</span>
+                              <div className="bg-slate-950/80 border border-white/4 p-3 rounded-xl text-center">
+                                <span className="text-[10px] text-slate-400 block font-black mb-1">【حساب النقدي (المدفوع كاش اليوم)】</span>
+                                <span className="text-sm font-mono font-black text-indigo-450">
+                                  {Number(item.cashPaid || 0).toLocaleString("ar")} ج.م
+                                </span>
                               </div>
-                              <div className="bg-slate-950 border border-white/4 p-2.5 rounded-xl">
-                                <span className="text-[9.5px] text-slate-400 block font-bold">إجمالي التحصيل الفعلي الميداني</span>
-                                <span className="text-xs font-mono font-black text-emerald-400">{Number(item.totalActualCollected || 0).toLocaleString("ar")} ج.م</span>
-                              </div>
-                              <div className="bg-slate-950 border border-white/4 p-2.5 rounded-xl">
-                                <span className="text-[9.5px] text-slate-400 block font-bold">المرتجع المسترد اليوم</span>
-                                <span className="text-xs font-mono font-black text-red-400">{Number(item.returnedValueRefunded || 0).toLocaleString("ar")} ج.م</span>
-                              </div>
-                              <div className="bg-slate-950 border border-white/4 p-2.5 rounded-xl">
-                                <span className="text-[9.5px] text-slate-400 block font-bold">خصم شحن المرتجعات</span>
-                                <span className="text-xs font-mono font-black text-slate-350">{Number(item.returnShippingFees || 0).toLocaleString("ar")} ج.م</span>
+                              <div className="bg-slate-950/80 border border-white/4 p-3 rounded-xl text-center">
+                                <span className="text-[10px] text-slate-400 block font-black mb-1">【حساب المرتجعات المستلمة اليوم】</span>
+                                <span className="text-sm font-mono font-black text-red-400">
+                                  {Number(item.returnedValueRefunded || 0).toLocaleString("ar")} ج.م
+                                </span>
                               </div>
                             </div>
 
                             {/* Net Dues Container */}
-                            <div className="bg-slate-950 border border-white/6 p-3.5 rounded-xl flex items-center justify-between">
+                            <div className="bg-gradient-to-r from-emerald-950/30 to-slate-950 border border-emerald-500/20 p-4 rounded-xl flex items-center justify-between shadow-inner">
                               <div>
-                                <span className="text-[10px] text-slate-400 block font-black">صافي حساب اليوم:</span>
-                                <span className="text-2xs text-slate-500 font-semibold">(إجمالي التحصيل الفعلي - مرتجعات مستلمة - نقدية مصروفة باليوم)</span>
+                                <span className="text-xs text-emerald-450 block font-black">【الصافي المستحق للمورد اليوم】</span>
+                                <span className="text-[10px] text-slate-500 font-bold block mt-1">
+                                  المعادلة الحسابية الصارمة: (البضاعة المرفوعة اليومية) - (المدفوع كاش اليوم) - (المرتجع المعتمد اليوم)
+                                </span>
                               </div>
                               <div className="text-base font-mono font-black text-emerald-400 text-left">
                                 {Number(item.netDues || 0).toLocaleString("ar")} ج.م
@@ -771,9 +765,7 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
                                   cleanedPhone = "2" + cleanedPhone;
                                 }
 
-                                const totalPayoutsOnDay = Math.max(0, (item.totalActualCollected || 0) - (item.returnedValueRefunded || 0) - (item.netDues || 0));
-                                
-                                const msg = `السلام عليكم يا فندم، تفاصيل كشف حسابكم ليوم ${item.date} طرف شركة الشحن:\n- 📦 إجمالي الطلبات المرفوعة: ${item.orderCount} بقيمة ${(item.totalWorkValue || 0).toLocaleString("ar")} ج.م\n- 💰 صافي قيمة البضاعة (بدون شحن): ${(item.netProductValue || 0).toLocaleString("ar")} ج.م\n- 🔄 المرتجعات المستلمة: ${(item.returnedValueRefunded || 0).toLocaleString("ar")} ج.م\n- 💵 الدفعات النقدية والمسحوبات: ${totalPayoutsOnDay.toLocaleString("ar")} ج.م\n- 🔴 المتبقي والصافي المستحق لكم: ${(item.netDues || 0).toLocaleString("ar")} ج.م\n\nشكراً لتعاملكم معنا متاح للمراجعة.`;
+                                const msg = `السلام عليكم يا فندم، تفاصيل كشف حسابكم ليوم ${item.date} طرف شركة الشحن:\n- 📦 【حساب البضاعة المرفوعة اليومية】: ${(item.totalWorkValue || 0).toLocaleString("ar")} ج.م\n- 💵 【حساب النقدي (المدفوع كاش اليوم)】: ${(item.cashPaid || 0).toLocaleString("ar")} ج.م\n- 🔄 【حساب المرتجعات المستلمة اليوم】: ${(item.returnedValueRefunded || 0).toLocaleString("ar")} ج.م\n- 🔴 【الصافي المستحق للمورد اليوم】: ${(item.netDues || 0).toLocaleString("ar")} ج.م\n\nشكراً لتعاملكم معنا متاح للمراجعة.`;
 
                                 const encodedText = encodeURIComponent(msg);
                                 const whatsappUrl = `https://api.whatsapp.com/send?phone=${cleanedPhone}&text=${encodedText}`;

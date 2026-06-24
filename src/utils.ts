@@ -95,7 +95,7 @@ export async function apiCall(action: string, token: string, extraParams: any = 
   for (let i = 0; i <= retries; i++) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 20000); // 20s timeout
+      const timeoutId = setTimeout(() => controller.abort(), 120000); // 120s timeout
       
       let response;
       try {
