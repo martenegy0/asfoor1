@@ -13,6 +13,7 @@ export interface Courier {
   commission: number;
   salary: number;
   region: string;
+  hire_date?: string;
 }
 
 export interface Supplier {

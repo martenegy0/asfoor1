@@ -74,6 +74,7 @@ export default function App() {
   const [courierBaseSalary, setCourierBaseSalary] = useState(3000);
   const [courierCommissionSuccess, setCourierCommissionSuccess] = useState(25);
   const [courierCommissionReturn, setCourierCommissionReturn] = useState(10);
+  const [courierHireDate, setCourierHireDate] = useState("");
 
   // --- Audit Log states ---
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
@@ -550,7 +551,8 @@ export default function App() {
         region: courierRegion,
         base_fixed_salary: Number(courierBaseSalary),
         commission_success: Number(courierCommissionSuccess),
-        commission_return: Number(courierCommissionReturn)
+        commission_return: Number(courierCommissionReturn),
+        hire_date: courierHireDate
       });
       if (res.ok) {
         setCourierEditModalOpen(false);
@@ -1144,6 +1146,7 @@ export default function App() {
                               setCourierBaseSalary(courierItem.base_fixed_salary !== undefined ? Number(courierItem.base_fixed_salary) : Number(courierItem.salary || 3000));
                               setCourierCommissionSuccess(courierItem.commission_success !== undefined ? Number(courierItem.commission_success) : Number(courierItem.commission || 25));
                               setCourierCommissionReturn(courierItem.commission_return !== undefined ? Number(courierItem.commission_return) : 10);
+                              setCourierHireDate(courierItem.hire_date || "");
                               setCourierEditModalOpen(true);
                             }}
                             className="px-2.5 py-1.5 rounded-lg text-[10px] font-black cursor-pointer bg-slate-900 text-slate-300 border border-white/8 hover:text-white transition-colors"
@@ -1240,6 +1243,7 @@ export default function App() {
                             setCourierBaseSalary(bSalary);
                             setCourierCommissionSuccess(commSuccess);
                             setCourierCommissionReturn(commReturn);
+                            setCourierHireDate(c.hire_date || "");
                             setCourierEditModalOpen(true);
                           }}
                           className="w-full py-2 bg-slate-950 hover:bg-slate-950/70 border border-white/8 rounded-xl text-[10px] font-black cursor-pointer text-amber-500 hover:text-amber-450 text-center transition-colors flex items-center justify-center gap-1"
@@ -1606,6 +1610,16 @@ export default function App() {
                   onChange={(e) => setCourierBaseSalary(Number(e.target.value))}
                   placeholder="مثال: 4000..."
                   className="w-full bg-slate-950 text-slate-200 border border-amber-900/40 rounded-lg px-3 py-2 text-xs text-right font-mono"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-[10px] text-slate-450 font-bold">تاريخ بدء المحاسبة / التعيين</label>
+                <input
+                  type="date"
+                  value={courierHireDate}
+                  onChange={(e) => setCourierHireDate(e.target.value)}
+                  className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-lg px-3 py-2 text-xs text-center font-mono"
                 />
               </div>
 

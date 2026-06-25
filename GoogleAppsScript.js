@@ -151,6 +151,9 @@ function doPost(e) {
       case "settleCourierOrders":
         result = settleCourierOrders(sheets, requestData);
         break;
+      case "closeCourierMonth":
+        result = closeCourierMonth(sheets, requestData);
+        break;
       case "statusHistory":
         result = getStatusHistory(sheets, requestData);
         break;
@@ -227,26 +230,26 @@ function initSheets() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const defs = {
     users: ["name", "role", "pass", "active", "email", "perms"],
-    couriers: ["name", "phone", "commission", "salary", "region", "base_fixed_salary", "commission_success", "commission_return"],
+    couriers: ["name", "phone", "commission", "salary", "region", "base_fixed_salary", "commission_success", "commission_return", "hire_date", "last_closing_date"],
     suppliers: ["name", "phone", "price", "notes", "openingBalance"],
     orders: [
       "tracking", "createdAt", "updatedAt", "orderDate", "supplier", "customer", 
       "phone", "phone2", "gov", "region", "address", "prodPrice", "shipPrice", 
       "totalCOD", "shipCost", "courier", "status", "prodType", "notes", "delivDate", "retDate", 
-      "addedBy", "commission", "returnShippingType", "returnQueueStatus", "returnQueueAgent", "موقع العميل/الخريطة"
+      "addedBy", "commission", "returnShippingType", "returnQueueStatus", "returnQueueAgent", "isSettledMonth", "موقع العميل/الخريطة"
     ],
     archivedOrders: [
       "tracking", "createdAt", "updatedAt", "orderDate", "supplier", "customer", 
       "phone", "phone2", "gov", "region", "address", "prodPrice", "shipPrice", 
       "totalCOD", "shipCost", "courier", "status", "prodType", "notes", "delivDate", "retDate", 
-      "addedBy", "commission", "returnShippingType", "returnQueueStatus", "returnQueueAgent", "isSettled", "is_settled", "موقع العميل/الخريطة"
+      "addedBy", "commission", "returnShippingType", "returnQueueStatus", "returnQueueAgent", "isSettled", "is_settled", "isSettledMonth", "موقع العميل/الخريطة"
     ],
-    expenses: ["id", "date", "amount", "desc", "category", "addedBy"],
-    cashbox: ["date", "desc", "type", "amount", "ref", "addedBy"],
+    expenses: ["id", "date", "amount", "desc", "category", "addedBy", "isSettledMonth"],
+    cashbox: ["date", "desc", "type", "amount", "ref", "addedBy", "isSettledMonth"],
     statusHistory: ["tracking", "oldStatus", "newStatus", "updatedBy", "dateTime"],
     supplierLedger: ["supplier", "date", "type", "tracking", "amount", "desc"],
     supplierSettlements: ["supplier", "date", "status", "settledAt", "settledBy"],
-    courierLedger: ["courier", "date", "type", "tracking", "amount", "desc"],
+    courierLedger: ["courier", "date", "type", "tracking", "amount", "desc", "isSettledMonth"],
     auditLog: ["user", "type", "dateTime", "oldVal", "newVal", "reason"],
     dailyClosing: ["date", "deliveredCount", "returnedCount", "totalCOD", "shippingCost", "addedBy"]
   };
@@ -909,6 +912,16 @@ function updateStatus(sheets, d) {
   if (status === "تسليم جزئي" || status === "تسليم جزئي - معلق للجرد") {
     updateObj.delivDate = now();
     const pAm = Number(d.partialAmount || order.totalCOD || 0);
+
+    // Save original product price before modifying totalCOD!
+    var financialsBefore = getOrderFinancials(order);
+    if (!order.originalProdPrice) {
+      updateObj.originalProdPrice = financialsBefore.prodPrice;
+    }
+    if (!order.originalTotalCOD) {
+      updateObj.originalTotalCOD = financialsBefore.totalCOD;
+    }
+
     updateObj.totalCOD = pAm;
     updateObj.partialAmount = pAm;
     updateObj.actualReceivedCash = pAm;
@@ -932,14 +945,14 @@ function updateStatus(sheets, d) {
     const ledgerData = getTableData(sheets.supplierLedger);
     const dupLedger = ledgerData.find(l => l.tracking === tracking && (l.type === "أوردر مستلم" || l.type === "تسليم" || l.type === "أوردر مستلم جزئي"));
     if (!dupLedger) {
-      const supplierShare = pAm - Number(order.shipPrice || 0);
+      const supplierShare = pAm;
       appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
         supplier: order.supplier,
         date: now(),
         type: "أوردر مستلم جزئي",
         tracking: tracking,
         amount: supplierShare,
-        desc: `حقوق توريد أوردر تسليم جزئي: ${tracking} (المبلغ المحصل للشركة ${pAm} - شحن الشركة ${order.shipPrice})`
+        desc: `حقوق توريد أوردر تسليم جزئي: ${tracking} (قيمة البضاعة المباعة الصافية: ${pAm} ج.م)`
       });
     }
   }
@@ -1558,10 +1571,13 @@ function isHumanPayout(l) {
   var desc = (l.desc || "").toString().trim();
   var tracking = (l.tracking || "").toString().trim();
   
-  var isPayOrAdj = ["دفع نقدي", "دفعة مورد", "صرف مورد", "دفعة", "مسحوبات", "سحب"].indexOf(type) !== -1 || 
+  var isPayOrAdj = ["دفع نقدي", "دفعة مورد", "صرف مورد", "دفعة", "مسحوبات", "سحب", "استلام نقدية", "مسترد نقدية", "تسوية رصيد", "تسوية إضافة", "تسوية خصم"].indexOf(type) !== -1 || 
                      type.indexOf("دفعة") !== -1 || 
                      type.indexOf("صرف") !== -1 || 
                      type.indexOf("سحب") !== -1 || 
+                     type.indexOf("تسوية") !== -1 || 
+                     type.indexOf("استلام") !== -1 || 
+                     type.indexOf("مسترد") !== -1 || 
                      tracking === "CASH-PAY";
                      
   var isAutoOrReturn = type.indexOf("مرتجع") !== -1 || 
@@ -1764,7 +1780,14 @@ function getSupplierLedgerData(sheets, d) {
       return lDate === dayDate && isHumanPayout(l);
     });
     var totalPayoutsOnDay = dayPayments.reduce(function(sum, l) {
-      return sum + Math.abs(Number(l.amount || 0));
+      var type = (l.type || l["النوع"] || l.type || "").toString().trim();
+      var isInflow = type.indexOf("استلام نقدية") !== -1 || type.indexOf("مسترد") !== -1 || type.indexOf("وارد") !== -1 || type.indexOf("إيراد للخزنة") !== -1;
+      var isManualAddition = type.indexOf("تسوية إضافة") !== -1 || type.indexOf("إضافة يدوي") !== -1;
+      var val = Math.abs(Number(l.amount || 0));
+      if (isInflow || isManualAddition) {
+        return sum - val;
+      }
+      return sum + val;
     }, 0);
 
     // E. Net dues = total work value - total payouts on day - returned value refunded
@@ -2019,6 +2042,22 @@ function getOrderFinancials(o) {
     prodPrice = parseSafeNumber(rawProd);
   }
   if (isNaN(prodPrice)) prodPrice = 0;
+
+  var status = o.status || o["الحالة"] || "";
+  var isPartial = ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].includes(status) || o.isPartial === true || o.isPartial === "true" || (o.returnSubStatus && o.returnSubStatus.indexOf("تسليم جزئي") !== -1);
+
+  if (isPartial) {
+    var partialAmt = Number(o.partialAmount !== undefined && o.partialAmount !== null ? o.partialAmount : (o.actualReceivedCash !== undefined && o.actualReceivedCash !== null ? o.actualReceivedCash : (totalCOD !== undefined && totalCOD !== null ? totalCOD : 0)));
+    var originalProdPrice = o.originalProdPrice !== undefined && o.originalProdPrice !== null ? Number(o.originalProdPrice) : (o.prodPrice || prodPrice);
+    if (originalProdPrice <= partialAmt && o.prodPrice > partialAmt) {
+      originalProdPrice = Number(o.prodPrice);
+    }
+    return {
+      prodPrice: isNaN(originalProdPrice) ? partialAmt : originalProdPrice,
+      shipPrice: isNaN(shipPrice) ? 0 : shipPrice,
+      totalCOD: isNaN(totalCOD) ? 0 : totalCOD
+    };
+  }
 
   if (totalCOD > 0) {
     prodPrice = totalCOD - shipPrice;
@@ -2910,7 +2949,7 @@ function addDailyClosing(sheets, d) {
 }
 
 function updateCourier(sheets, d) {
-  const { name, phone, region, base_fixed_salary, commission_success, commission_return } = d;
+  const { name, phone, region, base_fixed_salary, commission_success, commission_return, hire_date } = d;
   if (!name) return { ok: false, error: "اسم المندوب مطلوب لتحديث البيانات" };
 
   const couriersSheet = sheets.couriers;
@@ -2938,12 +2977,20 @@ function updateCourier(sheets, d) {
     region: region || "—",
     base_fixed_salary: Number(base_fixed_salary !== undefined ? base_fixed_salary : 3000),
     commission_success: Number(commission_success !== undefined ? commission_success : 25),
-    commission_return: Number(commission_return !== undefined ? commission_return : 10)
+    commission_return: Number(commission_return !== undefined ? commission_return : 10),
+    hire_date: hire_date || "",
+    last_closing_date: ""
   };
 
   if (courierIndex === -1) {
-    appendToSheet(couriersSheet, ["name", "phone", "commission", "salary", "region", "base_fixed_salary", "commission_success", "commission_return"], courierObj);
+    appendToSheet(couriersSheet, ["name", "phone", "commission", "salary", "region", "base_fixed_salary", "commission_success", "commission_return", "hire_date", "last_closing_date"], courierObj);
   } else {
+    // If it exists, retrieve old last_closing_date to preserve it
+    const lastClosingColIdx = getHeaderIndex(couriersSheet, "last_closing_date");
+    if (lastClosingColIdx !== -1) {
+      const oldLastClosing = couriersSheet.getRange(courierIndex, lastClosingColIdx).getValue();
+      courierObj.last_closing_date = oldLastClosing ? oldLastClosing.toString().trim() : "";
+    }
     updateRowByObject(couriersSheet, courierIndex, courierObj);
   }
 
@@ -3172,4 +3219,156 @@ function saveSupplier(sheets, d) {
   }
 
   return { ok: true, msg: "تم حفظ وتحديث بيانات المورد بنجاح ✓" };
+}
+
+function closeCourierMonth(sheets, d) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+
+  try {
+    var courier = d.courier;
+    var todayDate = d.todayDate;
+    var currentUser = d.currentUser || "إدارة";
+    
+    if (!courier) return { ok: false, error: "المندوب غير محدد" };
+
+    var nowCairoStr = now();
+    var searchCourier = courier.toString().trim().toLowerCase();
+
+    // 1. Move all live orders for this courier to archivedOrders sheet and mark isSettledMonth = "true"
+    var ordersSheet = sheets.orders;
+    var ordersLastRow = ordersSheet.getLastRow();
+    if (ordersLastRow > 1) {
+      var ordersHeaders = ordersSheet.getRange(1, 1, 1, ordersSheet.getLastColumn()).getValues()[0].map(function(h) { return h ? h.toString().trim() : ""; });
+      var ordersData = ordersSheet.getRange(1, 1, ordersLastRow, ordersSheet.getLastColumn()).getValues();
+
+      var courierIdx = ordersHeaders.indexOf("courier");
+      
+      if (courierIdx !== -1) {
+        // Process from bottom to top so deletion indices remain stable
+        for (var r = ordersData.length - 1; r >= 1; r--) {
+          var rowCourier = ordersData[r][courierIdx] ? ordersData[r][courierIdx].toString().trim() : "";
+          if (rowCourier.toLowerCase() === searchCourier) {
+            // Build object representation of this order row
+            var orderObj = {};
+            for (var c = 0; c < ordersHeaders.length; c++) {
+              if (ordersHeaders[c]) {
+                orderObj[ordersHeaders[c]] = ordersData[r][c];
+              }
+            }
+            orderObj["isSettled"] = "true";
+            orderObj["is_settled"] = "true";
+            orderObj["isSettledMonth"] = "true";
+            orderObj["updatedAt"] = nowCairoStr;
+
+            var archHeaders = sheets.archivedOrders.getRange(1, 1, 1, sheets.archivedOrders.getLastColumn()).getValues()[0].map(function(h) { return h ? h.toString().trim() : ""; });
+            appendToSheet(sheets.archivedOrders, archHeaders, orderObj);
+            ordersSheet.deleteRow(r + 1);
+          }
+        }
+      }
+    }
+
+    // 2. Set isSettledMonth = "true" on any already archived orders for this courier
+    var archiveSheet = sheets.archivedOrders;
+    var archLastRow = archiveSheet.getLastRow();
+    if (archLastRow > 1) {
+      var archHeaders = archiveSheet.getRange(1, 1, 1, archiveSheet.getLastColumn()).getValues()[0].map(function(h) { return h ? h.toString().trim() : ""; });
+      var archData = archiveSheet.getRange(1, 1, archLastRow, archiveSheet.getLastColumn()).getValues();
+      var archCourierIdx = archHeaders.indexOf("courier");
+      var archIsSettledMonthIdx = archHeaders.indexOf("isSettledMonth");
+
+      if (archCourierIdx !== -1 && archIsSettledMonthIdx !== -1) {
+        for (var r = 1; r < archData.length; r++) {
+          var rowCourier = archData[r][archCourierIdx] ? archData[r][archCourierIdx].toString().trim() : "";
+          if (rowCourier.toLowerCase() === searchCourier) {
+            archiveSheet.getRange(r + 1, archIsSettledMonthIdx + 1).setValue("true");
+          }
+        }
+      }
+    }
+
+    // 3. Mark cashbox handovers for this courier as settled
+    var cashboxSheet = sheets.cashbox;
+    var cbLastRow = cashboxSheet.getLastRow();
+    if (cbLastRow > 1) {
+      var cbHeaders = cashboxSheet.getRange(1, 1, 1, cashboxSheet.getLastColumn()).getValues()[0].map(function(h) { return h ? h.toString().trim() : ""; });
+      var cbData = cashboxSheet.getRange(1, 1, cbLastRow, cashboxSheet.getLastColumn()).getValues();
+      var cbTypeIdx = cbHeaders.indexOf("type");
+      var cbRefIdx = cbHeaders.indexOf("ref");
+      var cbIsSettledMonthIdx = cbHeaders.indexOf("isSettledMonth");
+
+      if (cbTypeIdx !== -1 && cbRefIdx !== -1 && cbIsSettledMonthIdx !== -1) {
+        for (var r = 1; r < cbData.length; r++) {
+          var rowType = cbData[r][cbTypeIdx] ? cbData[r][cbTypeIdx].toString().trim() : "";
+          var rowRef = cbData[r][cbRefIdx] ? cbData[r][cbRefIdx].toString().trim() : "";
+          if (rowType === "استلام عهدة مندوب" && rowRef.toLowerCase() === searchCourier) {
+            cashboxSheet.getRange(r + 1, cbIsSettledMonthIdx + 1).setValue("true");
+          }
+        }
+      }
+    }
+
+    // 4. Mark expenses for this courier as settled
+    var expensesSheet = sheets.expenses;
+    var expLastRow = expensesSheet.getLastRow();
+    if (expLastRow > 1) {
+      var expHeaders = expensesSheet.getRange(1, 1, 1, expensesSheet.getLastColumn()).getValues()[0].map(function(h) { return h ? h.toString().trim() : ""; });
+      var expData = expensesSheet.getRange(1, 1, expLastRow, expensesSheet.getLastColumn()).getValues();
+      var expByIdx = expHeaders.indexOf("addedBy");
+      var expIsSettledMonthIdx = expHeaders.indexOf("isSettledMonth");
+
+      if (expByIdx !== -1 && expIsSettledMonthIdx !== -1) {
+        for (var r = 1; r < expData.length; r++) {
+          var rowBy = expData[r][expByIdx] ? expData[r][expByIdx].toString().trim() : "";
+          if (rowBy.toLowerCase() === searchCourier) {
+            expensesSheet.getRange(r + 1, expIsSettledMonthIdx + 1).setValue("true");
+          }
+        }
+      }
+    }
+
+    // 5. Mark courier ledger adjustments as settled
+    var ledgerSheet = sheets.courierLedger;
+    var ledLastRow = ledgerSheet.getLastRow();
+    if (ledLastRow > 1) {
+      var ledHeaders = ledgerSheet.getRange(1, 1, 1, ledgerSheet.getLastColumn()).getValues()[0].map(function(h) { return h ? h.toString().trim() : ""; });
+      var ledData = ledgerSheet.getRange(1, 1, ledLastRow, ledgerSheet.getLastColumn()).getValues();
+      var ledCourierIdx = ledHeaders.indexOf("courier");
+      var ledIsSettledMonthIdx = ledHeaders.indexOf("isSettledMonth");
+
+      if (ledCourierIdx !== -1 && ledIsSettledMonthIdx !== -1) {
+        for (var r = 1; r < ledData.length; r++) {
+          var rowCourier = ledData[r][ledCourierIdx] ? ledData[r][ledCourierIdx].toString().trim() : "";
+          if (rowCourier.toLowerCase() === searchCourier) {
+            ledgerSheet.getRange(r + 1, ledIsSettledMonthIdx + 1).setValue("true");
+          }
+        }
+      }
+    }
+
+    // 6. Update last_closing_date in couriers sheet
+    var couriersSheet = sheets.couriers;
+    var cIndex = findRowIndex(couriersSheet, "name", courier);
+    if (cIndex !== -1) {
+      couriersSheet.getRange(cIndex, 10).setValue(todayDate || "");
+    }
+
+    // 7. Audit Log Entry
+    appendToSheet(sheets.auditLog, ["user", "type", "dateTime", "oldVal", "newVal", "reason"], {
+      user: currentUser,
+      type: "تقفيل كشف حساب شهري للمندوب",
+      dateTime: nowCairoStr,
+      oldVal: "—",
+      newVal: "تم تصفير وترحيل كشف المندوب: " + courier + " لشهر جديد وتعيين تاريخ الإقفال: " + todayDate,
+      reason: "تأكيد الإقفال المالي الشهري وبدء فترة محاسبية جديدة"
+    });
+
+    return { ok: true, msg: "تم تقفيل شهر المندوب بنجاح ✓" };
+
+  } catch(err) {
+    return { ok: false, error: err.toString() };
+  } finally {
+    lock.releaseLock();
+  }
 }

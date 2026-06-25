@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { PlusCircle, Wallet, FileText, ArrowUpRight, ArrowDownRight, Calendar, Filter, Users, ShieldAlert, Search, Eye, CheckCircle2, Clock, Loader2, ArrowLeft, Check, Shield, ChevronDown, ChevronUp } from "lucide-react";
+import { PlusCircle, Wallet, FileText, ArrowUpRight, ArrowDownRight, Calendar, Filter, Users, ShieldAlert, Search, Eye, CheckCircle2, Clock, Loader2, ArrowLeft, Check, Shield, ChevronDown, ChevronUp, Lock } from "lucide-react";
 import { apiCall } from "../utils";
 
 interface LedgerProps {
@@ -380,6 +380,37 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
       });
   }
 
+  // Monthly closing: freeze/settle orders, zero custody, and keep counters intact
+  async function handleCloseCourierMonth() {
+    if (!selectedCourier) return;
+    if (!confirm(`⚠️ تحذير تقفيل شهري هام: هل أنت متأكد من تقفيل كشف حساب المندوب (${selectedCourier}) لشهر جديد؟\n\n- سيتم تجميد وترحيل كافة مبالغ الشحن والتحصيل وتصفير العهدة النقدية الحالية لتبدأ من 0 ج.م.\n- سيتم أرشفة الأوردرات كـ Settled تماماً.\n- لن تتأثر العدادات التاريخية لإنتاجية المندوب.`)) {
+      return;
+    }
+
+    setSubmittingLedger(true);
+    window.dispatchEvent(new CustomEvent("bg-sync-start"));
+
+    apiCall("closeCourierMonth", token, {
+      courier: selectedCourier
+    })
+      .then((res) => {
+        if (res && res.ok) {
+          alert(`✅ ${res.msg || "تم تقفيل وتصفير كشف الحساب الشهري للمندوب وبدء دورة جديدة بنجاح!"}`);
+          loadCourierLedger();
+        } else {
+          alert(`⚠️ عطل: ${res?.error || "فشل تقفيل كشف الحساب"}`);
+        }
+      })
+      .catch((err) => {
+        console.error("Close courier month error:", err);
+        alert("⚠️ عطل عابر في تقفيل الحساب");
+      })
+      .finally(() => {
+        setSubmittingLedger(false);
+        window.dispatchEvent(new CustomEvent("bg-sync-end"));
+      });
+  }
+
   // Submit Physical COD Handover from Courier directly to Centralized Cashbox
   async function handleCourierHandover(e: React.FormEvent) {
     e.preventDefault();
@@ -606,33 +637,82 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
 
                   return finalFiltered.map((item: any, idx: number) => {
                     if (item.timelineType === "payment") {
+                      const typeStr = (item.type || "").toString().trim();
+                      const descStr = (item.desc || "").toString().trim();
+                      
+                      const isInflow = typeStr.includes("استلام") || typeStr.includes("مسترد") || descStr.includes("استلام") || descStr.includes("مسترد");
+                      const isAddition = typeStr.includes("تسوية إضافة") || typeStr.includes("إضافة يدوي");
+                      const isDeduction = typeStr.includes("تسوية خصم") || typeStr.includes("سحب");
+                      
+                      let cardBg = "from-slate-900 to-indigo-950/20 border-indigo-500/10 hover:border-indigo-500/25";
+                      let glowBg = "bg-indigo-500/5";
+                      let textCol = "text-indigo-300";
+                      let amountCol = "text-indigo-350";
+                      let iconCol = "text-indigo-400";
+                      let badgeBg = "bg-indigo-950/50 border-indigo-900/50 text-indigo-300";
+                      let badgeText = "💳 دفعة نقدية مسددة";
+                      let labelText = "القيمة المالية المصروفة للمورد";
+                      let sign = "-";
+                      
+                      if (isInflow) {
+                        cardBg = "from-slate-900 to-emerald-950/20 border-emerald-500/10 hover:border-emerald-500/25";
+                        glowBg = "bg-emerald-500/5";
+                        textCol = "text-emerald-300";
+                        amountCol = "text-emerald-400 font-bold";
+                        iconCol = "text-emerald-400";
+                        badgeBg = "bg-emerald-950/50 border-emerald-900/50 text-emerald-300";
+                        badgeText = "📥 استلام نقدية (إيراد)";
+                        labelText = "القيمة المالية المستلمة من المورد";
+                        sign = "+";
+                      } else if (isAddition) {
+                        cardBg = "from-slate-900 to-teal-950/20 border-teal-500/10 hover:border-teal-500/25";
+                        glowBg = "bg-teal-500/5";
+                        textCol = "text-teal-300";
+                        amountCol = "text-teal-400";
+                        iconCol = "text-teal-400";
+                        badgeBg = "bg-teal-950/50 border-teal-900/50 text-teal-300";
+                        badgeText = "➕ تسوية (إضافة رصيد)";
+                        labelText = "قيمة التسوية الإيجابية للمورد";
+                        sign = "+";
+                      } else if (isDeduction) {
+                        cardBg = "from-slate-900 to-rose-950/20 border-rose-500/10 hover:border-rose-500/25";
+                        glowBg = "bg-rose-500/5";
+                        textCol = "text-rose-300";
+                        amountCol = "text-rose-450";
+                        iconCol = "text-rose-400";
+                        badgeBg = "bg-rose-950/50 border-rose-900/50 text-rose-300";
+                        badgeText = "➖ تسوية (خصم رصيد)";
+                        labelText = "قيمة التسوية السلبية للمورد";
+                        sign = "-";
+                      }
+
                       return (
                         <div
                           key={`p-${idx}`}
-                          className="bg-gradient-to-br from-slate-900 to-indigo-950/20 border border-indigo-500/10 hover:border-indigo-500/25 rounded-2xl p-5 space-y-4 shadow-md transition-all hover:translate-y-[-2px] relative overflow-hidden text-right"
+                          className={`bg-gradient-to-br ${cardBg} rounded-2xl p-5 space-y-4 shadow-md transition-all hover:translate-y-[-2px] relative overflow-hidden text-right`}
                         >
-                          <div className="absolute top-0 right-0 w-24 h-24 bg-indigo-500/5 rounded-full blur-2xl"></div>
+                          <div className={`absolute top-0 right-0 w-24 h-24 ${glowBg} rounded-full blur-2xl`}></div>
                           <div className="flex items-center justify-between border-b border-white/6 pb-2.5">
-                            <span className="text-xs font-black text-indigo-300 flex items-center gap-1.5">
-                              <Wallet size={14} className="text-indigo-400" />
+                            <span className={`text-xs font-black ${textCol} flex items-center gap-1.5`}>
+                              <Wallet size={14} className={iconCol} />
                               <span>يوم: {item.date}</span>
                             </span>
-                            <span className="px-3 py-1 text-[10px] font-black rounded-lg bg-indigo-950/50 border border-indigo-900/50 text-indigo-300 flex items-center gap-1">
-                              <span>💳 دفعة نقدية مسددة</span>
+                            <span className={`px-3 py-1 text-[10px] font-black rounded-lg border ${badgeBg} flex items-center gap-1`}>
+                              <span>{badgeText}</span>
                             </span>
                           </div>
 
                           <div className="space-y-2">
-                            <div className="bg-slate-950/80 border border-indigo-500/5 p-3 rounded-xl flex justify-between items-center">
-                              <span className="text-[10px] text-slate-400 font-bold block">القيمة المالية المصروفة للمورد</span>
-                              <span className="text-sm font-mono font-black text-indigo-350">
-                                -{Number(item.amount || 0).toLocaleString("ar")} ج.م
+                            <div className="bg-slate-950/80 border border-white/5 p-3 rounded-xl flex justify-between items-center">
+                              <span className="text-[10px] text-slate-400 font-bold block">{labelText}</span>
+                              <span className={`text-sm font-mono font-black ${amountCol}`}>
+                                {sign}{Number(item.amount || 0).toLocaleString("ar")} ج.م
                               </span>
                             </div>
                             <div className="bg-slate-950/60 border border-white/4 p-2.5 rounded-xl">
-                              <span className="text-[9.5px] text-slate-400 block font-bold">البيان / تفاصيل الدفعة</span>
+                              <span className="text-[9.5px] text-slate-400 block font-bold">البيان / تفاصيل المعاملة</span>
                               <span className="text-xs text-slate-300 font-medium block mt-1 leading-relaxed">
-                                {item.desc || "حركة صرف نقدية وتصفية حساب"}
+                                {item.desc || "حركة مالية وتصفية حساب"}
                               </span>
                             </div>
                             {item.tracking && (
@@ -944,7 +1024,7 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
                 <div className="space-y-4">
                   {/* Action Bar for Settle / Zero Courier */}
                   {["مدير", "محاسب"].includes(role) && (
-                    <div className="flex justify-start items-center gap-3">
+                    <div className="flex flex-wrap justify-start items-center gap-3">
                       <button
                         type="button"
                         onClick={handleSettleCourierOrders}
@@ -953,6 +1033,16 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
                       >
                         <CheckCircle2 size={15} />
                         <span>🟢 تصفية وتصفير المندوب (Settle & Zero)</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleCloseCourierMonth}
+                        disabled={submittingLedger}
+                        className="bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-slate-950 font-black py-2.5 px-5 rounded-xl text-xs flex items-center justify-center gap-2 cursor-pointer transition-all border border-amber-900/40 active:scale-98 shadow-md"
+                      >
+                        <Lock size={15} />
+                        <span>🔒 تقفيل كشف حساب المندوب الشهري (Close Month)</span>
                       </button>
                     </div>
                   )}

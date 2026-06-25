@@ -76,7 +76,8 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
   const [settleDesc, setSettleDesc] = useState("");
   const [isSettling, setIsSettling] = useState(false);
   const [isSettleModalOpen, setIsSettleModalOpen] = useState(false);
-  const [settleTransType, setSettleTransType] = useState<"payout" | "withdrawal">("payout");
+  const [settleTransType, setSettleTransType] = useState<"payout" | "inflow" | "adjustment">("payout");
+  const [adjustmentType, setAdjustmentType] = useState<"add" | "subtract">("subtract");
 
   // Edit Supplier Profile States
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -251,6 +252,15 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
       return;
     }
 
+    let defaultDesc = "";
+    if (settleTransType === "inflow") {
+      defaultDesc = `استلام نقدية / إيراد للخزنة من المورد: ${activeSettleSupplier.name} بمبلغ ${amountNum} ج.م`;
+    } else if (settleTransType === "adjustment") {
+      defaultDesc = `تسوية رصيد يدوي (${adjustmentType === "add" ? "إضافة" : "خصم"}) للمورد: ${activeSettleSupplier.name} بمبلغ ${amountNum} ج.م`;
+    } else {
+      defaultDesc = `تصفية حساب المورد: ${activeSettleSupplier.name} بمبلغ ${amountNum} ج.م`;
+    }
+
     setIsSettling(true);
     setErrorMsg("");
     setSuccessMsg("");
@@ -258,8 +268,9 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
       const res = await apiCall("addSupplierPayment", token, {
         supplier: activeSettleSupplier.name,
         amount: amountNum,
-        desc: settleDesc.trim() || (settleTransType === "withdrawal" ? `سحب مالي / تسوية عكسية من المورد: ${activeSettleSupplier.name} بمبلغ ${amountNum} ج.م` : `تصفية حساب المورد: ${activeSettleSupplier.name} بمبلغ ${amountNum} ج.م`),
-        transactionType: settleTransType
+        desc: settleDesc.trim() || defaultDesc,
+        transactionType: settleTransType,
+        adjustmentType: adjustmentType
       });
 
       if (res.ok) {
@@ -268,6 +279,7 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
         setSettleAmount("");
         setSettleDesc("");
         setSettleTransType("payout");
+        setAdjustmentType("subtract");
         setActiveSettleSupplier(null);
         
         // Refresh directories and stats
@@ -1126,11 +1138,11 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
               {/* Transaction direction */}
               <div>
                 <label className="block text-[11px] font-bold text-slate-400 mb-1.5">نوع المعاملة المالية*</label>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-3 gap-2">
                   <button
                     type="button"
                     onClick={() => setSettleTransType("payout")}
-                    className={`py-2 px-3 text-xs font-bold rounded-xl border text-center transition-all cursor-pointer ${
+                    className={`py-2 px-1 text-[10px] sm:text-xs font-bold rounded-xl border text-center transition-all cursor-pointer ${
                       settleTransType === "payout"
                         ? "bg-amber-600/20 text-amber-500 border-amber-500 font-black"
                         : "bg-slate-950 text-slate-400 border-white/6 hover:bg-slate-900"
@@ -1140,22 +1152,68 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
                   </button>
                   <button
                     type="button"
-                    onClick={() => setSettleTransType("withdrawal")}
-                    className={`py-2 px-3 text-xs font-bold rounded-xl border text-center transition-all cursor-pointer ${
-                      settleTransType === "withdrawal"
-                        ? "bg-red-650/20 text-red-450 border-red-500 font-black"
+                    onClick={() => setSettleTransType("inflow")}
+                    className={`py-2 px-1 text-[10px] sm:text-xs font-bold rounded-xl border text-center transition-all cursor-pointer ${
+                      settleTransType === "inflow"
+                        ? "bg-emerald-600/20 text-emerald-400 border-emerald-500 font-black"
                         : "bg-slate-950 text-slate-400 border-white/6 hover:bg-slate-900"
                     }`}
                   >
-                    سحب / تسوية عكسية (طرح)
+                    استلام نقدية (وارد)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSettleTransType("adjustment")}
+                    className={`py-2 px-1 text-[10px] sm:text-xs font-bold rounded-xl border text-center transition-all cursor-pointer ${
+                      settleTransType === "adjustment"
+                        ? "bg-blue-600/20 text-blue-400 border-blue-500 font-black"
+                        : "bg-slate-950 text-slate-400 border-white/6 hover:bg-slate-900"
+                    }`}
+                  >
+                    تسوية رصيد (يدوي)
                   </button>
                 </div>
               </div>
 
+              {/* Adjustment direction sub-selector */}
+              {settleTransType === "adjustment" && (
+                <div className="bg-slate-950/60 p-3 rounded-xl border border-white/4 space-y-2">
+                  <label className="block text-[10px] font-bold text-slate-400">اتجاه التسوية اليدوية (لا تؤثر على الخزنة)*</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setAdjustmentType("add")}
+                      className={`py-1.5 px-2 text-[10px] font-bold rounded-lg border text-center transition-all cursor-pointer ${
+                        adjustmentType === "add"
+                          ? "bg-emerald-600/20 text-emerald-400 border-emerald-500 font-black"
+                          : "bg-slate-950 text-slate-500 border-white/4 hover:bg-slate-900"
+                      }`}
+                    >
+                      إضافة لرصيد المورد (+)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAdjustmentType("subtract")}
+                      className={`py-1.5 px-2 text-[10px] font-bold rounded-lg border text-center transition-all cursor-pointer ${
+                        adjustmentType === "subtract"
+                          ? "bg-red-600/20 text-red-400 border-red-500 font-black"
+                          : "bg-slate-950 text-slate-500 border-white/4 hover:bg-slate-900"
+                      }`}
+                    >
+                      خصم من رصيد المورد (-)
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Payout Input */}
               <div>
                 <label className="block text-[11px] font-bold text-slate-400 mb-1.5">
-                  {settleTransType === "withdrawal" ? "المبلغ المراد سحبه (ج.م)*" : "المبلغ المراد صرفه (ج.م)*"}
+                  {settleTransType === "inflow"
+                    ? "المبلغ المستلم من المورد (ج.م)*"
+                    : settleTransType === "adjustment"
+                    ? "مبلغ التسوية اليدوية (ج.م)*"
+                    : "المبلغ المراد صرفه للمورد (ج.م)*"}
                 </label>
                 <input
                   type="number"
@@ -1163,9 +1221,19 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
                   value={settleAmount}
                   onChange={(e) => setSettleAmount(e.target.value)}
                   className={`w-full bg-slate-950 border border-white/6 rounded-xl px-4 py-2.5 text-xs font-extrabold outline-none text-right font-mono focus:border-amber-500 ${
-                    settleTransType === "withdrawal" ? "text-red-400" : "text-amber-500"
+                    settleTransType === "inflow"
+                      ? "text-emerald-400"
+                      : settleTransType === "adjustment"
+                      ? "text-blue-400"
+                      : "text-amber-500"
                   }`}
-                  placeholder={settleTransType === "withdrawal" ? "خصم/سحب مالي" : "تأدية رصيد أو دفعة"}
+                  placeholder={
+                    settleTransType === "inflow"
+                      ? "المبلغ المحصل لداخل الخزينة"
+                      : settleTransType === "adjustment"
+                      ? "تسوية رصيد يدوي دون حركة نقدية"
+                      : "صرف دفعة نقدية مسددة للمورد"
+                  }
                 />
               </div>
 
@@ -1193,12 +1261,20 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
                   type="submit"
                   disabled={isSettling}
                   className={`flex-1 py-2.5 text-slate-950 rounded-xl text-[10px] font-black text-center cursor-pointer transition-all disabled:opacity-50 ${
-                    settleTransType === "withdrawal"
-                      ? "bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white"
+                    settleTransType === "inflow"
+                      ? "bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white"
+                      : settleTransType === "adjustment"
+                      ? "bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-black"
                       : "bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700"
                   }`}
                 >
-                  {isSettling ? "جاري الحفظ..." : settleTransType === "withdrawal" ? "تأكيد السحب العكسي ⚠️" : "تأكيد وصرف النقديّة ✅"}
+                  {isSettling
+                    ? "جاري الحفظ..."
+                    : settleTransType === "inflow"
+                    ? "تأكيد واستلام النقدية 📥"
+                    : settleTransType === "adjustment"
+                    ? "تأكيد وقيد التسوية اليدوية 💾"
+                    : "تأكيد وصرف النقديّة ✅"}
                 </button>
               </div>
             </form>
