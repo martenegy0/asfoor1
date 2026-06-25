@@ -2254,30 +2254,17 @@ function getCourierLedger(sheets, d) {
 
   const getOrderActualCollection = function(o) {
     var status = (o.status || "").toString().trim();
-    var isFullDelivered = [
+    if ([
       "تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"
-    ].indexOf(status) !== -1;
-    var isPartialDelivered = [
-      "تسليم جزئي", "تسليم جزئي - معلق للجرد"
-    ].indexOf(status) !== -1;
-
-    if (isFullDelivered) {
-      return Number(o.totalCOD) || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
-    } else if (isPartialDelivered) {
-      if (o.partialAmount !== undefined && o.partialAmount !== null && o.partialAmount !== "") {
-        return Number(o.partialAmount);
-      }
-      if (o.actualReceivedCash !== undefined && o.actualReceivedCash !== null && o.actualReceivedCash !== "") {
-        return Number(o.actualReceivedCash);
-      }
-      return Number(o.totalCOD) || 0;
+    ].indexOf(status) !== -1) {
+      return Number(o.prodPrice || 0) + Number(o.shipPrice || 0);
     }
     return 0;
   };
 
   // Strict Courier Settlement Calculations (Today's performance):
   const successOrdersToday = courierOrders.filter(o => 
-    ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي", "تسليم جزئي - معلق للجرد"].indexOf(o.status) !== -1 && 
+    ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].indexOf(o.status) !== -1 && 
     o.delivDate && o.delivDate.substring(0, 10) === todayDate
   );
   
@@ -2295,7 +2282,7 @@ function getCourierLedger(sheets, d) {
   const todayTotalCommission = (todayDeliveredCount * commissionSuccess) + (todayReturnedCount * commissionReturn);
 
   const deliveredCount = courierOrders.filter(o => 
-    ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي", "تسليم جزئي - معلق للجرد"].indexOf(o.status) !== -1
+    ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].indexOf(o.status) !== -1
   ).length;
   const delivCommission = deliveredCount * commissionSuccess;
 
@@ -2420,23 +2407,10 @@ function getCourierInfo(sheets, d) {
 
   const getOrderActualCollection = function(o) {
     var status = (o.status || "").toString().trim();
-    var isFullDelivered = [
+    if ([
       "تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"
-    ].indexOf(status) !== -1;
-    var isPartialDelivered = [
-      "تسليم جزئي", "تسليم جزئي - معلق للجرد"
-    ].indexOf(status) !== -1;
-
-    if (isFullDelivered) {
-      return Number(o.totalCOD) || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
-    } else if (isPartialDelivered) {
-      if (o.partialAmount !== undefined && o.partialAmount !== null && o.partialAmount !== "") {
-        return Number(o.partialAmount);
-      }
-      if (o.actualReceivedCash !== undefined && o.actualReceivedCash !== null && o.actualReceivedCash !== "") {
-        return Number(o.actualReceivedCash);
-      }
-      return Number(o.totalCOD) || 0;
+    ].indexOf(status) !== -1) {
+      return Number(o.prodPrice || 0) + Number(o.shipPrice || 0);
     }
     return 0;
   };
@@ -2452,7 +2426,7 @@ function getCourierInfo(sheets, d) {
 
   // Strict Courier Settlement Calculations (Today's performance):
   const successOrdersToday = courierOrders.filter(o => 
-    ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي", "تسليم جزئي - معلق للجرد"].indexOf(o.status) !== -1 && 
+    ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].indexOf(o.status) !== -1 && 
     o.delivDate && o.delivDate.substring(0, 10) === todayDate
   );
 
@@ -2498,8 +2472,9 @@ function getCourierInfo(sheets, d) {
   const daysCount = daysInCurrentMonth || 30;
 
   const datesSet = {};
+  const fullDeliveredStatuses = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"];
   courierOrders.forEach(o => {
-    if (o.status === "تم التسليم" && o.delivDate) {
+    if (fullDeliveredStatuses.indexOf(o.status) !== -1 && o.delivDate) {
       datesSet[o.delivDate.substring(0, 10)] = true;
     }
     if (["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) && o.retDate) {
@@ -2518,7 +2493,7 @@ function getCourierInfo(sheets, d) {
   const sortedDates = Object.keys(datesSet).sort();
   let runningCumulative = 0;
   const dailyEarnings = sortedDates.map(dStr => {
-    const deliveredDay = courierOrders.filter(o => o.status === "تم التسليم" && o.delivDate && o.delivDate.substring(0, 10) === dStr).length;
+    const deliveredDay = courierOrders.filter(o => fullDeliveredStatuses.indexOf(o.status) !== -1 && o.delivDate && o.delivDate.substring(0, 10) === dStr).length;
     const returnedDay = courierOrders.filter(o => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status) && o.retDate && o.retDate.substring(0, 10) === dStr).length;
 
     const baseEarning = Number((basicSalary / daysCount).toFixed(2));
@@ -2547,7 +2522,7 @@ function getCourierInfo(sheets, d) {
       base_fixed_salary: basicSalary,
       commission_success: commissionSuccess,
       commission_return: commissionReturn,
-      deliveredCount: courierOrders.filter(o => o.status === "تم التسليم").length,
+      deliveredCount: courierOrders.filter(o => fullDeliveredStatuses.indexOf(o.status) !== -1).length,
       returnedPaidCount: courierOrders.filter(o => o.status === "مرتجع" && o.returnShippingType === "paid").length,
       returnedCount: courierOrders.filter(o => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length,
       delivCommission,

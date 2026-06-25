@@ -5381,26 +5381,12 @@ app.post("/api", async (req: Request, res: Response) => {
 
         const getOrderActualCollection = (o: any): number => {
           const status = (o.status || "").toString().trim();
-          const isFullDelivered = [
+          if ([
             "تم التسليم",
             "تم التسليم بنجاح",
             "تم التسليم (ناجح كاش)"
-          ].includes(status);
-          const isPartialDelivered = [
-            "تسليم جزئي",
-            "تسليم جزئي - معلق للجرد"
-          ].includes(status);
-
-          if (isFullDelivered) {
-            return Number(o.totalCOD) || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
-          } else if (isPartialDelivered) {
-            if (o.partialAmount !== undefined && o.partialAmount !== null && o.partialAmount !== "") {
-              return Number(o.partialAmount);
-            }
-            if (o.actualReceivedCash !== undefined && o.actualReceivedCash !== null && o.actualReceivedCash !== "") {
-              return Number(o.actualReceivedCash);
-            }
-            return Number(o.totalCOD) || 0;
+          ].includes(status)) {
+            return Number(o.prodPrice || 0) + Number(o.shipPrice || 0);
           }
           return 0;
         };
@@ -5412,8 +5398,6 @@ app.post("/api", async (req: Request, res: Response) => {
               "تم التسليم",
               "تم التسليم بنجاح",
               "تم التسليم (ناجح كاش)",
-              "تسليم جزئي",
-              "تسليم جزئي - معلق للجرد",
             ].includes(o.status) &&
             o.delivDate &&
             isDateToday(o.delivDate),
@@ -5451,8 +5435,6 @@ app.post("/api", async (req: Request, res: Response) => {
               "تم التسليم",
               "تم التسليم بنجاح",
               "تم التسليم (ناجح كاش)",
-              "تسليم جزئي",
-              "تسليم جزئي - معلق للجرد",
             ].includes(o.status)
         );
         const deliveredCount = historicalSuccessOrders.length;
@@ -5536,52 +5518,53 @@ app.post("/api", async (req: Request, res: Response) => {
         ).getDate();
         const daysCount = daysInCurrentMonth || 30;
 
-        const datesSet = new Set<string>();
-        for (const o of courierOrders) {
-          if (
-            (o.status === "تم التسليم" || o.status === "تسليم جزئي") &&
-            o.delivDate
-          ) {
-            datesSet.add(o.delivDate.substring(0, 10));
-          }
-          if (
-            ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(
-              o.status,
-            ) &&
-            o.retDate
-          ) {
-            datesSet.add(o.retDate.substring(0, 10));
-          }
-        }
-        datesSet.add(todayDate);
-
-        const year = nowCairo.getFullYear();
-        const month = nowCairo.getMonth();
-        const todayDayNum = nowCairo.getDate();
-        for (let dMonth = 1; dMonth <= todayDayNum; dMonth++) {
-          const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(dMonth).padStart(2, "0")}`;
-          datesSet.add(dateStr);
-        }
-
-        const sortedDates = Array.from(datesSet).sort();
-        let runningCumulative = 0;
-        const dailyEarnings = sortedDates.map((dStr) => {
-          const isToday = dStr === todayDate;
-
-          const deliveredList = courierOrders.filter(
-            (o: any) =>
-              (o.status === "تم التسليم" || o.status === "تسليم جزئي") &&
-              o.delivDate &&
-              o.delivDate.substring(0, 10) === dStr,
-          );
-          const returnedList = courierOrders.filter(
-            (o: any) =>
-              ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(
-                o.status,
-              ) &&
-              o.retDate &&
-              o.retDate.substring(0, 10) === dStr,
-          );
+         const datesSet = new Set<string>();
+         const fullDeliveredStatuses = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"];
+         for (const o of courierOrders) {
+           if (
+             fullDeliveredStatuses.includes(o.status) &&
+             o.delivDate
+           ) {
+             datesSet.add(o.delivDate.substring(0, 10));
+           }
+           if (
+             ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(
+               o.status,
+             ) &&
+             o.retDate
+           ) {
+             datesSet.add(o.retDate.substring(0, 10));
+           }
+         }
+         datesSet.add(todayDate);
+ 
+         const year = nowCairo.getFullYear();
+         const month = nowCairo.getMonth();
+         const todayDayNum = nowCairo.getDate();
+         for (let dMonth = 1; dMonth <= todayDayNum; dMonth++) {
+           const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(dMonth).padStart(2, "0")}`;
+           datesSet.add(dateStr);
+         }
+ 
+         const sortedDates = Array.from(datesSet).sort();
+         let runningCumulative = 0;
+         const dailyEarnings = sortedDates.map((dStr) => {
+           const isToday = dStr === todayDate;
+ 
+           const deliveredList = courierOrders.filter(
+             (o: any) =>
+               fullDeliveredStatuses.includes(o.status) &&
+               o.delivDate &&
+               o.delivDate.substring(0, 10) === dStr,
+           );
+           const returnedList = courierOrders.filter(
+             (o: any) =>
+               ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(
+                 o.status,
+               ) &&
+               o.retDate &&
+               o.retDate.substring(0, 10) === dStr,
+           );
 
           const deliveredDay = deliveredList.length;
           const returnedDay = returnedList.length;
@@ -5744,26 +5727,12 @@ app.post("/api", async (req: Request, res: Response) => {
 
         const getOrderActualCollection = (o: any): number => {
           const status = (o.status || "").toString().trim();
-          const isFullDelivered = [
+          if ([
             "تم التسليم",
             "تم التسليم بنجاح",
             "تم التسليم (ناجح كاش)"
-          ].includes(status);
-          const isPartialDelivered = [
-            "تسليم جزئي",
-            "تسليم جزئي - معلق للجرد"
-          ].includes(status);
-
-          if (isFullDelivered) {
-            return Number(o.totalCOD) || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
-          } else if (isPartialDelivered) {
-            if (o.partialAmount !== undefined && o.partialAmount !== null && o.partialAmount !== "") {
-              return Number(o.partialAmount);
-            }
-            if (o.actualReceivedCash !== undefined && o.actualReceivedCash !== null && o.actualReceivedCash !== "") {
-              return Number(o.actualReceivedCash);
-            }
-            return Number(o.totalCOD) || 0;
+          ].includes(status)) {
+            return Number(o.prodPrice || 0) + Number(o.shipPrice || 0);
           }
           return 0;
         };
@@ -5784,8 +5753,6 @@ app.post("/api", async (req: Request, res: Response) => {
               "تم التسليم",
               "تم التسليم بنجاح",
               "تم التسليم (ناجح كاش)",
-              "تسليم جزئي",
-              "تسليم جزئي - معلق للجرد",
             ].includes(o.status)
         ).length;
         const returnedPaid = 0; // unified field-collection model ignores separate returned-paid shipping counts
@@ -5835,8 +5802,6 @@ app.post("/api", async (req: Request, res: Response) => {
               "تم التسليم",
               "تم التسليم بنجاح",
               "تم التسليم (ناجح كاش)",
-              "تسليم جزئي",
-              "تسليم جزئي - معلق للجرد",
             ].includes(o.status) &&
             o.delivDate &&
             isDateToday(o.delivDate),
