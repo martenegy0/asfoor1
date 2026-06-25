@@ -2474,19 +2474,27 @@ app.post("/api", async (req: Request, res: Response) => {
               ) {
                 order.status = "لا يوجد رد بالمستودع";
                 order.courierSignature = `${order.courier} (توقيع تصفية عدم الرد ✍️)`;
-              } else if (
-                oldStatus === "تم التسليم" ||
-                oldStatus === "تم التسليم بنجاح" ||
-                oldStatus === "تم التسليم (ناجح كاش)"
-              ) {
-                // Status remains as is
-              } else {
-                // Keep status exactly as is
               }
 
-              // Protect courier and commission completely so they are preserved for cumulative reporting and archive tracking
-              order.isSettled = true;
-              order.is_settled = "true";
+              const isSuccessfullyClosed = [
+                "تم التسليم",
+                "تم التسليم بنجاح",
+                "تم التسليم (ناجح كاش)",
+                "تسليم جزئي",
+                "تسليم جزئي - معلق للجرد",
+                "مرتجع جزئي"
+              ].includes(oldStatus);
+
+              if (isSuccessfullyClosed) {
+                order.isSettled = true;
+                order.is_settled = "true";
+              } else {
+                order.courier = "";
+                order.commission = 0;
+                order.isSettled = false;
+                order.is_settled = "false";
+              }
+
               order.updatedAt = nowCairoStr;
 
               if (!db.statusHistory) db.statusHistory = [];
@@ -2499,7 +2507,20 @@ app.post("/api", async (req: Request, res: Response) => {
               });
 
               settledCount++;
-              settledOrders.push(order);
+
+              const shouldArchive = [
+                "تم التسليم",
+                "تم التسليم بنجاح",
+                "تم التسليم (ناجح كاش)",
+                "التسليم للمورد",
+                "تم تسليم المرتجع للمورد"
+              ].includes(order.status);
+
+              if (shouldArchive) {
+                settledOrders.push(order);
+              } else {
+                activeOrders.push(order);
+              }
             } else {
               activeOrders.push(order);
             }
@@ -5544,19 +5565,27 @@ app.post("/api", async (req: Request, res: Response) => {
             ) {
               order.status = "لا يوجد رد بالمستودع";
               order.courierSignature = `${order.courier} (توقيع تصفية عدم الرد ✍️)`;
-            } else if (
-              oldStatus === "تم التسليم" ||
-              oldStatus === "تم التسليم بنجاح" ||
-              oldStatus === "تم التسليم (ناجح كاش)"
-            ) {
-              // Status remains as is
-            } else {
-              // Keep status exactly as is
             }
 
-            // Protect courier and commission completely so they are preserved for cumulative reporting and archive tracking
-            order.isSettled = true;
-            order.is_settled = "true";
+            const isSuccessfullyClosed = [
+              "تم التسليم",
+              "تم التسليم بنجاح",
+              "تم التسليم (ناجح كاش)",
+              "تسليم جزئي",
+              "تسليم جزئي - معلق للجرد",
+              "مرتجع جزئي"
+            ].includes(oldStatus);
+
+            if (isSuccessfullyClosed) {
+              order.isSettled = true;
+              order.is_settled = "true";
+            } else {
+              order.courier = "";
+              order.commission = 0;
+              order.isSettled = false;
+              order.is_settled = "false";
+            }
+
             order.updatedAt = nowCairoStr;
 
             if (!db.statusHistory) db.statusHistory = [];
@@ -5569,7 +5598,20 @@ app.post("/api", async (req: Request, res: Response) => {
             });
 
             settledCount++;
-            settledOrders.push(order);
+
+            const shouldArchive = [
+              "تم التسليم",
+              "تم التسليم بنجاح",
+              "تم التسليم (ناجح كاش)",
+              "التسليم للمورد",
+              "تم تسليم المرتجع للمورد"
+            ].includes(order.status);
+
+            if (shouldArchive) {
+              settledOrders.push(order);
+            } else {
+              activeOrders.push(order);
+            }
           } else {
             activeOrders.push(order);
           }

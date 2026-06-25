@@ -3100,6 +3100,8 @@ function settleCourierOrders(sheets, d) {
         } else {
           rowDataMap["courier"] = "";
           rowDataMap["commission"] = 0;
+          rowDataMap["isSettled"] = "false";
+          rowDataMap["is_settled"] = "false";
         }
         rowDataMap["updatedAt"] = nowCairoStr;
 

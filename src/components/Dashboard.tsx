@@ -144,25 +144,43 @@ export default function Dashboard({
 
         const isSettled = o.isSettled === true || o.isSettled === "true" || o.is_settled === "true" || o.is_settled === true;
 
-        // Active Operational Stock Calculation (جديد + مؤجل + العميل لا يرد)
-        const isNew = statusStr === "جديد";
-        const isDelayedInWh = ["مؤجل", "مؤجل بالمستودع", "مؤجل من المندوب", "مؤجل بناءً على طلب العميل", "Delayed"].includes(statusStr) || statusStr.startsWith("مؤجل") || statusStr.startsWith("Delayed");
-        const isNoAnswerInWh = ["لا يوجد رد", "العميل لا يرد", "No Answer", "العميل لم يقم بالرد", "لا يوجد رد بالمستودع"].includes(statusStr) || statusStr.includes("لا يرد") || statusStr.includes("لا يوجد رد") || statusStr.includes("عدم الرد") || statusStr.includes("غير متاح");
-        const isOperationalStock = isNew || isDelayedInWh || isNoAnswerInWh;
+        const isSettledOffice = [
+          "تم التسليم",
+          "تم التسليم بنجاح",
+          "تم التسليم (ناجح كاش)",
+          "مرتجع بالمستودع",
+          "مرتجع جزئي بالمستودع",
+          "مؤجل بالمستودع",
+          "لا يوجد رد بالمستودع",
+          "تم تسليم المرتجع للمورد",
+          "مرتجع تم تسليمه للمورد",
+          "التسليم للمورد",
+          "تم تسليم المرتجع للمورد وتصفية حسابه",
+          "مؤرشف"
+        ].includes(statusStr);
 
-        // Supplier Return Stock Calculation (مرتجع بالمستودع + مرتجع جزئي)
-        const isTotalReturnInWh = ["مرتجع بالمستودع", "مرتجع", "مرتجع جديد", "جاهز للتسليم للمورد", "جاري تجهيز المرتجع"].includes(statusStr) || (statusStr.includes("مرتجع") && !statusStr.includes("جزئي"));
-        const isPartialReturnInWh = ["مرتجع جزئي", "تسليم جزئي", "مرتجع جزئي بالمستودع", "تسليم جزئي بالمستودع", "تسليم جزئي - معلق للجرد"].includes(statusStr) || statusStr.includes("جزئي");
-        const isSupplierReturnStock = isTotalReturnInWh || isPartialReturnInWh;
+        // 1. المخزون المتبقي الحقيقي للتشغيل بالمكتب (Shelves only: جديد + مؤجل بالمستودع + لا يوجد رد بالمستودع)
+        const isRealWarehouseOperationalStock = statusStr === "جديد" || statusStr === "مؤجل بالمستودع" || statusStr === "لا يوجد رد بالمستودع";
 
-        if (isOperationalStock && !o.isArchived && statusStr !== "مؤرشف" && !o.isClosed && !isSettled) {
+        // 2. صافي المرتجعات بالمكتب (Checked-in returned orders only: مرتجع بالمستودع + مرتجع جزئي بالمستودع)
+        const isRealWarehouseReturnStock = statusStr === "مرتجع بالمستودع" || statusStr === "مرتجع جزئي بالمستودع";
+
+        // 3. إجمالي العهدة المعلقة بالخارج (Street custody: assigned courier, but not settled/checked-in yet)
+        const isAssignedOnStreet = o.courier && o.courier.toString().trim() !== "" && !isSettledOffice;
+
+        if (isRealWarehouseOperationalStock && !o.isArchived && statusStr !== "مؤرشف" && !o.isClosed && !isSettled) {
           dStats.activeOperationalStockCount++;
           dStats.activeOperationalStockValue += Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0)));
         }
 
-        if (isSupplierReturnStock && !isHandedOverToSupplier && !o.isArchived && statusStr !== "مؤرشف" && !isSettled) {
+        if (isRealWarehouseReturnStock && !isHandedOverToSupplier && !o.isArchived && statusStr !== "مؤرشف" && !isSettled) {
           dStats.supplierReturnStockCount++;
           dStats.supplierReturnStockValue += Number(o.prodPrice || 0); // product net price
+        }
+
+        if (isAssignedOnStreet && !o.isArchived && statusStr !== "مؤرشف" && !o.isClosed && !isSettled) {
+          dStats.assignedPending++;
+          (dStats as any).streetCustodyValue = ((dStats as any).streetCustodyValue || 0) + Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0)));
         }
 
         // Warehouse stock metrics: not delivered to customer AND not returned to supplier/archived
@@ -193,10 +211,6 @@ export default function Dashboard({
         dStats.total++;
 
         const isSomeReturn = ["مرتجع", "مرفوض", "فشل", "مسترجع", "تسليم جزئي", "مرتجع جزئي"].some(p => statusStr.includes(p)) || isHandedOverToSupplier;
-        const isAssigned = o.courier && o.courier !== "";
-        if (isAssigned && !isDelivered && !isSomeReturn) {
-          dStats.assignedPending++;
-        }
 
         if (isDelivered) {
           dStats.delivered++;
@@ -443,10 +457,22 @@ export default function Dashboard({
   // 1. Street Custody Active Orders List: All active orders that are assigned to a courier and not completed
   const streetCustodyOrders = allOrders.filter(o => {
     if (o.isClosed || o.isArchived) return false;
-    if (!o.courier || o.courier.toString().trim() === "") return false;
-    // exclude completed/settled
     const stat = (o.status || "").toString().trim();
-    return !["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مؤرشف"].includes(stat);
+    const isSettledOffice = [
+      "تم التسليم",
+      "تم التسليم بنجاح",
+      "تم التسليم (ناجح كاش)",
+      "مرتجع بالمستودع",
+      "مرتجع جزئي بالمستودع",
+      "مؤجل بالمستودع",
+      "لا يوجد رد بالمستودع",
+      "تم تسليم المرتجع للمورد",
+      "مرتجع تم تسليمه للمورد",
+      "التسليم للمورد",
+      "تم تسليم المرتجع للمورد وتصفية حسابه",
+      "مؤرشف"
+    ].includes(stat);
+    return o.courier && o.courier.toString().trim() !== "" && !isSettledOffice;
   });
 
   // 2. Warehouse Inventory Orders List
@@ -475,14 +501,12 @@ export default function Dashboard({
     const isSettled = o.isSettled === true || o.isSettled === "true" || o.is_settled === "true" || o.is_settled === true;
     if (isSettled) return false;
     const stat = (o.status || "").toString().trim();
-    const isNew = stat === "جديد";
-    const isDelayedInWh = ["مؤجل", "مؤجل بالمستودع", "مؤجل من المندوب", "مؤجل بناءً على طلب العميل", "Delayed"].includes(stat) || stat.startsWith("مؤجل") || stat.startsWith("Delayed");
-    const isNoAnswerInWh = ["لا يوجد رد", "العميل لا يرد", "No Answer", "العميل لم يقم بالرد", "لا يوجد رد بالمستودع"].includes(stat) || stat.includes("لا يرد") || stat.includes("لا يوجد رد") || stat.includes("عدم الرد") || stat.includes("غير متاح");
-    return isNew || isDelayedInWh || isNoAnswerInWh;
+    return stat === "جديد" || stat === "مؤجل بالمستودع" || stat === "لا يوجد رد بالمستودع";
   });
 
   // 4. Supplier Return Stock Orders List
   const supplierReturnStockOrders = allOrders.filter(o => {
+    if (o.isClosed || o.isArchived) return false;
     const isSettled = o.isSettled === true || o.isSettled === "true" || o.is_settled === "true" || o.is_settled === true;
     if (isSettled) return false;
     const stat = (o.status || "").toString().trim();
@@ -494,11 +518,8 @@ export default function Dashboard({
       "تسليم المرتجع للمورد"
     ];
     const isHandedOverToSupplier = deliveredToSupplierPatterns.some(p => stat.includes(p));
-    if (isHandedOverToSupplier || stat === "مؤرشف" || o.isArchived) return false;
-
-    const isTotalReturnInWh = ["مرتجع بالمستودع", "مرتجع", "مرتجع جديد", "جاهز للتسليم للمورد", "جاري تجهيز المرتجع"].includes(stat) || (stat.includes("مرتجع") && !stat.includes("جزئي"));
-    const isPartialReturnInWh = ["مرتجع جزئي", "تسليم جزئي", "مرتجع جزئي بالمستودع", "تسليم جزئي بالمستودع", "تسليم جزئي - معلق للجرد"].includes(stat) || stat.includes("جزئي");
-    return isTotalReturnInWh || isPartialReturnInWh;
+    if (isHandedOverToSupplier) return false;
+    return stat === "مرتجع بالمستودع" || stat === "مرتجع جزئي بالمستودع";
   });
 
   // -------------------------------------------------------------
@@ -752,7 +773,10 @@ export default function Dashboard({
                   <span className="text-[8px] px-1 bg-blue-950 text-blue-400 rounded">افحص 🔍</span>
                 </div>
               </div>
-              <p className="text-[10px] text-slate-400 font-bold mt-1">المحملة والمكلفة في شنطة المناديب الميدانيين</p>
+              <div className="border-t border-white/5 pt-2 mt-2 flex justify-between items-center">
+                <div className="text-[9px] font-extrabold text-slate-400">إجمالي العهدة المعلقة بالخارج</div>
+                <div className="text-xs font-black text-blue-400 font-mono">{((s as any).streetCustodyValue || 0).toLocaleString("ar")} ج.م</div>
+              </div>
             </div>
 
             {/* Card 4: Backlog / الباقي للتشغيل */}
