@@ -940,14 +940,7 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
       return lDate === dayDate && isHumanLedgedPayout(l);
     });
     const totalPayoutsOnDay = dayPayments.reduce((sum: number, l: any) => {
-      const type = (l.type || l["النوع"] || "").toString().trim();
-      const amount = Number(l.amount || 0);
-      const isAdjustment = type.includes("تسوية") || type.includes("تعديل");
-      if (isAdjustment) {
-        return sum - amount;
-      } else {
-        return sum + amount;
-      }
+      return sum + Math.abs(Number(l.amount || 0));
     }, 0);
 
     // E. الصافي المستحق للمورد اليوم: (إجمالي البضاعة المرفوعة اليومية - المدفوع كاش اليوم - المرتجعات المستلمة اليوم)
@@ -1035,23 +1028,12 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
     return sum + financials.prodPrice;
   }, 0);
 
-  const totalLedgerEffect = adjustmentsAndPayments.reduce((sum: number, l: any) => {
-    const type = (l.type || l["النوع"] || "").toString().trim();
-    const amount = Number(l.amount || 0);
-    const isAdjustment = type.includes("تسوية") || type.includes("تعديل");
-    if (isAdjustment) {
-      return sum + amount;
-    } else {
-      return sum - amount;
-    }
-  }, 0);
-
-  const finalUnifiedOutstanding =
-    openingBalance + totalGoodsUploaded - returnsDeliveredValue + totalLedgerEffect;
-
   const totalPaid = adjustmentsAndPayments.reduce((sum: number, l: any) => {
     return sum + Math.abs(Number(l.amount || 0));
   }, 0);
+
+  const finalUnifiedOutstanding =
+    openingBalance + totalGoodsUploaded - returnsDeliveredValue - totalPaid;
 
   const overallNetProductValue = supplierOrders.reduce(
     (sum: number, o: any) => {
@@ -1137,17 +1119,47 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
   }
   const supplierOrders = Array.from(supplierOrdersMap.values());
 
-  // Clean raw ledger: keep exact signed amounts as recorded in database
+  // Clean raw ledger: handle inflows, payouts, adjustments and withdrawals with proper signs
   const rawLedger = (db.supplierLedger || [])
     .filter((l: any) => {
       const sup = l.supplier || l["المورد"];
       return sup && sameSup(sup, supplierName);
     })
     .map((l: any) => {
-      return {
-        ...l,
-        amount: Number(l.amount || 0),
-      };
+      const type = (l.type || l["النوع"] || "").toString().trim();
+      const isWithdrawal =
+        type.includes("سحب") ||
+        type.includes("عكسية") ||
+        type.includes("طرح") ||
+        type.includes("خصم") ||
+        type.includes("تسوية خصم");
+      const isPayout =
+        ["دفع نقدي", "دفعة مورد", "صرف مورد", "دفعة", "مسحوبات"].some(
+          (p) => type.includes(p),
+        ) || l.tracking === "CASH-PAY";
+      const isInflow =
+        type.includes("استلام نقدية") ||
+        type.includes("مسترد") ||
+        type.includes("وارد") ||
+        type.includes("إيراد للخزنة");
+      const isManualAddition =
+        type.includes("تسوية إضافة") ||
+        type.includes("إضافة يدوي");
+
+      const val = Number(l.amount || 0);
+
+      if (isInflow || isManualAddition) {
+        return {
+          ...l,
+          amount: Math.abs(val),
+        };
+      } else if (isWithdrawal || isPayout) {
+        return {
+          ...l,
+          amount: -Math.abs(val),
+        };
+      }
+      return l;
     });
 
   // Helper function to check for genuine human payouts/adjustments
@@ -1257,13 +1269,13 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
 
   // Calculate net cash paid (Payouts are negative, inflows are positive in rawLedger)
   // Net Cash Paid = - (sum of signed cash payment ledger amounts)
-  const paymentsValue = cashPayments.reduce((sum: number, l: any) => {
+  const paymentsValue = -cashPayments.reduce((sum: number, l: any) => {
     return sum + Number(l.amount || 0);
   }, 0);
 
   // Calculate net adjustments (Deductions are negative, additions are positive in rawLedger)
   // Net Adjustments Deducted = - (sum of signed adjustment ledger amounts)
-  const reverseAdjustmentsValue = reverseAdjustments.reduce((sum: number, l: any) => {
+  const reverseAdjustmentsValue = -reverseAdjustments.reduce((sum: number, l: any) => {
     return sum + Number(l.amount || 0);
   }, 0);
 
@@ -1272,9 +1284,8 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
   const outstanding =
     openingBalance +
     totalCOD -
-    returnsDeliveredValue +
-    reverseAdjustmentsValue -
-    paymentsValue;
+    returnsDeliveredValue -
+    (paymentsValue + reverseAdjustmentsValue);
 
   // Build the ledger entries list
   const entries: any[] = [];
@@ -5378,26 +5389,26 @@ app.post("/api", async (req: Request, res: Response) => {
         const typeStr = transactionType || "payout"; // payout, inflow, adjustment
 
         let ledgerType = "دفع نقدي";
-        let ledgerAmount = val; // MUST BE POSITIVE [+] for payout as per definitive ledger signs
+        let ledgerAmount = -val;
         let finalDesc = desc || "";
 
         if (typeStr === "inflow") {
           ledgerType = "استلام نقدية";
-          ledgerAmount = -val; // MUST BE NEGATIVE [-] for inflow as per definitive ledger signs
+          ledgerAmount = val; // Positive value to increase outstanding balance back to zero
           if (!finalDesc) {
             finalDesc = `استلام نقدية / إيراد للخزنة من المورد: ${supplier}`;
           }
         } else if (typeStr === "adjustment") {
           const isAdd = adjustmentType === "add";
           ledgerType = isAdd ? "تسوية إضافة" : "تسوية خصم";
-          ledgerAmount = isAdd ? val : -val; // Follows the exact user selection
+          ledgerAmount = isAdd ? val : -val;
           if (!finalDesc) {
             finalDesc = `تسوية رصيد يدوي (${isAdd ? "إضافة" : "خصم"}) للمورد: ${supplier}`;
           }
         } else {
           // payout (default)
           ledgerType = "دفع نقدي";
-          ledgerAmount = val; // MUST BE POSITIVE [+] for payout as per definitive ledger signs
+          ledgerAmount = -val;
           if (!finalDesc) {
             finalDesc = `دفعة نقدية مسددة للمورد: ${supplier}`;
           }

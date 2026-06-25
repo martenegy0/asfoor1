@@ -246,27 +246,17 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
     e.preventDefault();
     if (!activeSettleSupplier) return;
 
-    let amountNum = Number(settleAmount);
-    if (isNaN(amountNum) || amountNum === 0) {
-      setErrorMsg("يرجى إدخال قيمة صحيحة غير صفرية.");
+    const amountNum = Number(settleAmount);
+    if (!amountNum || amountNum <= 0) {
+      setErrorMsg("يرجى إدخال قيمة صحيحة أكبر من الصفر.");
       return;
-    }
-
-    let finalAdjustmentType = adjustmentType;
-    if (settleTransType === "adjustment") {
-      if (amountNum < 0) {
-        finalAdjustmentType = "subtract";
-        amountNum = Math.abs(amountNum);
-      }
-    } else {
-      amountNum = Math.abs(amountNum);
     }
 
     let defaultDesc = "";
     if (settleTransType === "inflow") {
       defaultDesc = `استلام نقدية / إيراد للخزنة من المورد: ${activeSettleSupplier.name} بمبلغ ${amountNum} ج.م`;
     } else if (settleTransType === "adjustment") {
-      defaultDesc = `تسوية رصيد يدوي (${finalAdjustmentType === "add" ? "إضافة" : "خصم"}) للمورد: ${activeSettleSupplier.name} بمبلغ ${amountNum} ج.م`;
+      defaultDesc = `تسوية رصيد يدوي (${adjustmentType === "add" ? "إضافة" : "خصم"}) للمورد: ${activeSettleSupplier.name} بمبلغ ${amountNum} ج.م`;
     } else {
       defaultDesc = `تصفية حساب المورد: ${activeSettleSupplier.name} بمبلغ ${amountNum} ج.م`;
     }
@@ -280,7 +270,7 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
         amount: amountNum,
         desc: settleDesc.trim() || defaultDesc,
         transactionType: settleTransType,
-        adjustmentType: finalAdjustmentType
+        adjustmentType: adjustmentType
       });
 
       if (res.ok) {
