@@ -855,6 +855,18 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
   });
   const adjustmentsAndPayments = sLedgerLoc.filter(isHumanLedgedPayout);
 
+  // Pre-group adjustmentsAndPayments by date for O(1) daily lookup
+  const adjustmentsAndPaymentsByDate = new Map<string, any[]>();
+  for (const l of adjustmentsAndPayments) {
+    const lDate = normalizeDateStr(l.date || "");
+    if (lDate) {
+      if (!adjustmentsAndPaymentsByDate.has(lDate)) {
+        adjustmentsAndPaymentsByDate.set(lDate, []);
+      }
+      adjustmentsAndPaymentsByDate.get(lDate)!.push(l);
+    }
+  }
+
   // 3. Group supplier orders by their normalized date
   const ordersByDay = new Map<string, any[]>();
   for (const o of supplierOrders) {
@@ -933,12 +945,7 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
     }, 0);
 
     // D. Payouts/Cash Paid on this exact day
-    const dayPayments = adjustmentsAndPayments.filter((l: any) => {
-      const lSup = l.supplier || l["المورد"] || "";
-      if (!sameSup(lSup, supplierName)) return false;
-      const lDate = normalizeDateStr(l.date || "");
-      return lDate === dayDate && isHumanLedgedPayout(l);
-    });
+    const dayPayments = adjustmentsAndPaymentsByDate.get(dayDate) || [];
     const totalPayoutsOnDay = dayPayments.reduce((sum: number, l: any) => {
       const type = (l.type || l["النوع"] || "").toString().trim();
       const amount = Number(l.amount || 0);
@@ -1015,8 +1022,99 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
   const supplierProfile = (db.suppliers || []).find((s: any) => sameSup(s.name, supplierName));
   const openingBalance = supplierProfile ? Number(supplierProfile.openingBalance || supplierProfile.opening_balance || 0) : 0;
 
-  // Let's compute outstandingBalance via the exact Unified Ledger Equation
-  // Net Supplier Due = Opening + [إجمالي البضاعة المرفوعة (صافي بضاعة فقط بدون شحن)] - [المرتجع المعتمد المستلم] - [إجمالي الدفعات النقدية والخصومات المسددة للمورد]
+  // Clean raw ledger: keep exact signed amounts as recorded in database
+  const rawLedgerLoc = (db.supplierLedger || [])
+    .filter((l: any) => {
+      const sup = l.supplier || l["المورد"];
+      return sup && sameSup(sup, supplierName);
+    })
+    .map((l: any) => {
+      return {
+        ...l,
+        amount: Number(l.amount || 0),
+      };
+    });
+
+  // Math-locked ledger transaction separation
+  // 1. Payouts (صرف دفعة للمورد)
+  const payoutsList = rawLedgerLoc.filter((l: any) => {
+    const type = (l.type || l["النوع"] || "").toString().trim();
+    const tracking = (l.tracking || l["رقم التتبع"] || "").toString().trim();
+    return (
+      [
+        "دفع نقدي",
+        "دفعة مورد",
+        "صرف مورد",
+        "دفعة",
+        "مسحوبات",
+        "سحب",
+      ].includes(type) ||
+      type.includes("دفعة") ||
+      type.includes("صرف") ||
+      type.includes("سحب") ||
+      tracking === "CASH-PAY"
+    ) && !(
+      type.includes("استلام") ||
+      type.includes("مسترد") ||
+      type.includes("وارد") ||
+      type.includes("تسوية") ||
+      type.includes("تعديل")
+    );
+  });
+  const totalPayouts = payoutsList.reduce((sum: number, l: any) => sum + Math.abs(l.amount), 0);
+
+  // 2. Inflows (استلام نقدية مستردة من المورد)
+  const inflowsList = rawLedgerLoc.filter((l: any) => {
+    const type = (l.type || l["النوع"] || "").toString().trim();
+    return (
+      [
+        "استلام نقدية",
+        "مسترد نقدية",
+      ].includes(type) ||
+      type.includes("استلام") ||
+      type.includes("مسترد") ||
+      type.includes("وارد")
+    ) && !(
+      type.includes("تسوية") ||
+      type.includes("تعديل")
+    );
+  });
+  const totalInflows = inflowsList.reduce((sum: number, l: any) => sum + Math.abs(l.amount), 0);
+
+  // 3. Manual Adjustments (تسويات الرصيد اليدوية)
+  const adjustmentsList = rawLedgerLoc.filter((l: any) => {
+    const type = (l.type || l["النوع"] || "").toString().trim();
+    return (
+      type.includes("تسوية") ||
+      type.includes("تعديل")
+    );
+  });
+  const totalAdjustmentsEffect = adjustmentsList.reduce((sum: number, l: any) => {
+    const type = (l.type || l["النوع"] || "").toString().trim();
+    const isDiscount = type.includes("خصم") || type.includes("طرح") || type.includes("sub") || type.includes("discount");
+    const isAdd = type.includes("إضافة") || type.includes("اضافة") || type.includes("add");
+    if (isDiscount) {
+      return sum - Math.abs(l.amount);
+    } else if (isAdd) {
+      return sum + Math.abs(l.amount);
+    } else {
+      return sum + l.amount;
+    }
+  }, 0);
+
+  // Calculate actual delivered product value (إجمالي ثمن البضاعة المباعة الفعلي من شيت الأوردرات للأوردرات الناجحة والجزئية فقط)
+  const totalSoldGoodsValue = supplierOrders.reduce((sum: number, o: any) => {
+    const status = getOrderStatus(o);
+    const financials = getOrderFinancials(o);
+    if (["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(status)) {
+      return sum + financials.prodPrice;
+    }
+    if (["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].includes(status)) {
+      return sum + getOrderActualReceivedCash(o);
+    }
+    return sum;
+  }, 0);
+
   const totalGoodsUploaded = supplierOrders.reduce((sum: number, o: any) => {
     return sum + getOrderFinancials(o).prodPrice;
   }, 0);
@@ -1035,56 +1133,16 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
     return sum + financials.prodPrice;
   }, 0);
 
-  const totalLedgerEffect = adjustmentsAndPayments.reduce((sum: number, l: any) => {
-    const type = (l.type || l["النوع"] || "").toString().trim();
-    const amount = Number(l.amount || 0);
-    const isAdjustment = type.includes("تسوية") || type.includes("تعديل");
-    if (isAdjustment) {
-      return sum + amount;
-    } else {
-      return sum - amount;
-    }
-  }, 0);
+  const finalUnifiedOutstanding = openingBalance + totalSoldGoodsValue - returnsDeliveredValue - totalPayouts - totalInflows + totalAdjustmentsEffect;
 
-  const finalUnifiedOutstanding =
-    openingBalance + totalGoodsUploaded - returnsDeliveredValue + totalLedgerEffect;
-
-  const totalPaid = adjustmentsAndPayments.reduce((sum: number, l: any) => {
-    return sum + Math.abs(Number(l.amount || 0));
-  }, 0);
-
-  const overallNetProductValue = supplierOrders.reduce(
-    (sum: number, o: any) => {
-      const status = getOrderStatus(o);
-      const financials = getOrderFinancials(o);
-      if (
-        ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(
-          status,
-        )
-      ) {
-        return sum + (financials.totalCOD - financials.shipPrice);
-      }
-      if (
-        [
-          "تسليم جزئي",
-          "تسليم جزئي - معلق للجرد",
-          "مرتجع جزئي بالمستودع",
-        ].includes(status)
-      ) {
-        const cash = getOrderActualReceivedCash(o);
-        return sum + cash;
-      }
-      return sum;
-    },
-    0,
-  );
+  const totalPaid = totalPayouts + totalInflows;
 
   return {
     days: daysList,
     outstandingBalance: finalUnifiedOutstanding,
     totalGoodsUploaded,
     returnsDeliveredValue,
-    overallNetProductValue,
+    overallNetProductValue: totalSoldGoodsValue,
     globalPayments: totalPaid,
     paymentEntries: adjustmentsAndPayments.map((l: any) => ({
       date: normalizeDateStr(l.date || ""),
@@ -1100,6 +1158,7 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
   if (!db) {
     return {
       entries: [],
+      balance: 0,
       stats: {
         totalOrdersCount: 0,
         totalGoodsUploaded: 0,
@@ -1150,58 +1209,12 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
       };
     });
 
-  // Helper function to check for genuine human payouts/adjustments
-  const isHumanLedgedPayout = (l: any) => {
-    if (!l) return false;
-    const type = (l.type || l["النوع"] || "").toString().trim();
-    const desc = (l.desc || l["البيان"] || "").toString().trim();
-    const tracking = (l.tracking || l["رقم التتبع"] || "").toString().trim();
-
-    const isPayOrAdj =
-      [
-        "دفع نقدي",
-        "دفعة مورد",
-        "صرف مورد",
-        "دفعة",
-        "مسحوبات",
-        "طرح",
-        "تسوية",
-        "سحب",
-        "استلام نقدية",
-        "مسترد نقدية",
-        "تسوية رصيد",
-        "تسوية إضافة",
-        "تسوية خصم"
-      ].includes(type) ||
-      type.includes("دفعة") ||
-      type.includes("صرف") ||
-      type.includes("سحب") ||
-      type.includes("تسوية") ||
-      type.includes("استلام") ||
-      type.includes("مسترد") ||
-      tracking === "CASH-PAY";
-
-    const isAutoOrReturn =
-      type.includes("مرتجع") ||
-      desc.includes("مرتجع") ||
-      type.includes("أوردر") ||
-      type.includes("حقوق") ||
-      desc.includes("حقوق") ||
-      (tracking !== "" &&
-        tracking !== "—" &&
-        tracking !== "CASH-PAY" &&
-        tracking.startsWith("FP-"));
-
-    return isPayOrAdj && !isAutoOrReturn;
-  };
-
-  // 1. Total uploaded goods (value of products only without shipping) using getOrderFinancials
+  // Calculate stats
   const totalGoodsUploaded = supplierOrders.reduce((sum: number, o: any) => {
     const financials = getOrderFinancials(o);
     return sum + financials.prodPrice;
   }, 0);
 
-  // 2. Successful deliveries
   const deliveredOrders = supplierOrders.filter(
     (o: any) => getOrderStatus(o) === "تم التسليم",
   );
@@ -1211,7 +1224,6 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
     return sum + financials.prodPrice;
   }, 0);
 
-  // 3. Returns delivered back to supplier (Dynamic Status Matching - only deduct financially when officially delivered to supplier)
   const returnedOrders = supplierOrders.filter((o: any) => {
     return isReturnedDeliveredToSupplier(getOrderStatus(o));
   });
@@ -1227,83 +1239,135 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
     return sum + financials.prodPrice;
   }, 0);
 
-  // 4. Payments and Adjustments made to supplier from ledger (Strict human payout classification)
-  const adjustmentsAndPayments = rawLedger.filter(isHumanLedgedPayout);
-
-  // Separate Cash Payments from Reverse Adjustments
-  const cashPayments = adjustmentsAndPayments.filter((l: any) => {
+  // Math-locked ledger transaction separation
+  // 1. Payouts (صرف دفعة للمورد)
+  const payoutsList = rawLedger.filter((l: any) => {
     const type = (l.type || l["النوع"] || "").toString().trim();
+    const tracking = (l.tracking || l["رقم التتبع"] || "").toString().trim();
     return (
-      type.includes("دفع") ||
+      [
+        "دفع نقدي",
+        "دفعة مورد",
+        "صرف مورد",
+        "دفعة",
+        "مسحوبات",
+        "سحب",
+      ].includes(type) ||
+      type.includes("دفعة") ||
       type.includes("صرف") ||
+      type.includes("سحب") ||
+      tracking === "CASH-PAY"
+    ) && !(
       type.includes("استلام") ||
       type.includes("مسترد") ||
       type.includes("وارد") ||
-      l.tracking === "CASH-PAY"
+      type.includes("تسوية") ||
+      type.includes("تعديل")
     );
   });
+  const totalPayouts = payoutsList.reduce((sum: number, l: any) => sum + Math.abs(l.amount), 0);
 
-  const reverseAdjustments = adjustmentsAndPayments.filter((l: any) => {
+  // 2. Inflows (استلام نقدية مستردة من المورد)
+  const inflowsList = rawLedger.filter((l: any) => {
     const type = (l.type || l["النوع"] || "").toString().trim();
     return (
-      type.includes("سحب") ||
-      type.includes("عكسية") ||
-      type.includes("طرح") ||
-      type.includes("خصم") ||
+      [
+        "استلام نقدية",
+        "مسترد نقدية",
+      ].includes(type) ||
+      type.includes("استلام") ||
+      type.includes("مسترد") ||
+      type.includes("وارد")
+    ) && !(
       type.includes("تسوية") ||
-      type.includes("إضافة")
+      type.includes("تعديل")
     );
   });
+  const totalInflows = inflowsList.reduce((sum: number, l: any) => sum + Math.abs(l.amount), 0);
 
-  // Calculate net cash paid (Payouts are negative, inflows are positive in rawLedger)
-  // Net Cash Paid = - (sum of signed cash payment ledger amounts)
-  const paymentsValue = cashPayments.reduce((sum: number, l: any) => {
-    return sum + Number(l.amount || 0);
+  // 3. Manual Adjustments (تسويات الرصيد اليدوية)
+  const adjustmentsList = rawLedger.filter((l: any) => {
+    const type = (l.type || l["النوع"] || "").toString().trim();
+    return (
+      type.includes("تسوية") ||
+      type.includes("تعديل")
+    );
+  });
+  const totalAdjustmentsEffect = adjustmentsList.reduce((sum: number, l: any) => {
+    const type = (l.type || l["النوع"] || "").toString().trim();
+    const isDiscount = type.includes("خصم") || type.includes("طرح") || type.includes("sub") || type.includes("discount");
+    const isAdd = type.includes("إضافة") || type.includes("اضافة") || type.includes("add");
+    if (isDiscount) {
+      return sum - Math.abs(l.amount);
+    } else if (isAdd) {
+      return sum + Math.abs(l.amount);
+    } else {
+      return sum + l.amount;
+    }
   }, 0);
 
-  // Calculate net adjustments (Deductions are negative, additions are positive in rawLedger)
-  // Net Adjustments Deducted = - (sum of signed adjustment ledger amounts)
-  const reverseAdjustmentsValue = reverseAdjustments.reduce((sum: number, l: any) => {
-    return sum + Number(l.amount || 0);
+  // Calculate actual delivered product value (إجمالي ثمن البضاعة المباعة الفعلي من شيت الأوردرات للأوردرات الناجحة والجزئية فقط)
+  const totalSoldGoodsValue = supplierOrders.reduce((sum: number, o: any) => {
+    const status = getOrderStatus(o);
+    const financials = getOrderFinancials(o);
+    if (["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(status)) {
+      return sum + financials.prodPrice;
+    }
+    if (["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].includes(status)) {
+      return sum + getOrderActualReceivedCash(o);
+    }
+    return sum;
   }, 0);
 
-  // 5. Calculate outstanding balance based on the approved formula: Net Balance = Opening Balance + Total Goods Uploaded (Product value only, excluding shipping fees!) - Total Delivered back to Supplier - (Outgoing Cash Payments + Adjustments)
-  const totalCOD = totalGoodsUploaded;
-  const outstanding =
-    openingBalance +
-    totalCOD -
-    returnsDeliveredValue +
-    reverseAdjustmentsValue -
-    paymentsValue;
+  const outstanding = openingBalance + totalSoldGoodsValue - returnsDeliveredValue - totalPayouts - totalInflows + totalAdjustmentsEffect;
 
-  // Build the ledger entries list
+  // Let's build the ledger entries list for the detailed UI audit
   const entries: any[] = [];
 
-  // A. All uploaded orders count as supplier credit immediately
-  for (const o of supplierOrders) {
-    const financials = getOrderFinancials(o);
-    const status = getOrderStatus(o);
-    const tracking = getOrderTracking(o);
-    const prodPriceNum = financials.prodPrice;
-
-    const orderDesc = `حقوق بضاعة أوردر رقم #${tracking} (صافي بضاعة: ${prodPriceNum} ج.م - حالة الأوردر: ${status})`;
-
+  // A. Add opening balance entry if exists
+  if (openingBalance !== 0) {
     entries.push({
-      date: o.orderDate || o.createdAt || "",
-      type: "حقوق بضاعة أوردر",
-      tracking: tracking,
-      amount: prodPriceNum,
-      desc: orderDesc,
+      date: "2026-01-01", // Default early date for chronological sorting
+      type: "رصيد افتتاحي",
+      tracking: "OPENING-BALANCE",
+      desc: `الرصيد الافتتاحي المرحل (سابق): ${openingBalance} ج.م`,
+      amount: openingBalance,
     });
   }
 
-  // B. Returned orders as debit action (negative deduction since they are delivered back to supplier)
-  for (const o of returnedOrders) {
+  // B. Add all sold orders to entries (only sold/delivered and partial orders count as credits)
+  for (const o of supplierOrders) {
+    const status = getOrderStatus(o);
     const financials = getOrderFinancials(o);
     const tracking = getOrderTracking(o);
+    const isSold = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(status);
+    const isPartial = ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].includes(status);
+
+    if (isSold) {
+      entries.push({
+        date: o.orderDate || o.createdAt || "",
+        type: "حقوق بضاعة أوردر",
+        tracking: tracking,
+        desc: `حقوق بضاعة أوردر ناجح رقم #${tracking} (صافي بضاعة: ${financials.prodPrice} ج.م)`,
+        amount: financials.prodPrice, // positive asset
+      });
+    } else if (isPartial) {
+      const soldVal = getOrderActualReceivedCash(o);
+      entries.push({
+        date: o.orderDate || o.createdAt || "",
+        type: "حقوق بضاعة جزئي",
+        tracking: tracking,
+        desc: `حقوق بضاعة تسليم جزئي أوردر رقم #${tracking} (المستلم الفعلي: ${soldVal} ج.م)`,
+        amount: soldVal, // positive asset
+      });
+    }
+  }
+
+  // C. Add returned orders delivered to supplier as deductions (-)
+  for (const o of returnedOrders) {
+    const tracking = getOrderTracking(o);
+    const financials = getOrderFinancials(o);
     const status = getOrderStatus(o);
-    
-    // For partial deliveries, only deduct the unsold portion!
     const isPartial = o.isPartial === true || o.isPartial === "true" || ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].includes(status) || (o.returnSubStatus && o.returnSubStatus.includes("تسليم جزئي"));
     
     let deductAmount = financials.prodPrice;
@@ -1326,25 +1390,41 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
     }
   }
 
-  // C. Payouts and adjustments
-  for (const l of adjustmentsAndPayments) {
+  // D. Add all raw ledger transactions (payouts, inflows, manual adjustments)
+  // Ensure that they are signed correctly in the entries list
+  for (const l of rawLedger) {
+    const type = (l.type || l["النوع"] || "").toString().trim();
+    if (type === "تصفية يومية") continue; // Skip daily log metadata from double entries list
+
+    const isPayout = payoutsList.includes(l);
+    const isInflow = inflowsList.includes(l);
+    const isAdjustment = adjustmentsList.includes(l);
+
+    let amountSigned = 0;
+    if (isPayout) {
+      amountSigned = -Math.abs(l.amount); // Payout reduces outstanding balance
+    } else if (isInflow) {
+      amountSigned = -Math.abs(l.amount); // Inflow reduces outstanding balance
+    } else if (isAdjustment) {
+      const isDiscount = type.includes("خصم") || type.includes("طرح") || type.includes("sub") || type.includes("discount");
+      const isAdd = type.includes("إضافة") || type.includes("اضافة") || type.includes("add");
+      if (isDiscount) {
+        amountSigned = -Math.abs(l.amount);
+      } else if (isAdd) {
+        amountSigned = Math.abs(l.amount);
+      } else {
+        amountSigned = l.amount;
+      }
+    } else {
+      amountSigned = l.amount;
+    }
+
     entries.push({
       date: l.date || "",
-      type: l.type || "تعديل حساب",
+      type: type,
       tracking: l.tracking || "CASH-PAY",
-      amount: Number(l.amount || 0),
-      desc: l.desc || `تسوية/دفعة مالیة للمورد بمبلغ ${l.amount} ج.م`,
-    });
-  }
-
-  // D. Include opening balance as the first transaction if present
-  if (openingBalance !== 0) {
-    entries.push({
-      date: "2026-01-01", // Default early date for chronological sorting
-      type: "رصيد افتتاحي",
-      tracking: "OPENING-BALANCE",
-      amount: openingBalance,
-      desc: `الرصيد الافتتاحي المرحل (سابق): ${openingBalance} ج.م`,
+      amount: amountSigned,
+      desc: l.desc || `حركة مالية للمورد بمبلغ ${l.amount} ج.م`,
     });
   }
 
@@ -1357,6 +1437,7 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
     const typeOrder: { [key: string]: number } = {
       "رصيد افتتاحي": 0,
       "حقوق بضاعة أوردر": 1,
+      "حقوق بضاعة جزئي": 1,
       "مرتجع مخصوم": 2,
     };
     const orderA = typeOrder[a.type] !== undefined ? typeOrder[a.type] : 3;
@@ -1382,13 +1463,13 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
     stats: {
       totalOrdersCount,
       totalGoodsUploaded,
-      totalCOD,
+      totalCOD: totalSoldGoodsValue,
       deliveredOrdersCount,
       deliveredOrdersValue,
       returnsDeliveredCount,
       returnsDeliveredValue,
-      paymentsValue,
-      reverseAdjustmentsValue,
+      paymentsValue: totalPayouts + totalInflows,
+      reverseAdjustmentsValue: totalAdjustmentsEffect,
       outstanding,
       rate,
       openingBalance,
@@ -5872,24 +5953,69 @@ app.post("/api", async (req: Request, res: Response) => {
             return true;
           });
 
+        // Pre-grouping data structures for O(1) inside sortedDates.map
+        const deliveredByDate = new Map<string, any[]>();
+        const returnedByDate = new Map<string, any[]>();
+
+        for (const o of courierOrders) {
+          if (fullDeliveredStatuses.includes(o.status) && o.delivDate) {
+            const dStr = o.delivDate.substring(0, 10);
+            if (!deliveredByDate.has(dStr)) deliveredByDate.set(dStr, []);
+            deliveredByDate.get(dStr)!.push(o);
+          }
+          if (
+            ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع والعميل دفع الشحن", "مرتجع مدفوع الشحن", "مرتجع ودفع الشحن"].includes(o.status) &&
+            o.retDate
+          ) {
+            const dStr = o.retDate.substring(0, 10);
+            if (!returnedByDate.has(dStr)) returnedByDate.set(dStr, []);
+            returnedByDate.get(dStr)!.push(o);
+          }
+        }
+
+        const targetLedgerFiltered = (db.courierLedger || []).filter(
+          (l: any) => l.courier === courierName && !l.isSettledMonth
+        );
+        const ledgerByDate = new Map<string, any[]>();
+        for (const l of targetLedgerFiltered) {
+          if (l.date) {
+            const dStr = l.date.substring(0, 10);
+            if (!ledgerByDate.has(dStr)) ledgerByDate.set(dStr, []);
+            ledgerByDate.get(dStr)!.push(l);
+          }
+        }
+
+        const targetExpensesFiltered = (db.expenses || []).filter(
+          (e: any) => e.by === courierName && !e.isSettledMonth
+        );
+        const expensesByDate = new Map<string, number>();
+        for (const e of targetExpensesFiltered) {
+          if (e.date) {
+            const dStr = e.date.substring(0, 10);
+            expensesByDate.set(dStr, (expensesByDate.get(dStr) || 0) + Number(e.amount || 0));
+          }
+        }
+
+        const liveCourierOrders = (db.orders || []).filter(
+          (o: any) =>
+            o.courier &&
+            o.courier.toString().trim().toLowerCase() ===
+              courierName.toString().trim().toLowerCase()
+        );
+        const liveDatesSet = new Set<string>();
+        for (const o of liveCourierOrders) {
+          if (o.delivDate) liveDatesSet.add(o.delivDate.substring(0, 10));
+          if (o.retDate) liveDatesSet.add(o.retDate.substring(0, 10));
+          if (o.orderDate) liveDatesSet.add(o.orderDate.substring(0, 10));
+          if (o.createdAt) liveDatesSet.add(o.createdAt.substring(0, 10));
+        }
+
         let runningCumulative = 0;
         const dailyEarnings = sortedDates.map((dStr) => {
           const isToday = dStr === todayDate;
 
-          const deliveredList = courierOrders.filter(
-            (o: any) =>
-              fullDeliveredStatuses.includes(o.status) &&
-              o.delivDate &&
-              o.delivDate.substring(0, 10) === dStr,
-          );
-          const returnedList = courierOrders.filter(
-            (o: any) =>
-              ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع والعميل دفع الشحن", "مرتجع مدفوع الشحن", "مرتجع ودفع الشحن"].includes(
-                o.status,
-              ) &&
-              o.retDate &&
-              o.retDate.substring(0, 10) === dStr,
-          );
+          const deliveredList = deliveredByDate.get(dStr) || [];
+          const returnedList = returnedByDate.get(dStr) || [];
 
           const deliveredDay = deliveredList.length;
           const returnedDay = returnedList.length;
@@ -5901,19 +6027,7 @@ app.post("/api", async (req: Request, res: Response) => {
           );
 
           // Check if the day is settled
-          const hasLiveUnsettledOrdersForDay = db.orders.some(
-            (o: any) =>
-              o.courier &&
-              o.courier.toString().trim().toLowerCase() ===
-                courierName.toString().trim().toLowerCase() &&
-              (
-                (o.delivDate && o.delivDate.substring(0, 10) === dStr) ||
-                (o.retDate && o.retDate.substring(0, 10) === dStr) ||
-                (o.orderDate && o.orderDate.substring(0, 10) === dStr) ||
-                (o.createdAt && o.createdAt.substring(0, 10) === dStr)
-              )
-          );
-          const isSettled = !hasLiveUnsettledOrdersForDay;
+          const isSettled = !liveDatesSet.has(dStr);
 
           // Pro-rated daily basic salary portion
           let baseEarning = Number((basicSalary / daysCount).toFixed(2));
@@ -5925,29 +6039,14 @@ app.post("/api", async (req: Request, res: Response) => {
           const delivEarning = isToday ? deliveredDay * commissionSuccess : 0;
           const retEarning = isToday ? returnedDay * commissionReturn : 0;
 
-          const dayLedger = db.courierLedger.filter(
-            (l: any) =>
-              l.courier === courierName &&
-              l.date &&
-              l.date.substring(0, 10) === dStr &&
-              !l.isSettledMonth,
-          );
+          const dayLedger = ledgerByDate.get(dStr) || [];
           const dayPenalties = dayLedger
             .filter((l: any) => l.type === "جزاء" || l.type === "خصم" || l.type === "خصم عجز")
             .reduce(
               (sum: number, x: any) => sum + Math.abs(Number(x.amount)),
               0,
             );
-          const dayExpenses =
-            db.expenses
-              ?.filter(
-                (e: any) =>
-                  e.by === courierName &&
-                  e.date &&
-                  e.date.substring(0, 10) === dStr &&
-                  !e.isSettledMonth,
-              )
-              .reduce((sum: number, e: any) => sum + Number(e.amount), 0) || 0;
+          const dayExpenses = expensesByDate.get(dStr) || 0;
           const dayBonuses = dayLedger
             .filter((l: any) => l.type === "مكافأة")
             .reduce((sum: number, x: any) => sum + Number(x.amount), 0);
