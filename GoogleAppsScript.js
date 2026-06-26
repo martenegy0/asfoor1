@@ -1565,6 +1565,32 @@ function getAuditLog(sheets) {
 // ───────────────────────────────────────────────
 // HELPER FOR GENUINE HUMAN PAYOUT CLASSIFICATION
 // ───────────────────────────────────────────────
+function getLedgerEntrySignedAmount(l) {
+  if (!l) return 0;
+  var type = (l.type || l["النوع"] || "").toString().trim();
+  var amount = Number(l.amount || 0);
+  if (isNaN(amount)) return 0;
+  var absAmount = Math.abs(amount);
+
+  if (type.indexOf("إضافة") !== -1 || type.indexOf("اضافة") !== -1) {
+    return absAmount;
+  }
+  if (
+    type.indexOf("خصم") !== -1 ||
+    type.indexOf("طرح") !== -1 ||
+    type.indexOf("دفع") !== -1 ||
+    type.indexOf("صرف") !== -1 ||
+    type.indexOf("سحب") !== -1 ||
+    type.indexOf("مسحوبات") !== -1 ||
+    type.indexOf("استلام") !== -1 ||
+    type.indexOf("مسترد") !== -1 ||
+    (l.tracking || "").toString().trim() === "CASH-PAY"
+  ) {
+    return -absAmount;
+  }
+  return amount;
+}
+
 function isHumanPayout(l) {
   if (!l) return false;
   var type = (l.type || "").toString().trim();
@@ -1875,20 +1901,7 @@ function getSupplierLedgerData(sheets, d) {
   var adjustmentsAndPayments = supplierLedgerEntries.filter(isHumanPayout);
 
   var totalLedgerEffect = adjustmentsAndPayments.reduce(function(sum, l) {
-    var type = (l.type || l["النوع"] || l.type || "").toString().trim();
-    var amount = Number(l.amount || 0);
-    if (isNaN(amount)) amount = 0;
-    var isAdjustment = type.indexOf("تسوية") !== -1 || type.indexOf("تعديل") !== -1;
-    if (isAdjustment) {
-      if (type.indexOf("خصم") !== -1 || type.indexOf("طرح") !== -1) {
-        return sum - Math.abs(amount);
-      } else if (type.indexOf("إضافة") !== -1 || type.indexOf("اضافة") !== -1) {
-        return sum + Math.abs(amount);
-      }
-      return sum + amount;
-    } else {
-      return sum - Math.abs(amount);
-    }
+    return sum + getLedgerEntrySignedAmount(l);
   }, 0);
 
   // Calculate actual delivered product value (إجمالي ثمن البضاعة المباعة الفعلي من شيت الأوردرات للأوردرات الناجحة والجزئية فقط)
@@ -2282,7 +2295,7 @@ function addSupplierPayment(sheets, d) {
   const typeStr = transactionType || "payout"; // payout, inflow, adjustment
 
   let ledgerType = "دفع نقدي";
-  let ledgerAmount = val; // MUST BE POSITIVE [+] for payout as per definitive ledger signs
+  let ledgerAmount = -val; // MUST BE NEGATIVE [-] for payout as per definitive ledger signs (deduction)
   let finalDesc = desc || "";
 
   if (typeStr === "inflow") {
@@ -2301,7 +2314,7 @@ function addSupplierPayment(sheets, d) {
   } else {
     // payout (default)
     ledgerType = "دفع نقدي";
-    ledgerAmount = val; // MUST BE POSITIVE [+] for payout as per definitive ledger signs
+    ledgerAmount = -val; // MUST BE NEGATIVE [-] for payout as per definitive ledger signs (deduction)
     if (!finalDesc) {
       finalDesc = `دفعة نقدية مسددة للمورد: ${supplier}`;
     }
