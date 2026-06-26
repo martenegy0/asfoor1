@@ -1781,13 +1781,14 @@ function getSupplierLedgerData(sheets, d) {
     });
     var totalPayoutsOnDay = dayPayments.reduce(function(sum, l) {
       var type = (l.type || l["النوع"] || l.type || "").toString().trim();
-      var isInflow = type.indexOf("استلام نقدية") !== -1 || type.indexOf("مسترد") !== -1 || type.indexOf("وارد") !== -1 || type.indexOf("إيراد للخزنة") !== -1;
-      var isManualAddition = type.indexOf("تسوية إضافة") !== -1 || type.indexOf("إضافة يدوي") !== -1;
-      var val = Math.abs(Number(l.amount || 0));
-      if (isInflow || isManualAddition) {
-        return sum - val;
+      var amount = Number(l.amount || 0);
+      if (isNaN(amount)) amount = 0;
+      var isAdjustment = type.indexOf("تسوية") !== -1 || type.indexOf("تعديل") !== -1;
+      if (isAdjustment) {
+        return sum - amount;
+      } else {
+        return sum + amount;
       }
-      return sum + val;
     }, 0);
 
     // E. Net dues = total work value - total payouts on day - returned value refunded
@@ -1858,12 +1859,27 @@ function getSupplierLedgerData(sheets, d) {
     return sum + getOrderFinancials(o).prodPrice;
   }, 0);
 
-  // Filter direct payments from supplierLedger
-  var directPaymentsVal = ledgerEntries.filter(function(l) {
+  // Filter direct payments and calculate ledger effect based on signs
+  var adjustmentsAndPayments = ledgerEntries.filter(function(l) {
     var lSup = l.supplier || l["المورد"] || "";
     if (!isSameSupplier(lSup, supplier)) return false;
     return isHumanPayout(l);
-  }).reduce(function(sum, l) {
+  });
+
+  var totalLedgerEffect = adjustmentsAndPayments.reduce(function(sum, l) {
+    var type = (l.type || l["النوع"] || l.type || "").toString().trim();
+    var amount = Number(l.amount || 0);
+    if (isNaN(amount)) amount = 0;
+    var isAdjustment = type.indexOf("تسوية") !== -1 || type.indexOf("تعديل") !== -1;
+    if (isAdjustment) {
+      return sum + amount;
+    } else {
+      return sum - amount;
+    }
+  }, 0);
+
+  // Calculate directPaymentsVal (sum of human payout absolute values for reference statistics)
+  var directPaymentsVal = adjustmentsAndPayments.reduce(function(sum, l) {
     return sum + Math.abs(Number(l.amount || 0));
   }, 0);
 
@@ -1877,7 +1893,7 @@ function getSupplierLedgerData(sheets, d) {
   });
   var openingBalance = supplierProfile ? Number(supplierProfile.openingBalance || supplierProfile.opening_balance || 0) : 0;
 
-  var finalUnifiedOutstanding = openingBalance + totalGoodsUploadedVal - returnsDeliveredVal - directPaymentsVal;
+  var finalUnifiedOutstanding = openingBalance + totalGoodsUploadedVal - returnsDeliveredVal + totalLedgerEffect;
 
   var overallNetProductValue = supplierOrders.reduce(function(sum, o) {
     var status = (o.status || "").toString().trim();
@@ -2186,12 +2202,26 @@ function getSupplierAccounts(sheets) {
       return sum + getOrderFinancials(o).prodPrice;
     }, 0);
 
-    // 3. Cash payments paid to supplier
+    // 3. Cash payments paid to supplier (absolute sum of human payments for reference stats)
     const paid = sLedger.filter(isHumanPayout).reduce(function(sum, l) { return sum + Math.abs(Number(l.amount || 0)); }, 0);
 
-    // 4. Current outstanding balance based on final formula: Outstanding = OpeningBalance + TotalGoodsUploaded - Returned - Paid
+    // 4. Current outstanding balance based on final formula: Outstanding = OpeningBalance + TotalGoodsUploaded - Returned + LedgerEffect
     const openingBalance = sObj ? Number(sObj.openingBalance || sObj.opening_balance || 0) : 0;
-    const balance = openingBalance + totalGoodsUploaded - returnsDeliveredValue - paid;
+    
+    var sAdjustmentsAndPayments = sLedger.filter(isHumanPayout);
+    var totalLedgerEffect = sAdjustmentsAndPayments.reduce(function(sum, l) {
+      var type = (l.type || l["النوع"] || l.type || "").toString().trim();
+      var amount = Number(l.amount || 0);
+      if (isNaN(amount)) amount = 0;
+      var isAdjustment = type.indexOf("تسوية") !== -1 || type.indexOf("تعديل") !== -1;
+      if (isAdjustment) {
+        return sum + amount;
+      } else {
+        return sum - amount;
+      }
+    }, 0);
+
+    const balance = openingBalance + totalGoodsUploaded - returnsDeliveredValue + totalLedgerEffect;
 
     const totalOrders = sOrders.length;
     const deliveredOrders = sOrders.filter(function(o) { return o.status === "تم التسليم"; }).length;
@@ -2216,48 +2246,75 @@ function getSupplierAccounts(sheets) {
 }
 
 function addSupplierPayment(sheets, d) {
-  const { supplier, amount, desc, currentUser, transactionType, tracking } = d;
+  const { supplier, amount, desc, currentUser, transactionType, adjustmentType, tracking } = d;
   const isSettlement = transactionType === "تصفية يومية" || (desc && desc.includes("تصفية يوم"));
   
   if (!isSettlement) {
     if (!supplier || !amount || Number(amount) === 0) return { ok: false, error: "قيمة الدفعة المالية المكتوبة غير صحيحة" };
   }
 
-  // Handle absolute values, manual deductions are stored as negative in ledger
   const val = Math.abs(Number(amount || 0));
-  const isWithdrawal = transactionType === "withdrawal" || transactionType === "سحب";
+  const typeStr = transactionType || "payout"; // payout, inflow, adjustment
+
+  let ledgerType = "دفع نقدي";
+  let ledgerAmount = val; // MUST BE POSITIVE [+] for payout as per definitive ledger signs
+  let finalDesc = desc || "";
+
+  if (typeStr === "inflow") {
+    ledgerType = "استلام نقدية";
+    ledgerAmount = -val; // MUST BE NEGATIVE [-] for inflow as per definitive ledger signs
+    if (!finalDesc) {
+      finalDesc = `استلام نقدية / إيراد للخزنة من المورد: ${supplier}`;
+    }
+  } else if (typeStr === "adjustment") {
+    const isAdd = adjustmentType === "add";
+    ledgerType = isAdd ? "تسوية إضافة" : "تسوية خصم";
+    ledgerAmount = isAdd ? val : -val; // Follows the exact user selection
+    if (!finalDesc) {
+      finalDesc = `تسوية رصيد يدوي (${isAdd ? "إضافة" : "خصم"}) للمورد: ${supplier}`;
+    }
+  } else {
+    // payout (default)
+    ledgerType = "دفع نقدي";
+    ledgerAmount = val; // MUST BE POSITIVE [+] for payout as per definitive ledger signs
+    if (!finalDesc) {
+      finalDesc = `دفعة نقدية مسددة للمورد: ${supplier}`;
+    }
+  }
 
   // 1. قيد الخزانة (صرف الدفعة المادية من السند المركزي لتقليص النقدية أو إيداعها)
-  appendToSheet(sheets.cashbox, ["date", "desc", "type", "amount", "ref", "addedBy"], {
-    date: now(),
-    desc: desc || (isWithdrawal ? `سحب مالي / تسوية عكسية من المورد: ${supplier}` : `دفعة نقدية منصرفة للمورد: ${supplier}`),
-    type: isSettlement ? "صرف مورد" : (isWithdrawal ? "إيداع" : "صرف مورد"),
-    amount: val,
-    ref: tracking || supplier,
-    addedBy: currentUser || "إدارة الحسابات"
-  });
+  if (typeStr !== "adjustment") {
+    appendToSheet(sheets.cashbox, ["date", "desc", "type", "amount", "ref", "addedBy"], {
+      date: now(),
+      desc: finalDesc + " (" + (typeStr === "inflow" ? "وارد" : "صرف") + " مورد)",
+      type: typeStr === "inflow" ? "إيداع" : "سداد مورد",
+      amount: val,
+      ref: tracking || "SUPPAY",
+      addedBy: currentUser || "إدارة الحسابات"
+    });
+  }
 
-  // 2. قيد دفتر الأستاذ الخاص بالمورد لإعدام الدائنة أو زيادتها (خصم دائم لدائن المورد)
+  // 2. قيد دفتر الأستاذ الخاص بالمورد لإعدام الدائنة أو زيادتها
   appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
     supplier: supplier,
     date: d.date || now(),
-    type: isSettlement ? "تصفية يومية" : (isWithdrawal ? "سحب من المورد" : "دفعة مورد"),
-    tracking: tracking || "—",
-    amount: isSettlement ? 0 : -val,
-    desc: desc || (isWithdrawal ? `سحب مالي / تسوية عكسية من المورد: ${supplier}` : `استلام دفعة نقدية مسواة للمورد: ${supplier}`)
+    type: ledgerType,
+    tracking: tracking || "CASH-PAY",
+    amount: isSettlement ? 0 : ledgerAmount,
+    desc: finalDesc
   });
 
   // 3. تدوين الحدث الأمني المهم في سجل التدقيق المالي
   appendToSheet(sheets.auditLog, ["user", "type", "dateTime", "oldVal", "newVal", "reason"], {
     user: currentUser || "حسابات",
-    type: isSettlement ? "تصفية يومية للمورد" : (isWithdrawal ? "سحب مالي من مورد" : "سداد مورد / دفعة نقدية"),
+    type: isSettlement ? "تصفية يومية للمورد" : (typeStr === "inflow" ? "استلام نقدية من مورد" : (typeStr === "adjustment" ? "تسوية رصيد مورد" : "سداد مورد / دفعة نقدية")),
     dateTime: now(),
     oldVal: "—",
-    newVal: isSettlement ? `تصفية حسابات يومية للمورد: ${supplier}` : (isWithdrawal ? `سحب مبلغ: ${val} ج.م من المورد: ${supplier}` : `صرف مبلغ: ${val} ج.م للمورد: ${supplier}`),
-    reason: desc || (isWithdrawal ? `سحب مالي لتصحيح حساب المورد` : `تخليص سداد وتصفية للمورد: ${supplier}`)
+    newVal: isSettlement ? `تصفية حسابات يومية للمورد: ${supplier}` : `حركة مالية للمورد: ${supplier} بمبلغ ${ledgerAmount} ج.م (النوع: ${ledgerType})`,
+    reason: finalDesc
   });
 
-  return { ok: true, msg: isSettlement ? "تم تصفية اليوم بنجاح في سجلات الشيت" : (isWithdrawal ? "تم تسجيل حركة السحب المالي العكسية بنجاح وتسويتها بالخزنة" : "تم تسجيل الدفعة النقدية بنجاح وتسويتها بالخزنة") };
+  return { ok: true, msg: isSettlement ? "تم تصفية اليوم بنجاح في سجلات الشيت" : "تم تسجيل الحركة المالية للمورد بنجاح وتسويتها" };
 }
 
 // ───────────────────────────────────────────────

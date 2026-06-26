@@ -28,6 +28,141 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import { apiCall, getTodayDateStr, normalizeDateToYMD } from "../utils";
 
+export interface CustodyAlert {
+  id: string;
+  courierName: string;
+  type: "unsettled_cash" | "pending_return" | "delayed_custody" | "pending_delay";
+  title: string;
+  description: string;
+  severity: "high" | "medium" | "low";
+  orderCount: number;
+  totalValue: number;
+  ordersList: any[];
+}
+
+export function computeCustodyAlerts(ordersList: any[]): CustodyAlert[] {
+  if (!ordersList || !Array.isArray(ordersList)) return [];
+  const alertsMap: { [key: string]: CustodyAlert } = {};
+  const todayStr = getTodayDateStr();
+
+  ordersList.forEach(o => {
+    if (o.isClosed || o.isArchived) return;
+    if (!o.courier || o.courier.toString().trim() === "") return;
+    const courier = o.courier.toString().trim();
+    const statusStr = (o.status || "").toString().trim();
+
+    const isDelivered = statusStr === "تم التسليم" || statusStr === "تم التسليم بنجاح" || statusStr === "تم التسليم (ناجح كاش)";
+    const isReturn = ["مرتجع", "مرتجع جديد", "مرفوض", "فشل", "مسترجع", "مرتجع والعميل دفع الشحن", "مرتجع مدفوع الشحن"].includes(statusStr);
+    const isDelayedOrNoAnswer = ["مؤجل", "Delayed", "مؤجل من المندوب", "مؤجل بناءً على طلب العميل", "لا يوجد رد", "العميل لا يرد", "No Answer", "العميل لم يقم بالرد"].includes(statusStr);
+    const isActiveDelivery = ["مع المندوب", "خارج للتسليم", "خارج مع المندوب", "تم الإسناد"].includes(statusStr);
+
+    const isSettledValue = o.isSettled === true || o.isSettled === "true" || o.is_settled === "true" || o.is_settled === true;
+
+    // Check 1: Delivered but NOT settled in cashbox/ledger (Unreconciled Cash Alert)
+    if (isDelivered && !isSettledValue) {
+      const alertKey = `${courier}-unsettled_cash`;
+      const codAmount = Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0)));
+      if (!alertsMap[alertKey]) {
+        alertsMap[alertKey] = {
+          id: alertKey,
+          courierName: courier,
+          type: "unsettled_cash",
+          title: `كاش تسليمات معلق مع المندوب`,
+          description: `المندوب لديه شحنات تم تسليمها بنجاح للعملاء، ولكن لم يُورد الكاش الخاص بها للخزنة رسمياً بعد.`,
+          severity: "high",
+          orderCount: 0,
+          totalValue: 0,
+          ordersList: []
+        };
+      }
+      alertsMap[alertKey].orderCount++;
+      alertsMap[alertKey].totalValue += codAmount;
+      alertsMap[alertKey].ordersList.push(o);
+    }
+
+    // Check 2: Returned but NOT checked in (Pending Return Stock Alert)
+    if (isReturn && !isSettledValue) {
+      // Returned statuses are changed to "مرتجع بالمستودع" once settled/received physically.
+      // If the status is still raw "مرتجع", the physical package hasn't been scanned/received at the office yet.
+      const alertKey = `${courier}-pending_return`;
+      const prodAmount = Number(o.prodPrice || 0);
+      if (!alertsMap[alertKey]) {
+        alertsMap[alertKey] = {
+          id: alertKey,
+          courierName: courier,
+          type: "pending_return",
+          title: `بضائع مرتجعة معلقة بالميدان`,
+          description: `سجل المندوب شحنات كمرتجع، ولكن لم يتم تسليم الطرود وجردها بالمكتب لتبرئة ذمته اللوجستية.`,
+          severity: "high",
+          orderCount: 0,
+          totalValue: 0,
+          ordersList: []
+        };
+      }
+      alertsMap[alertKey].orderCount++;
+      alertsMap[alertKey].totalValue += prodAmount;
+      alertsMap[alertKey].ordersList.push(o);
+    }
+
+    // Check 3: Delayed/No Answer but NOT checked in (Pending Delay Verification Alert)
+    if (isDelayedOrNoAnswer && !isSettledValue) {
+      // Delayed/No Answer are converted to "... بالمستودع" when checked-in/settled in the office.
+      const alertKey = `${courier}-pending_delay`;
+      const codAmount = Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0)));
+      if (!alertsMap[alertKey]) {
+        alertsMap[alertKey] = {
+          id: alertKey,
+          courierName: courier,
+          type: "pending_delay",
+          title: `شحنات مؤجلة/عدم رد معلقة`,
+          description: `سجل المندوب تأجيل أو عدم رد العميل، ولم يتم إرجاع الطرود للفرع لتحديث حالتها أو إعادة جدولتها.`,
+          severity: "medium",
+          orderCount: 0,
+          totalValue: 0,
+          ordersList: []
+        };
+      }
+      alertsMap[alertKey].orderCount++;
+      alertsMap[alertKey].totalValue += codAmount;
+      alertsMap[alertKey].ordersList.push(o);
+    }
+
+    // Check 4: Dispatched for more than 24h without any update (Delayed Custody)
+    if (isActiveDelivery) {
+      const oDate = o.orderDate || o.createdAt || "";
+      const isYesterdayOrOlder = oDate && oDate.substring(0, 10) !== todayStr;
+      if (isYesterdayOrOlder) {
+        const alertKey = `${courier}-delayed_custody`;
+        const codAmount = Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0)));
+        if (!alertsMap[alertKey]) {
+          alertsMap[alertKey] = {
+            id: alertKey,
+            courierName: courier,
+            type: "delayed_custody",
+            title: `شحنات خارجة بالشارع تجاوزت 24 ساعة`,
+            description: `شحنات معلقة بالشارع مع المندوب للتسليم ولم تسوّ حالتها (تسليم/ارتجاع/تأجيل) لأكثر من يوم كامل.`,
+            severity: "medium",
+            orderCount: 0,
+            totalValue: 0,
+            ordersList: []
+          };
+        }
+        alertsMap[alertKey].orderCount++;
+        alertsMap[alertKey].totalValue += codAmount;
+        alertsMap[alertKey].ordersList.push(o);
+      }
+    }
+  });
+
+  return Object.values(alertsMap).sort((a, b) => {
+    const sevOrder = { high: 0, medium: 1, low: 2 };
+    if (sevOrder[a.severity] !== sevOrder[b.severity]) {
+      return sevOrder[a.severity] - sevOrder[b.severity];
+    }
+    return b.totalValue - a.totalValue;
+  });
+}
+
 interface DashboardProps {
   token: string;
   role?: string;
@@ -73,6 +208,11 @@ export default function Dashboard({
 
   // Search inside modals
   const [modalSearch, setModalSearch] = useState("");
+
+  // expanded alert row ID
+  const [expandedAlertId, setExpandedAlertId] = useState<string | null>(null);
+
+  const custodyAlerts = React.useMemo(() => computeCustodyAlerts(allOrders), [allOrders]);
 
   async function loadData() {
     setLoading(true);
@@ -144,10 +284,7 @@ export default function Dashboard({
 
         const isSettled = o.isSettled === true || o.isSettled === "true" || o.is_settled === "true" || o.is_settled === true;
 
-        const isSettledOffice = [
-          "تم التسليم",
-          "تم التسليم بنجاح",
-          "تم التسليم (ناجح كاش)",
+        const isSettledOffice = isSettled || [
           "مرتجع بالمستودع",
           "مرتجع جزئي بالمستودع",
           "مؤجل بالمستودع",
@@ -458,10 +595,8 @@ export default function Dashboard({
   const streetCustodyOrders = allOrders.filter(o => {
     if (o.isClosed || o.isArchived) return false;
     const stat = (o.status || "").toString().trim();
-    const isSettledOffice = [
-      "تم التسليم",
-      "تم التسليم بنجاح",
-      "تم التسليم (ناجح كاش)",
+    const isSettled = o.isSettled === true || o.isSettled === "true" || o.is_settled === "true" || o.is_settled === true;
+    const isSettledOffice = isSettled || [
       "مرتجع بالمستودع",
       "مرتجع جزئي بالمستودع",
       "مؤجل بالمستودع",
@@ -675,6 +810,192 @@ export default function Dashboard({
               <span>تحديث البيانات اللحظية 🔄</span>
             </button>
           </div>
+
+          {/* CUSTODY RECONCILIATION ALERTS SYSTEM */}
+          {isManagerOrAccountant && custodyAlerts.length > 0 && (
+            <motion.div 
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="bg-slate-900/60 border border-red-500/20 rounded-2xl p-6 shadow-xl"
+              id="custody-reconciliation-alerts-box"
+            >
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/5 pb-4 mb-4">
+                <div className="flex items-start gap-3">
+                  <span className="p-2.5 bg-red-500/10 text-red-400 rounded-xl mt-0.5">
+                    <AlertTriangle size={22} className="animate-pulse" />
+                  </span>
+                  <div>
+                    <h3 className="text-xs font-black text-slate-100 flex items-center gap-2">
+                      <span>🚨 نظام مطابقة العهد وجرد ذمم المناديب الحية</span>
+                      <span className="px-1.5 py-0.5 text-[8px] bg-red-950 text-red-400 font-extrabold rounded-md border border-red-500/10">مراجعة الجرد الليلة</span>
+                    </h3>
+                    <p className="text-[10px] text-slate-400 font-bold mt-1">
+                      تم رصد <strong className="text-red-400 font-mono font-black">{custodyAlerts.length}</strong> تعارضات جردية/ذمم مالية معلقة بين العهدة بالخارج والمسجل بالمكتب. يرجى تصفية المناديب وسحب أوردراتهم.
+                    </p>
+                  </div>
+                </div>
+                
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-slate-400 font-bold font-sans">
+                    إجمالي الكاش/البضائع المعلق:
+                  </span>
+                  <span className="px-2.5 py-1 bg-red-950/40 border border-red-500/20 rounded-xl text-xs font-black font-mono text-red-400">
+                    {custodyAlerts.reduce((sum, a) => sum + a.totalValue, 0).toLocaleString("ar")} ج.م
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                {custodyAlerts.map((alert) => {
+                  const isExpanded = expandedAlertId === alert.id;
+                  const severityColors = {
+                    high: "border-red-500/20 bg-red-950/5 text-red-400 hover:bg-red-955/10",
+                    medium: "border-amber-500/15 bg-amber-950/5 text-amber-400 hover:bg-amber-955/10",
+                    low: "border-blue-500/15 bg-blue-950/5 text-blue-400 hover:bg-blue-955/10"
+                  };
+
+                  return (
+                    <div 
+                      key={alert.id}
+                      className={`border rounded-xl transition-all duration-200 overflow-hidden ${severityColors[alert.severity]}`}
+                    >
+                      <div className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 cursor-pointer select-none">
+                        <div 
+                          className="flex items-start gap-3 flex-1"
+                          onClick={() => setExpandedAlertId(isExpanded ? null : alert.id)}
+                        >
+                          <span className={`p-1.5 rounded-lg text-xs font-bold leading-none shrink-0 ${
+                            alert.severity === "high" ? "bg-red-500/10 text-red-400" : "bg-amber-500/10 text-amber-400"
+                          }`}>
+                            {alert.severity === "high" ? "🚨 حرج" : "⚠️ تنبيه"}
+                          </span>
+                          
+                          <div>
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                              <span className="text-[11px] font-black text-slate-200 font-sans">
+                                المندوب: <strong className="text-amber-400 font-extrabold">{alert.courierName}</strong>
+                              </span>
+                              <span className="text-slate-500 text-xs select-none">•</span>
+                              <span className="text-[10px] font-bold text-slate-300">
+                                {alert.title}
+                              </span>
+                            </div>
+                            <p className="text-[10px] text-slate-400 font-bold mt-1 leading-relaxed">
+                              {alert.description}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-3 shrink-0 self-end sm:self-center">
+                          <div className="text-left">
+                            <span className="text-[9px] text-slate-500 block font-bold font-sans">عدد الشحنات</span>
+                            <span className="text-xs font-black text-slate-300 font-mono">{alert.orderCount} أوردر</span>
+                          </div>
+                          <div className="text-left border-l border-white/5 pl-3">
+                            <span className="text-[9px] text-slate-500 block font-bold font-sans">
+                              {alert.type === "pending_return" ? "قيمة المرتجع" : "كاش الشارع المعلق"}
+                            </span>
+                            <span className="text-xs font-black font-mono text-emerald-400">{alert.totalValue.toLocaleString("ar")} ج.م</span>
+                          </div>
+                          
+                          <div className="flex items-center gap-1.5 pl-1 font-sans">
+                            <button
+                              onClick={() => {
+                                localStorage.setItem("preselected_courier", alert.courierName);
+                                if (setActiveTab) setActiveTab("courier_ledger");
+                              }}
+                              className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-750 text-slate-200 hover:text-white rounded-lg text-[9px] font-black flex items-center gap-1 transition-all border border-white/5 shadow cursor-pointer active:scale-95"
+                              title="الذهاب لكشف حساب المندوب لتسوية وجرد هذا الحساب فوراً"
+                            >
+                              <span>تصفية وجرد ⚙️</span>
+                            </button>
+                            
+                            <button
+                              onClick={() => setExpandedAlertId(isExpanded ? null : alert.id)}
+                              className="p-1.5 bg-white/5 hover:bg-white/10 text-slate-400 hover:text-slate-200 rounded-lg text-xs transition-all cursor-pointer font-sans"
+                            >
+                              <span>{isExpanded ? "▲ إخفاء" : "▼ تفاصيل"}</span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <AnimatePresence>
+                        {isExpanded && (
+                          <motion.div
+                            initial={{ height: 0 }}
+                            animate={{ height: "auto" }}
+                            exit={{ height: 0 }}
+                            className="border-t border-white/5 bg-slate-950/40 overflow-hidden font-sans"
+                          >
+                            <div className="p-4">
+                              <div className="text-[9px] font-black text-slate-400 uppercase tracking-wider mb-2 pr-1 flex items-center justify-between">
+                                <span>📋 تفاصيل الشحنات المعلقة بالتعارض ({alert.ordersList.length}):</span>
+                                <span className="text-[8px] text-slate-500">مستخرج من قاعدة البيانات الحية للفرع</span>
+                              </div>
+                              
+                              <div className="overflow-x-auto rounded-lg border border-white/5 bg-slate-950/60 max-h-[250px] overflow-y-auto">
+                                <table className="w-full text-right text-xs">
+                                  <thead>
+                                    <tr className="bg-white/5 text-slate-350 font-black border-b border-white/5">
+                                      <th className="p-2 text-[9px]">رقم التتبع (Tracking)</th>
+                                      <th className="p-2 text-[9px]">العميل والهاتف</th>
+                                      <th className="p-2 text-[9px]">المحافظة / العنوان</th>
+                                      <th className="p-2 text-[9px] text-center">المستلم / القيمة</th>
+                                      <th className="p-2 text-[9px] text-center">حالة الشارع</th>
+                                      <th className="p-2 text-[9px] text-center">التحكم الفوري</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-white/5 font-medium">
+                                    {alert.ordersList.map((o, idx) => {
+                                      const cod = Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0)));
+                                      return (
+                                        <tr key={idx} className="hover:bg-white/5 transition-all text-slate-300">
+                                          <td className="p-2 font-mono text-[10px] text-slate-400">{o.tracking || "—"}</td>
+                                          <td className="p-2">
+                                            <div className="font-extrabold text-[10px] text-slate-250">{o.customer || "—"}</div>
+                                            <div className="text-[8px] font-mono text-slate-500 mt-0.5">{o.phone || "—"}</div>
+                                          </td>
+                                          <td className="p-2">
+                                            <div className="text-[10px] text-slate-350">{o.city || "—"}</div>
+                                            <div className="text-[8px] text-slate-500 max-w-[150px] truncate">{o.address || ""}</div>
+                                          </td>
+                                          <td className="p-2 text-center">
+                                            <span className="text-[10px] font-black font-mono text-emerald-400">{cod.toLocaleString("ar")} ج.م</span>
+                                          </td>
+                                          <td className="p-2 text-center">
+                                            <span className={`px-2 py-0.5 text-[8px] font-black rounded-full border ${
+                                              o.status === "تم التسليم" ? "bg-emerald-950 text-emerald-400 border-emerald-900" :
+                                              ["مرتجع", "مرفوض", "فشل"].some(x => o.status.includes(x)) ? "bg-red-950 text-red-400 border-red-900" :
+                                              "bg-amber-950 text-amber-400 border-amber-900"
+                                            }`}>
+                                              {o.status || "—"}
+                                            </span>
+                                          </td>
+                                          <td className="p-2 text-center">
+                                            <button
+                                              onClick={() => setCoordinatingOrder(o)}
+                                              className="px-2 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 hover:text-amber-300 rounded font-black text-[9px] transition-all cursor-pointer font-sans"
+                                            >
+                                              تنسيق فوري ⚡
+                                            </button>
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  );
+                })}
+              </div>
+            </motion.div>
+          )}
 
           {/* Interactive Metric Cards Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">

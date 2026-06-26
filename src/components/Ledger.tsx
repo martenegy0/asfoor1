@@ -59,7 +59,15 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
   // --- Courier Ledger States ---
   const [courierSummary, setCourierSummary] = useState<any>(null);
   const [courierTrs, setCourierTrs] = useState<any[]>([]);
-  const [selectedCourier, setSelectedCourier] = useState(isCourier ? user : "");
+  const [selectedCourier, setSelectedCourier] = useState(() => {
+    if (isCourier) return user;
+    const pre = localStorage.getItem("preselected_courier");
+    if (pre) {
+      localStorage.removeItem("preselected_courier");
+      return pre;
+    }
+    return "";
+  });
   const [allCouriers, setAllCouriers] = useState<any[]>([]);
   const [periodFilter, setPeriodFilter] = useState<"day" | "week" | "month">("month");
   const [adjustmentType, setAdjustmentType] = useState<"مكافأة" | "جزاء">("مكافأة");
