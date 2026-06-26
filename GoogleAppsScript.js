@@ -1872,70 +1872,22 @@ function getSupplierLedgerData(sheets, d) {
     };
   });
 
-  // Math-locked ledger transaction separation
-  // 1. Payouts (صرف دفعة للمورد)
-  var payoutsList = rawLedgerLoc.filter(function(l) {
-    var type = l.type;
-    var tracking = l.tracking;
-    return (
-      [
-        "دفع نقدي",
-        "دفعة مورد",
-        "صرف مورد",
-        "دفعة",
-        "مسحوبات",
-        "سحب",
-      ].indexOf(type) !== -1 ||
-      type.indexOf("دفعة") !== -1 ||
-      type.indexOf("صرف") !== -1 ||
-      type.indexOf("سحب") !== -1 ||
-      tracking === "CASH-PAY"
-    ) && !(
-      type.indexOf("استلام") !== -1 ||
-      type.indexOf("مسترد") !== -1 ||
-      type.indexOf("وارد") !== -1 ||
-      type.indexOf("تسوية") !== -1 ||
-      type.indexOf("تعديل") !== -1
-    );
-  });
-  var totalPayouts = payoutsList.reduce(function(sum, l) { return sum + Math.abs(l.amount); }, 0);
+  var adjustmentsAndPayments = supplierLedgerEntries.filter(isHumanPayout);
 
-  // 2. Inflows (استلام نقدية مستردة من المورد)
-  var inflowsList = rawLedgerLoc.filter(function(l) {
-    var type = l.type;
-    return (
-      [
-        "استلام نقدية",
-        "مسترد نقدية",
-      ].indexOf(type) !== -1 ||
-      type.indexOf("استلام") !== -1 ||
-      type.indexOf("مسترد") !== -1 ||
-      type.indexOf("وارد") !== -1
-    ) && !(
-      type.indexOf("تسوية") !== -1 ||
-      type.indexOf("تعديل") !== -1
-    );
-  });
-  var totalInflows = inflowsList.reduce(function(sum, l) { return sum + Math.abs(l.amount); }, 0);
-
-  // 3. Manual Adjustments (تسويات الرصيد اليدوية)
-  var adjustmentsList = rawLedgerLoc.filter(function(l) {
-    var type = l.type;
-    return (
-      type.indexOf("تسوية") !== -1 ||
-      type.indexOf("تعديل") !== -1
-    );
-  });
-  var totalAdjustmentsEffect = adjustmentsList.reduce(function(sum, l) {
-    var type = l.type;
-    var isDiscount = type.indexOf("خصم") !== -1 || type.indexOf("طرح") !== -1 || type.indexOf("sub") !== -1 || type.indexOf("discount") !== -1;
-    var isAdd = type.indexOf("إضافة") !== -1 || type.indexOf("اضافة") !== -1 || type.indexOf("add") !== -1;
-    if (isDiscount) {
-      return sum - Math.abs(l.amount);
-    } else if (isAdd) {
-      return sum + Math.abs(l.amount);
+  var totalLedgerEffect = adjustmentsAndPayments.reduce(function(sum, l) {
+    var type = (l.type || l["النوع"] || l.type || "").toString().trim();
+    var amount = Number(l.amount || 0);
+    if (isNaN(amount)) amount = 0;
+    var isAdjustment = type.indexOf("تسوية") !== -1 || type.indexOf("تعديل") !== -1;
+    if (isAdjustment) {
+      if (type.indexOf("خصم") !== -1 || type.indexOf("طرح") !== -1) {
+        return sum - Math.abs(amount);
+      } else if (type.indexOf("إضافة") !== -1 || type.indexOf("اضافة") !== -1) {
+        return sum + Math.abs(amount);
+      }
+      return sum + amount;
     } else {
-      return sum + l.amount;
+      return sum - Math.abs(amount);
     }
   }, 0);
 
@@ -1982,7 +1934,11 @@ function getSupplierLedgerData(sheets, d) {
   });
   var openingBalance = supplierProfile ? Number(supplierProfile.openingBalance || supplierProfile.opening_balance || 0) : 0;
 
-  var finalUnifiedOutstanding = openingBalance + totalSoldGoodsValue - returnsDeliveredVal - totalPayouts - totalInflows + totalAdjustmentsEffect;
+  var finalUnifiedOutstanding = openingBalance + totalGoodsUploadedVal - returnsDeliveredVal + totalLedgerEffect;
+
+  var totalPaid = adjustmentsAndPayments.reduce(function(sum, l) {
+    return sum + Math.abs(Number(l.amount || 0));
+  }, 0);
 
   return {
     ok: true,
@@ -1991,14 +1947,14 @@ function getSupplierLedgerData(sheets, d) {
     totalGoodsUploaded: totalGoodsUploadedVal,
     returnsDeliveredValue: returnsDeliveredVal,
     overallNetProductValue: totalSoldGoodsValue,
-    globalPayments: totalPayouts + totalInflows,
+    globalPayments: totalPaid,
     openingBalance: openingBalance,
-    paymentEntries: supplierLedgerEntries.map(function(l) {
+    paymentEntries: adjustmentsAndPayments.map(function(l) {
       return {
         date: normalizeDateStrAr(l.date || ""),
         type: l.type || l["النوع"] || "",
         tracking: l.tracking || l["رقم التتبع"] || "",
-        amount: Math.abs(Number(l.amount || 0)),
+        amount: Number(l.amount || 0),
         desc: l.desc || l["البيان"] || ""
       };
     })
