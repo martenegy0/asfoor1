@@ -790,10 +790,23 @@ const isHumanLedgedPayout = (l: any) => {
       "طرح",
       "تسوية",
       "سحب",
+      "استلام",
+      "وارد",
+      "خصم",
+      "إضافة",
+      "اضافة",
+      "تعديل",
     ].includes(type) ||
     type.includes("دفعة") ||
     type.includes("صرف") ||
     type.includes("سحب") ||
+    type.includes("تسوية") ||
+    type.includes("استلام") ||
+    type.includes("خصم") ||
+    type.includes("إضافة") ||
+    type.includes("اضافة") ||
+    type.includes("تعديل") ||
+    type.includes("طرح") ||
     tracking === "CASH-PAY";
 
   const isAutoOrReturn =
@@ -808,6 +821,32 @@ const isHumanLedgedPayout = (l: any) => {
       tracking.startsWith("FP-"));
 
   return isPayOrAdj && !isAutoOrReturn;
+};
+
+const getLedgerEntrySignedAmount = (l: any): number => {
+  if (!l) return 0;
+  const type = (l.type || l["النوع"] || "").toString().trim();
+  const amount = Number(l.amount || 0);
+  if (isNaN(amount)) return 0;
+  const absAmount = Math.abs(amount);
+
+  if (type.includes("إضافة") || type.includes("اضافة")) {
+    return absAmount;
+  }
+  if (
+    type.includes("خصم") ||
+    type.includes("طرح") ||
+    type.includes("دفع") ||
+    type.includes("صرف") ||
+    type.includes("سحب") ||
+    type.includes("مسحوبات") ||
+    type.includes("استلام") ||
+    type.includes("مسترد") ||
+    (l.tracking || "").toString().trim() === "CASH-PAY"
+  ) {
+    return -absAmount;
+  }
+  return amount;
 };
 
 function getSupplierDailyLedger(db: any, supplierName: string) {
@@ -946,19 +985,18 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
     // D. Payouts/Cash Paid on this exact day
     const dayPayments = adjustmentsAndPaymentsByDate.get(dayDate) || [];
     const totalPayoutsOnDay = dayPayments.reduce((sum: number, l: any) => {
-      const type = (l.type || l["النوع"] || "").toString().trim();
-      const amount = Number(l.amount || 0);
-      const isAdjustment = type.includes("تسوية") || type.includes("تعديل");
-      if (isAdjustment) {
-        return sum - amount;
-      } else {
-        return sum + amount;
-      }
+      const signed = getLedgerEntrySignedAmount(l);
+      return signed < 0 ? sum + Math.abs(signed) : sum;
     }, 0);
 
-    // E. الصافي المستحق للمورد اليوم: (إجمالي البضاعة المرفوعة اليومية - المدفوع كاش اليوم - المرتجعات المستلمة اليوم)
+    const totalAdditionsOnDay = dayPayments.reduce((sum: number, l: any) => {
+      const signed = getLedgerEntrySignedAmount(l);
+      return signed > 0 ? sum + signed : sum;
+    }, 0);
+
+    // E. الصافي المستحق للمورد اليوم: (إجمالي البضاعة المرفوعة اليومية - المدفوع كاش اليوم - المرتجعات المستلمة اليوم + الإضافات اليوم)
     const netDues =
-      totalWorkValue - totalPayoutsOnDay - returnedValueRefunded;
+      totalWorkValue - totalPayoutsOnDay - returnedValueRefunded + totalAdditionsOnDay;
 
     // صافي قيمة البضاعة/المنتجات بدون شحن للطلبات المسلمة والجزئية اليوم
     const netProductValue = dayOrders.reduce((sum, o) => {
@@ -1041,19 +1079,7 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
   }, 0);
 
   const totalLedgerEffect = adjustmentsAndPayments.reduce((sum: number, l: any) => {
-    const type = (l.type || l["النوع"] || "").toString().trim();
-    const amount = Number(l.amount || 0);
-    const isAdjustment = type.includes("تسوية") || type.includes("تعديل");
-    if (isAdjustment) {
-      if (type.includes("خصم") || type.includes("طرح")) {
-        return sum - Math.abs(amount);
-      } else if (type.includes("إضافة") || type.includes("اضافة")) {
-        return sum + Math.abs(amount);
-      }
-      return sum + amount;
-    } else {
-      return sum - Math.abs(amount);
-    }
+    return sum + getLedgerEntrySignedAmount(l);
   }, 0);
 
   const finalUnifiedOutstanding = openingBalance + totalGoodsUploaded - returnsDeliveredValue + totalLedgerEffect;
@@ -1193,47 +1219,16 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
   // 4. Payments and Adjustments made to supplier from ledger (Strict human payout classification)
   const adjustmentsAndPayments = rawLedger.filter(isHumanLedgedPayout);
 
-  // Separate Cash Payments from Reverse Adjustments
-  const cashPayments = adjustmentsAndPayments.filter((l: any) => {
-    const type = (l.type || l["النوع"] || "").toString().trim();
-    return (
-      type.includes("دفع") ||
-      type.includes("صرف") ||
-      type.includes("استلام") ||
-      type.includes("مسترد") ||
-      type.includes("وارد") ||
-      l.tracking === "CASH-PAY"
-    );
-  });
-
-  const reverseAdjustments = adjustmentsAndPayments.filter((l: any) => {
-    const type = (l.type || l["النوع"] || "").toString().trim();
-    return (
-      type.includes("سحب") ||
-      type.includes("عكسية") ||
-      type.includes("طرح") ||
-      type.includes("خصم") ||
-      type.includes("تسوية") ||
-      type.includes("إضافة")
-    );
-  });
-
-  // Calculate net cash paid (Payouts and inflows both reduce the balance!)
-  const paymentsValue = cashPayments.reduce((sum: number, l: any) => {
-    return sum + Math.abs(Number(l.amount || 0));
+  // Calculate net cash paid (all entries that are negative signed amounts)
+  const paymentsValue = adjustmentsAndPayments.reduce((sum: number, l: any) => {
+    const signed = getLedgerEntrySignedAmount(l);
+    return signed < 0 ? sum + Math.abs(signed) : sum;
   }, 0);
 
-  // Calculate net adjustments (Discounts reduce balance, additions increase balance)
-  const reverseAdjustmentsValue = reverseAdjustments.reduce((sum: number, l: any) => {
-    const type = (l.type || l["النوع"] || "").toString().trim();
-    const amount = Number(l.amount || 0);
-    if (type.includes("خصم") || type.includes("طرح")) {
-      return sum - Math.abs(amount);
-    } else if (type.includes("إضافة") || type.includes("اضافة")) {
-      return sum + Math.abs(amount);
-    } else {
-      return sum + amount;
-    }
+  // Calculate net adjustments (all entries that are positive signed amounts)
+  const reverseAdjustmentsValue = adjustmentsAndPayments.reduce((sum: number, l: any) => {
+    const signed = getLedgerEntrySignedAmount(l);
+    return signed > 0 ? sum + signed : sum;
   }, 0);
 
   // 5. Calculate outstanding balance based on the approved formula
@@ -1307,20 +1302,7 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
   // D. Payouts and adjustments with corrected signs
   for (const l of adjustmentsAndPayments) {
     const type = (l.type || l["النوع"] || "").toString().trim();
-    const amount = Number(l.amount || 0);
-    const isAdjustment = type.includes("تسوية") || type.includes("تعديل");
-    let amountSigned = 0;
-    if (isAdjustment) {
-      if (type.includes("خصم") || type.includes("طرح")) {
-        amountSigned = -Math.abs(amount);
-      } else if (type.includes("إضافة") || type.includes("اضافة")) {
-        amountSigned = Math.abs(amount);
-      } else {
-        amountSigned = amount;
-      }
-    } else {
-      amountSigned = -Math.abs(amount);
-    }
+    const amountSigned = getLedgerEntrySignedAmount(l);
 
     entries.push({
       date: l.date || "",
@@ -5362,7 +5344,7 @@ app.post("/api", async (req: Request, res: Response) => {
         const typeStr = transactionType || "payout"; // payout, inflow, adjustment
 
         let ledgerType = "دفع نقدي";
-        let ledgerAmount = val; // MUST BE POSITIVE [+] for payout as per definitive ledger signs
+        let ledgerAmount = -val; // MUST BE NEGATIVE [-] for payout as per definitive ledger signs (deduction)
         let finalDesc = desc || "";
 
         if (typeStr === "inflow") {
@@ -5381,7 +5363,7 @@ app.post("/api", async (req: Request, res: Response) => {
         } else {
           // payout (default)
           ledgerType = "دفع نقدي";
-          ledgerAmount = val; // MUST BE POSITIVE [+] for payout as per definitive ledger signs
+          ledgerAmount = -val; // MUST BE NEGATIVE [-] for payout as per definitive ledger signs (deduction)
           if (!finalDesc) {
             finalDesc = `دفعة نقدية مسددة للمورد: ${supplier}`;
           }

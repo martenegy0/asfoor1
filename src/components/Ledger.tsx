@@ -648,9 +648,9 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
                       const typeStr = (item.type || "").toString().trim();
                       const descStr = (item.desc || "").toString().trim();
                       
-                      const isInflow = typeStr.includes("استلام") || typeStr.includes("مسترد") || descStr.includes("استلام") || descStr.includes("مسترد");
-                      const isAddition = typeStr.includes("تسوية إضافة") || typeStr.includes("إضافة يدوي");
-                      const isDeduction = typeStr.includes("تسوية خصم") || typeStr.includes("سحب");
+                      const isInflow = typeStr.includes("استلام") || typeStr.includes("مسترد") || descStr.includes("استلام") || descStr.includes("مسترد") || typeStr.includes("وارد") || descStr.includes("وارد");
+                      const isAddition = typeStr.includes("تسوية إضافة") || typeStr.includes("إضافة") || typeStr.includes("اضافة") || typeStr.includes("تعديل رصيد إضافة");
+                      const isDeduction = typeStr.includes("تسوية خصم") || typeStr.includes("خصم") || typeStr.includes("طرح") || typeStr.includes("سحب") || typeStr.includes("مسحوبات");
                       
                       let cardBg = "from-slate-900 to-indigo-950/20 border-indigo-500/10 hover:border-indigo-500/25";
                       let glowBg = "bg-indigo-500/5";
@@ -671,7 +671,7 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
                         badgeBg = "bg-emerald-950/50 border-emerald-900/50 text-emerald-300";
                         badgeText = "📥 استلام نقدية (إيراد)";
                         labelText = "القيمة المالية المستلمة من المورد";
-                        sign = "+";
+                        sign = "-";
                       } else if (isAddition) {
                         cardBg = "from-slate-900 to-teal-950/20 border-teal-500/10 hover:border-teal-500/25";
                         glowBg = "bg-teal-500/5";

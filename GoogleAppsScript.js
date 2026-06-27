@@ -1604,6 +1604,11 @@ function isHumanPayout(l) {
                      type.indexOf("تسوية") !== -1 || 
                      type.indexOf("استلام") !== -1 || 
                      type.indexOf("مسترد") !== -1 || 
+                     type.indexOf("خصم") !== -1 || 
+                     type.indexOf("إضافة") !== -1 || 
+                     type.indexOf("اضافة") !== -1 || 
+                     type.indexOf("تعديل") !== -1 || 
+                     type.indexOf("طرح") !== -1 || 
                      tracking === "CASH-PAY";
                      
   var isAutoOrReturn = type.indexOf("مرتجع") !== -1 || 
