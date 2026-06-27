@@ -1612,10 +1612,8 @@ function isHumanPayout(l) {
                      tracking === "CASH-PAY";
                      
   var isAutoOrReturn = type.indexOf("مرتجع") !== -1 || 
-                         desc.indexOf("مرتجع") !== -1 || 
                          type.indexOf("أوردر") !== -1 ||
                          type.indexOf("حقوق") !== -1 ||
-                         desc.indexOf("حقوق") !== -1 ||
                          (tracking !== "" && tracking !== "—" && tracking !== "CASH-PAY" && tracking.indexOf("FP-") === 0);
                          
   return isPayOrAdj && !isAutoOrReturn;
@@ -2359,8 +2357,8 @@ function getSupplierDashboard(sheets, d) {
 }
 
 function getSupplierAccounts(sheets) {
-  const suppliers = getTableData(sheets.suppliers);
-  const orders = getTableData(sheets.orders);
+  const suppliers = getTableData(sheets.suppliers) || [];
+  const orders = getTableData(sheets.orders) || [];
   var archivedOrders = [];
   try {
     archivedOrders = getTableData(sheets.archivedOrders) || [];
@@ -2368,11 +2366,13 @@ function getSupplierAccounts(sheets) {
     // Graceful fallback if sheet does not exist
   }
   const combinedOrders = orders.concat(archivedOrders);
-  const ledger = getTableData(sheets.supplierLedger);
 
   // Extract all unique names from both suppliers list and orders list
   const registeredNames = suppliers.map(function(s) { return s.name; }).filter(Boolean);
-  const orderNames = combinedOrders.map(function(o) { return o.supplier; }).filter(Boolean);
+  const orderNames = combinedOrders.map(function(o) {
+    var oSup = o.supplier !== undefined ? o.supplier : (o["المورد"] !== undefined ? o["المورد"] : (o["اسم المورد"] !== undefined ? o["اسم المورد"] : (o["مورد"] !== undefined ? o["مورد"] : (o["merchant"] !== undefined ? o["merchant"] : (o["merchant_name"] !== undefined ? o["merchant_name"] : "")))));
+    return oSup;
+  }).filter(Boolean);
   const allSupplierNames = [];
   const seenSuppliers = {};
 
@@ -2389,70 +2389,22 @@ function getSupplierAccounts(sheets) {
     const sObj = suppliers.find(function(s) {
       return s.name && s.name.toString().trim().toLowerCase() === supplierName.toLowerCase();
     });
-    const sLedger = ledger.filter(function(l) { return isSameSupplier(l.supplier, supplierName); });
-    const rawSupOrders = combinedOrders.filter(function(o) { return isSameSupplier(o.supplier, supplierName); });
 
-    // Dedup rawSupOrders by tracking ID
-    const uniqueSupOrdersMap = {};
-    rawSupOrders.forEach(function(o) {
-      var track = (o.tracking || "").toString().trim();
-      if (track) {
-        uniqueSupOrdersMap[track] = o;
-      } else {
-        uniqueSupOrdersMap["NO-TRACK-" + Math.random()] = o;
-      }
-    });
-    const sOrders = Object.keys(uniqueSupOrdersMap).map(function(k) { return uniqueSupOrdersMap[k]; });
-
-    // 1. Total Goods Uploaded (without shipping)
-    const totalGoodsUploaded = sOrders.reduce(function(sum, o) {
-      return sum + getOrderFinancials(o).prodPrice;
-    }, 0);
-
-    // 2. Returns delivered back to supplier
-    const returnedOrders = sOrders.filter(function(o) { return isReturnedDeliveredToSupplier(o.status); });
-    const returnsCount = returnedOrders.length;
-    const returnsDeliveredValue = returnedOrders.reduce(function(sum, o) {
-      return sum + getOrderFinancials(o).prodPrice;
-    }, 0);
-
-    // 3. Cash payments paid to supplier (absolute sum of human payments for reference stats)
-    const paid = sLedger.filter(isHumanPayout).reduce(function(sum, l) { return sum + Math.abs(Number(l.amount || 0)); }, 0);
-
-    // 4. Current outstanding balance based on final formula: Outstanding = OpeningBalance + TotalGoodsUploaded - Returned + LedgerEffect
-    const openingBalance = sObj ? Number(sObj.openingBalance || sObj.opening_balance || 0) : 0;
-    
-    var sAdjustmentsAndPayments = sLedger.filter(isHumanPayout);
-    var totalLedgerEffect = sAdjustmentsAndPayments.reduce(function(sum, l) {
-      var type = (l.type || l["النوع"] || l.type || "").toString().trim();
-      var amount = Number(l.amount || 0);
-      if (isNaN(amount)) amount = 0;
-      var isAdjustment = type.indexOf("تسوية") !== -1 || type.indexOf("تعديل") !== -1;
-      if (isAdjustment) {
-        return sum + amount;
-      } else {
-        return sum - amount;
-      }
-    }, 0);
-
-    const balance = openingBalance + totalGoodsUploaded - returnsDeliveredValue + totalLedgerEffect;
-
-    const totalOrders = sOrders.length;
-    const deliveredOrders = sOrders.filter(function(o) { return o.status === "تم التسليم"; }).length;
+    const calc = calculateSupplierBalance(sheets, supplierName);
 
     return {
       name: supplierName,
       phone: sObj ? (sObj.phone || "—") : "—",
-      totalRevenue: totalGoodsUploaded,
-      totalCOD: totalGoodsUploaded,
-      returnsDelivered: returnsDeliveredValue,
-      returnsCount: returnsCount,
-      paid: paid,
-      payments: paid,
-      balance: balance,
-      totalOrders: totalOrders,
-      deliveredOrders: deliveredOrders,
-      openingBalance: openingBalance
+      totalRevenue: calc.totalGoodsUploaded,
+      totalCOD: calc.totalGoodsUploaded,
+      returnsDelivered: calc.returnsDeliveredValue,
+      returnsCount: calc.returnedOrders.length,
+      paid: calc.paymentsValue,
+      payments: calc.paymentsValue,
+      balance: calc.outstanding,
+      totalOrders: calc.stats.totalOrdersCount,
+      deliveredOrders: calc.stats.deliveredOrdersCount,
+      openingBalance: calc.openingBalance
     };
   });
 

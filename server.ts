@@ -811,10 +811,8 @@ const isHumanLedgedPayout = (l: any) => {
 
   const isAutoOrReturn =
     type.includes("مرتجع") ||
-    desc.includes("مرتجع") ||
     type.includes("أوردر") ||
     type.includes("حقوق") ||
-    desc.includes("حقوق") ||
     (tracking !== "" &&
       tracking !== "—" &&
       tracking !== "CASH-PAY" &&
