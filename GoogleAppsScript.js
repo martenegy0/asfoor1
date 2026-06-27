@@ -1667,26 +1667,26 @@ function normalizeDateStrAr(dateStr) {
   return s.split("T")[0];
 }
 
-function getSupplierLedgerData(sheets, d) {
-  var supplier = d.supplier;
-  if (!supplier) {
-    return { ok: false, error: "اسم المورد مطلوب" };
-  }
+function calculateSupplierBalance(sheets, supplierName) {
+  var suppliersList = [];
+  try {
+    suppliersList = getTableData(sheets.suppliers) || [];
+  } catch (e) {}
+  var supplierProfile = suppliersList.find(function(s) {
+    return s.name && isSameSupplier(s.name, supplierName);
+  });
+  var openingBalance = supplierProfile ? Number(supplierProfile.openingBalance || supplierProfile.opening_balance || 0) : 0;
 
-  // 1. Get all orders (active + archived)
   var orders = getTableData(sheets.orders) || [];
   var archived = [];
   try {
     archived = getTableData(sheets.archivedOrders) || [];
-  } catch (e) {
-    // Ignore if archivedOrders sheet doesn't exist
-  }
+  } catch (e) {}
   var allOrders = orders.concat(archived);
 
-  // 2. Filter orders by supplier
   var rawSupOrders = allOrders.filter(function(o) {
     var oSup = o.supplier !== undefined ? o.supplier : (o["المورد"] !== undefined ? o["المورد"] : (o["اسم المورد"] !== undefined ? o["اسم المورد"] : (o["مورد"] !== undefined ? o["مورد"] : (o["merchant"] !== undefined ? o["merchant"] : (o["merchant_name"] !== undefined ? o["merchant_name"] : "")))));
-    return isSameSupplier(oSup, supplier);
+    return isSameSupplier(oSup, supplierName);
   });
 
   // Dedup orders by tracking ID to ensure no double counting
@@ -1699,20 +1699,260 @@ function getSupplierLedgerData(sheets, d) {
       dedupedMap["RAND-" + Math.random()] = o;
     }
   });
-  
-  var keys = Object.keys(dedupedMap);
+
   var supplierOrders = [];
+  var keys = Object.keys(dedupedMap);
   for (var k = 0; k < keys.length; k++) {
     supplierOrders.push(dedupedMap[keys[k]]);
   }
 
-  // 3. Fetch settled days from supplierSettlements sheet
+  var ledgerEntries = [];
+  try {
+    ledgerEntries = getTableData(sheets.supplierLedger) || [];
+  } catch (e) {}
+  
+  var rawLedger = ledgerEntries.filter(function(l) {
+    var lSup = l.supplier || l["المورد"] || "";
+    return isSameSupplier(lSup, supplierName);
+  }).map(function(l) {
+    return {
+      type: (l.type || l["النوع"] || "").toString().trim(),
+      tracking: (l.tracking || l["رقم التتبع"] || "").toString().trim(),
+      amount: Number(l.amount || 0),
+      desc: l.desc || l["البيان"] || "",
+      date: l.date || ""
+    };
+  });
+
+  // 1. Total uploaded goods (value of products only without shipping)
+  var totalGoodsUploaded = supplierOrders.reduce(function(sum, o) {
+    return sum + getOrderFinancials(o).prodPrice;
+  }, 0);
+
+  // 2. Returns delivered back to supplier
+  var returnedOrders = supplierOrders.filter(function(o) {
+    var status = (o.status || "").toString().trim();
+    return isReturnedDeliveredToSupplier(status);
+  });
+  var returnsDeliveredValue = returnedOrders.reduce(function(sum, o) {
+    var financials = getOrderFinancials(o);
+    var status = (o.status || "").toString().trim();
+    var isPartial = o.isPartial === true || o.isPartial === "true" || ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(status) !== -1;
+    if (isPartial) {
+      var soldValue = Number(o.partialAmount || o.actualReceivedCash || o["المبلغ المحصل"] || 0);
+      if (isNaN(soldValue)) soldValue = 0;
+      var unsoldPortion = financials.prodPrice - soldValue;
+      return sum + (unsoldPortion > 0 ? unsoldPortion : 0);
+    }
+    return sum + financials.prodPrice;
+  }, 0);
+
+  var adjustmentsAndPayments = rawLedger.filter(isHumanPayout);
+
+  // Calculate net cash paid (all entries that are negative signed amounts)
+  var paymentsValue = adjustmentsAndPayments.reduce(function(sum, l) {
+    var signed = getLedgerEntrySignedAmount(l);
+    return signed < 0 ? sum + Math.abs(signed) : sum;
+  }, 0);
+
+  // Calculate net adjustments (all entries that are positive signed amounts)
+  var reverseAdjustmentsValue = adjustmentsAndPayments.reduce(function(sum, l) {
+    var signed = getLedgerEntrySignedAmount(l);
+    return signed > 0 ? sum + signed : sum;
+  }, 0);
+
+  var totalLedgerEffect = adjustmentsAndPayments.reduce(function(sum, l) {
+    return sum + getLedgerEntrySignedAmount(l);
+  }, 0);
+
+  var outstanding =
+    openingBalance +
+    totalGoodsUploaded -
+    returnsDeliveredValue +
+    totalLedgerEffect;
+
+  var totalOrdersCount = supplierOrders.length;
+  var deliveredOrders = supplierOrders.filter(function(o) {
+    var status = (o.status || "").toString().trim();
+    return ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].indexOf(status) !== -1;
+  });
+  var deliveredOrdersCount = deliveredOrders.length;
+  var deliveredOrdersValue = deliveredOrders.reduce(function(sum, o) {
+    return sum + getOrderFinancials(o).prodPrice;
+  }, 0);
+
+  var rate = totalOrdersCount
+    ? Math.round((deliveredOrdersCount / totalOrdersCount) * 100)
+    : 0;
+
+  return {
+    openingBalance: openingBalance,
+    totalGoodsUploaded: totalGoodsUploaded,
+    returnsDeliveredValue: returnsDeliveredValue,
+    totalLedgerEffect: totalLedgerEffect,
+    outstanding: outstanding,
+    paymentsValue: paymentsValue,
+    reverseAdjustmentsValue: reverseAdjustmentsValue,
+    adjustmentsAndPayments: adjustmentsAndPayments,
+    supplierOrders: supplierOrders,
+    returnedOrders: returnedOrders,
+    stats: {
+      totalOrdersCount: totalOrdersCount,
+      totalGoodsUploaded: totalGoodsUploaded,
+      totalCOD: totalGoodsUploaded,
+      deliveredOrdersCount: deliveredOrdersCount,
+      deliveredOrdersValue: deliveredOrdersValue,
+      returnsDeliveredCount: returnedOrders.length,
+      returnsDeliveredValue: returnsDeliveredValue,
+      paymentsValue: paymentsValue,
+      reverseAdjustmentsValue: reverseAdjustmentsValue,
+      outstanding: outstanding,
+      rate: rate,
+      openingBalance: openingBalance
+    }
+  };
+}
+
+function getSupplierUnifiedLedger(sheets, supplierName) {
+  var calc = calculateSupplierBalance(sheets, supplierName);
+  var openingBalance = calc.openingBalance;
+  var supplierOrders = calc.supplierOrders;
+  var returnedOrders = calc.returnedOrders;
+  var adjustmentsAndPayments = calc.adjustmentsAndPayments;
+
+  var entries = [];
+
+  // A. Add opening balance entry if exists
+  if (openingBalance !== 0) {
+    entries.push({
+      date: "2026-01-01",
+      type: "رصيد افتتاحي",
+      tracking: "OPENING-BALANCE",
+      desc: "الرصيد الافتتاحي المرحل (سابق): " + openingBalance + " ج.م",
+      amount: openingBalance
+    });
+  }
+
+  // B. All uploaded orders count as supplier credit immediately
+  for (var i = 0; i < supplierOrders.length; i++) {
+    var o = supplierOrders[i];
+    var financials = getOrderFinancials(o);
+    var status = (o.status || o["الحالة"] || "").toString().trim();
+    var tracking = o.tracking || o["رقم التتبع"] || "";
+    var prodPriceNum = financials.prodPrice;
+
+    var orderDesc = "حقوق بضاعة أوردر رقم #" + tracking + " (صافي بضاعة: " + prodPriceNum + " ج.م - حالة الأوردر: " + status + ")";
+
+    entries.push({
+      date: o.orderDate || o.createdAt || o["تاريخ الطلب"] || "",
+      type: "حقوق بضاعة أوردر",
+      tracking: tracking,
+      amount: prodPriceNum,
+      desc: orderDesc
+    });
+  }
+
+  // C. Returned orders as debit action (negative deduction since they are delivered back to supplier)
+  for (var i = 0; i < returnedOrders.length; i++) {
+    var o = returnedOrders[i];
+    var financials = getOrderFinancials(o);
+    var tracking = o.tracking || o["رقم التتبع"] || "";
+    var status = (o.status || o["الحالة"] || "").toString().trim();
+
+    var isPartial = o.isPartial === true || o.isPartial === "true" || ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(status) !== -1;
+    var deductAmount = financials.prodPrice;
+    if (isPartial) {
+      var soldValue = Number(o.partialAmount || o.actualReceivedCash || o["المبلغ المحصل"] || 0);
+      if (isNaN(soldValue)) soldValue = 0;
+      var unsoldPortion = financials.prodPrice - soldValue;
+      deductAmount = unsoldPortion > 0 ? unsoldPortion : 0;
+    }
+
+    var returnDesc = "مرتجع مستلم للمورد أوردر رقم #" + tracking + " (قيمة المستقطع: -" + deductAmount + " ج.م - حالة: " + status + ")";
+
+    entries.push({
+      date: o.returnDate || o.updatedAt || "",
+      type: "مرتجع مخصوم",
+      tracking: tracking,
+      amount: -deductAmount,
+      desc: returnDesc
+    });
+  }
+
+  // D. Payouts and adjustments with corrected signs
+  for (var i = 0; i < adjustmentsAndPayments.length; i++) {
+    var l = adjustmentsAndPayments[i];
+    var type = (l.type || l["النوع"] || "").toString().trim();
+    var amountSigned = getLedgerEntrySignedAmount(l);
+
+    entries.push({
+      date: l.date || "",
+      type: type || "تعديل حساب",
+      tracking: l.tracking || "CASH-PAY",
+      amount: amountSigned,
+      desc: l.desc || ("تسوية/دفعة مالية للمورد بمبلغ " + l.amount + " ج.م")
+    });
+  }
+
+  // Sort entries chronologically to compute running balance correctly
+  entries.sort(function(a, b) {
+    var dateA = a.date || "";
+    var dateB = b.date || "";
+    if (dateA < dateB) return -1;
+    if (dateA > dateB) return 1;
+    var typeOrder = {
+      "رصيد افتتاحي": 0,
+      "حقوق بضاعة أوردر": 1,
+      "حقوق بضاعة جزئي": 1,
+      "مرتجع مخصوم": 2
+    };
+    var orderA = typeOrder[a.type] !== undefined ? typeOrder[a.type] : 3;
+    var orderB = typeOrder[b.type] !== undefined ? typeOrder[b.type] : 3;
+    return orderA - orderB;
+  });
+
+  // Calculate live running balance Chronologically
+  var runBal = 0;
+  var finalEntries = entries.map(function(item) {
+    runBal += item.amount;
+    item.balanceAfter = runBal;
+    return item;
+  });
+
+  return {
+    entries: finalEntries.reverse(), // latest first
+    balance: calc.outstanding,
+    stats: calc.stats
+  };
+}
+
+function getSupplierLedgerData(sheets, d) {
+  var supplier = d.supplier;
+  if (!supplier) {
+    return { ok: false, error: "اسم المورد مطلوب" };
+  }
+
+  var calc = calculateSupplierBalance(sheets, supplier);
+  var supplierOrders = calc.supplierOrders;
+  var adjustmentsAndPayments = calc.adjustmentsAndPayments;
+
+  // Group supplier orders by normalized date
+  var ordersByDay = {};
+  supplierOrders.forEach(function(o) {
+    var rawDate = o.orderDate || o.createdAt || o["تاريخ الطلب"] || "";
+    var normDate = normalizeDateStrAr(rawDate);
+    if (!normDate) return;
+    if (!ordersByDay[normDate]) {
+      ordersByDay[normDate] = [];
+    }
+    ordersByDay[normDate].push(o);
+  });
+
+  // Settlements set
   var settlements = [];
   try {
     settlements = getTableData(sheets.supplierSettlements) || [];
-  } catch (e) {
-    // Soft fallback if sheet not fully synchronized yet
-  }
+  } catch (e) {}
   
   var settledDaysSet = {};
   settlements.forEach(function(s) {
@@ -1725,7 +1965,7 @@ function getSupplierLedgerData(sheets, d) {
     }
   });
 
-  // Also check supplierLedger for double entry settlements just in case
+  // Also check supplierLedger for settlements
   var ledgerEntries = [];
   try {
     ledgerEntries = getTableData(sheets.supplierLedger) || [];
@@ -1742,51 +1982,28 @@ function getSupplierLedgerData(sheets, d) {
     }
   });
 
-  // 4. Group supplier orders by normalized date (orderDate)
-  var ordersByDay = {};
-  supplierOrders.forEach(function(o) {
-    var rawDate = o.orderDate || o.createdAt || o["تاريخ الطلب"] || "";
-    var normDate = normalizeDateStrAr(rawDate);
-    if (!normDate) return;
-    if (!ordersByDay[normDate]) {
-      ordersByDay[normDate] = [];
-    }
-    ordersByDay[normDate].push(o);
-  });
-
-  // 4.5. Pre-filter and group ledgerEntries by supplier and date to avoid O(N) nested loops
-  var supplierLedgerEntries = ledgerEntries.filter(function(l) {
-    var lSup = l.supplier || l["المورد"] || "";
-    return isSameSupplier(lSup, supplier);
-  });
-
   var ledgerEntriesByDate = {};
-  supplierLedgerEntries.forEach(function(l) {
-    if (isHumanPayout(l)) {
-      var lDate = normalizeDateStrAr(l.date || "");
-      if (lDate) {
-        if (!ledgerEntriesByDate[lDate]) {
-          ledgerEntriesByDate[lDate] = [];
-        }
-        ledgerEntriesByDate[lDate].push(l);
+  adjustmentsAndPayments.forEach(function(l) {
+    var lDate = normalizeDateStrAr(l.date || "");
+    if (lDate) {
+      if (!ledgerEntriesByDate[lDate]) {
+        ledgerEntriesByDate[lDate] = [];
       }
+      ledgerEntriesByDate[lDate].push(l);
     }
   });
 
-  // 5. Compute metrics per day
+  // Compute metrics per day
   var daysList = [];
-
   var dayDates = Object.keys(ordersByDay);
   for (var i = 0; i < dayDates.length; i++) {
     var dayDate = dayDates[i];
     var dayOrders = ordersByDay[dayDate];
 
-    // A. Total Product Price Only as Work Value (No Shipping)
     var totalWorkValue = dayOrders.reduce(function(sum, o) {
       return sum + getOrderFinancials(o).prodPrice;
     }, 0);
 
-    // B. Delivered cash collected
     var totalActualCollected = dayOrders.reduce(function(sum, o) {
       var status = (o.status || "").toString().trim();
       var isDelivered = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].indexOf(status) !== -1;
@@ -1801,20 +2018,26 @@ function getSupplierLedgerData(sheets, d) {
       return sum;
     }, 0);
 
-    // C. Returned items value delivered back to supplier
     var returnedValueRefunded = dayOrders.reduce(function(sum, o) {
       var status = (o.status || "").toString().trim();
-      var isReturnedDelivered = ["تم تسليم المرتجع للمورد", "تم تسليمه للمورد", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].indexOf(status) !== -1;
+      var isReturnedDelivered = isReturnedDeliveredToSupplier(status);
       if (isReturnedDelivered) {
-        return sum + getOrderFinancials(o).prodPrice;
+        var financials = getOrderFinancials(o);
+        var isPartial = o.isPartial === true || o.isPartial === "true" || ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(o.status || o["الحالة"] || "") !== -1;
+        if (isPartial) {
+          var soldValue = Number(o.partialAmount || o.actualReceivedCash || o["المبلغ المحصل"] || 0);
+          if (isNaN(soldValue)) soldValue = 0;
+          var unsoldPortion = financials.prodPrice - soldValue;
+          return sum + (unsoldPortion > 0 ? unsoldPortion : 0);
+        }
+        return sum + financials.prodPrice;
       }
       return sum;
     }, 0);
 
-    // D. Return shipping fees
     var returnShippingFees = dayOrders.reduce(function(sum, o) {
       var status = (o.status || "").toString().trim();
-      var isReturned = (status.indexOf("مرتجع") !== -1 || status.indexOf("مرفوض") !== -1 || ["قيد المرتجع"].indexOf(status) !== -1);
+      var isReturned = isSomeReturn(status);
       if (isReturned) {
         if (status === "مرتجع والعميل دفع الشحن") return sum;
         return sum + getOrderFinancials(o).shipPrice;
@@ -1822,24 +2045,19 @@ function getSupplierLedgerData(sheets, d) {
       return sum;
     }, 0);
 
-    // D. Payouts/Cash Paid on this exact day
     var dayPayments = ledgerEntriesByDate[dayDate] || [];
     var totalPayoutsOnDay = dayPayments.reduce(function(sum, l) {
-      var type = (l.type || l["النوع"] || l.type || "").toString().trim();
-      var amount = Number(l.amount || 0);
-      if (isNaN(amount)) amount = 0;
-      var isAdjustment = type.indexOf("تسوية") !== -1 || type.indexOf("تعديل") !== -1;
-      if (isAdjustment) {
-        return sum - amount;
-      } else {
-        return sum + amount;
-      }
+      var signed = getLedgerEntrySignedAmount(l);
+      return signed < 0 ? sum + Math.abs(signed) : sum;
     }, 0);
 
-    // E. Net dues = total work value - total payouts on day - returned value refunded
-    var netDues = totalWorkValue - totalPayoutsOnDay - returnedValueRefunded;
+    var totalAdditionsOnDay = dayPayments.reduce(function(sum, l) {
+      var signed = getLedgerEntrySignedAmount(l);
+      return signed > 0 ? sum + signed : sum;
+    }, 0);
 
-    // F. صافي ثمن البضاعة (دون شحن) للطلبات المسلمة والجزئية اليوم
+    var netDues = totalWorkValue - totalPayoutsOnDay - returnedValueRefunded + totalAdditionsOnDay;
+
     var netProductValue = dayOrders.reduce(function(sum, o) {
       var status = (o.status || "").toString().trim();
       var fin = getOrderFinancials(o);
@@ -1851,13 +2069,11 @@ function getSupplierLedgerData(sheets, d) {
       } else if (isPartial) {
         var cash = Number(o.actualReceivedCash || o.partialAmount || o["المبلغ المحصل"] || 0);
         if (isNaN(cash)) cash = 0;
-        var netProduct = cash - Number(fin.shipPrice);
-        return sum + Math.max(0, isNaN(netProduct) ? 0 : netProduct);
+        return sum + cash;
       }
       return sum;
     }, 0);
 
-    // G. Settle status
     var isSettled = !!settledDaysSet[dayDate];
     var statusLabel = isSettled ? "🟢 تم تصفية الكاش والمرتجع" : "🔴 معلق لم يصفى";
 
@@ -1893,66 +2109,20 @@ function getSupplierLedgerData(sheets, d) {
     return b.date.localeCompare(a.date);
   });
 
-  // Clean raw ledger: keep exact signed amounts as recorded in database
-  var rawLedgerLoc = supplierLedgerEntries.map(function(l) {
-    return {
-      type: (l.type || l["النوع"] || "").toString().trim(),
-      tracking: (l.tracking || l["رقم التتبع"] || "").toString().trim(),
-      amount: Number(l.amount || 0),
-      desc: l.desc || l["البيان"] || ""
-    };
-  });
-
-  var adjustmentsAndPayments = supplierLedgerEntries.filter(isHumanPayout);
-
-  var totalLedgerEffect = adjustmentsAndPayments.reduce(function(sum, l) {
-    return sum + getLedgerEntrySignedAmount(l);
-  }, 0);
-
-  // Calculate actual delivered product value (إجمالي ثمن البضاعة المباعة الفعلي من شيت الأوردرات للأوردرات الناجحة والجزئية فقط)
-  var totalSoldGoodsValue = supplierOrders.reduce(function(sum, o) {
-    var status = (o.status || o["الحالة"] || "").toString().trim();
-    var financials = getOrderFinancials(o);
-    if (["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].indexOf(status) !== -1) {
-      return sum + financials.prodPrice;
-    }
-    if (["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(status) !== -1) {
-      var partialAmt = Number(o.actualReceivedCash || o.partialAmount || o["المبلغ المحصل"] || 0);
-      return sum + (isNaN(partialAmt) ? 0 : partialAmt);
+  var overallNetProductValue = supplierOrders.reduce(function(sum, o) {
+    var status = (o.status || "").toString().trim();
+    var fin = getOrderFinancials(o);
+    var isDelivered = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].indexOf(status) !== -1;
+    var isPartial = ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(status) !== -1;
+    if (isDelivered) {
+      return sum + (Number(fin.totalCOD) - Number(fin.shipPrice));
+    } else if (isPartial) {
+      var cash = Number(o.actualReceivedCash || o.partialAmount || o["المبلغ المحصل"] || 0);
+      if (isNaN(cash)) cash = 0;
+      return sum + cash;
     }
     return sum;
   }, 0);
-
-  var totalGoodsUploadedVal = supplierOrders.reduce(function(sum, o) {
-    return sum + getOrderFinancials(o).prodPrice;
-  }, 0);
-
-  var returnsDeliveredVal = supplierOrders.filter(function(o) {
-    var status = (o.status || o["الحالة"] || "").toString().trim();
-    return isReturnedDeliveredToSupplier(status);
-  }).reduce(function(sum, o) {
-    var financials = getOrderFinancials(o);
-    var isPartial = o.isPartial === true || o.isPartial === "true" || ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(o.status || o["الحالة"] || "") !== -1;
-    if (isPartial) {
-      var soldValue = Number(o.partialAmount || o.actualReceivedCash || o["المبلغ المحصل"] || 0);
-      if (isNaN(soldValue)) soldValue = 0;
-      var unsoldPortion = financials.prodPrice - soldValue;
-      return sum + (unsoldPortion > 0 ? unsoldPortion : 0);
-    }
-    return sum + financials.prodPrice;
-  }, 0);
-
-  // Fetch opening balance from sheets.suppliers
-  var suppliersList = [];
-  try {
-    suppliersList = getTableData(sheets.suppliers) || [];
-  } catch (e) {}
-  var supplierProfile = suppliersList.find(function(s) {
-    return s.name && isSameSupplier(s.name, supplier);
-  });
-  var openingBalance = supplierProfile ? Number(supplierProfile.openingBalance || supplierProfile.opening_balance || 0) : 0;
-
-  var finalUnifiedOutstanding = openingBalance + totalGoodsUploadedVal - returnsDeliveredVal + totalLedgerEffect;
 
   var totalPaid = adjustmentsAndPayments.reduce(function(sum, l) {
     return sum + Math.abs(Number(l.amount || 0));
@@ -1961,12 +2131,12 @@ function getSupplierLedgerData(sheets, d) {
   return {
     ok: true,
     days: daysList,
-    outstandingBalance: finalUnifiedOutstanding,
-    totalGoodsUploaded: totalGoodsUploadedVal,
-    returnsDeliveredValue: returnsDeliveredVal,
-    overallNetProductValue: totalSoldGoodsValue,
+    outstandingBalance: calc.outstanding,
+    totalGoodsUploaded: calc.totalGoodsUploaded,
+    returnsDeliveredValue: calc.returnsDeliveredValue,
+    overallNetProductValue: overallNetProductValue,
     globalPayments: totalPaid,
-    openingBalance: openingBalance,
+    openingBalance: calc.openingBalance,
     paymentEntries: adjustmentsAndPayments.map(function(l) {
       return {
         date: normalizeDateStrAr(l.date || ""),
@@ -1981,18 +2151,19 @@ function getSupplierLedgerData(sheets, d) {
 
 function getSupplierLedger(sheets, d) {
   var supplier = d.supplier;
-  var ledger = getTableData(sheets.supplierLedger);
-  var filtered = supplier ? ledger.filter(function(l) { return isSameSupplier(l.supplier, supplier); }) : ledger;
-  
   if (!supplier) {
+    var ledger = getTableData(sheets.supplierLedger) || [];
     return { ok: true, ledger: ledger };
   }
-  
+
+  var unified = getSupplierUnifiedLedger(sheets, supplier);
   var dailyData = getSupplierLedgerData(sheets, d);
+
   return { 
     ok: true, 
-    ledger: filtered.reverse(),
-    balance: dailyData.outstandingBalance,
+    entries: unified.entries,
+    balance: unified.balance,
+    stats: unified.stats,
     dailyLedger: dailyData
   };
 }

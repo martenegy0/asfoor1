@@ -849,30 +849,171 @@ const getLedgerEntrySignedAmount = (l: any): number => {
   return amount;
 };
 
-function getSupplierDailyLedger(db: any, supplierName: string) {
+function calculateSupplierBalance(db: any, supplierName: string) {
   if (!db) {
-    return { days: [], outstandingBalance: 0 };
+    return {
+      openingBalance: 0,
+      totalGoodsUploaded: 0,
+      returnsDeliveredValue: 0,
+      totalLedgerEffect: 0,
+      outstanding: 0,
+      paymentsValue: 0,
+      reverseAdjustmentsValue: 0,
+      adjustmentsAndPayments: [],
+      supplierOrders: [],
+      returnedOrders: [],
+      stats: {
+        totalOrdersCount: 0,
+        totalGoodsUploaded: 0,
+        totalCOD: 0,
+        deliveredOrdersCount: 0,
+        deliveredOrdersValue: 0,
+        returnsDeliveredCount: 0,
+        returnsDeliveredValue: 0,
+        paymentsValue: 0,
+        reverseAdjustmentsValue: 0,
+        outstanding: 0,
+        rate: 0,
+        openingBalance: 0,
+      }
+    };
   }
 
-  // 1. Get all orders for this supplier (active + archived)
+  const supplierProfile = (db.suppliers || []).find((s: any) => sameSup(s.name, supplierName));
+  const openingBalance = supplierProfile ? Number(supplierProfile.openingBalance || supplierProfile.opening_balance || 0) : 0;
+
   const allOrdersList = [...(db.orders || []), ...(db.archivedOrders || [])];
   const rawOrders = allOrdersList.filter((o: any) =>
     sameSup(getOrderSupplier(o), supplierName),
   );
 
-  // Dedup orders by tracking ID to ensure no double-counting
-  const dedupedOrdersMap = new Map<string, any>();
+  // Dedup rawOrders by tracking ID (Unique Order ID) keeping the latest instance/update
+  const supplierOrdersMap = new Map<string, any>();
   for (const o of rawOrders) {
     const track = getOrderTracking(o);
     if (track) {
-      dedupedOrdersMap.set(track, o);
+      supplierOrdersMap.set(track, o);
     } else {
-      dedupedOrdersMap.set(`RAND-${Math.random()}`, o);
+      supplierOrdersMap.set(`NO-TRACK-${Math.random()}`, o);
     }
   }
-  const supplierOrders = Array.from(dedupedOrdersMap.values());
+  const supplierOrders = Array.from(supplierOrdersMap.values());
 
-  // 2. Fetch settled days from supplierLedger
+  const rawLedger = (db.supplierLedger || [])
+    .filter((l: any) => {
+      const sup = l.supplier || l["المورد"];
+      return sup && sameSup(sup, supplierName);
+    })
+    .map((l: any) => {
+      return {
+        ...l,
+        amount: Number(l.amount || 0),
+      };
+    });
+
+  // 1. Total uploaded goods (value of products only without shipping)
+  const totalGoodsUploaded = supplierOrders.reduce((sum: number, o: any) => {
+    const financials = getOrderFinancials(o);
+    return sum + financials.prodPrice;
+  }, 0);
+
+  // 2. Returns delivered back to supplier
+  const returnedOrders = supplierOrders.filter((o: any) => {
+    return isReturnedDeliveredToSupplier(getOrderStatus(o));
+  });
+  const returnsDeliveredValue = returnedOrders.reduce((sum: number, o: any) => {
+    const financials = getOrderFinancials(o);
+    const isPartial = o.isPartial === true || o.isPartial === "true" || ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].includes(o.status) || (o.returnSubStatus && o.returnSubStatus.includes("تسليم جزئي"));
+    if (isPartial) {
+      const soldValue = Number(o.partialAmount ?? o.actualReceivedCash ?? o.totalCOD ?? 0);
+      const unsoldPortion = financials.prodPrice - soldValue;
+      return sum + (unsoldPortion > 0 ? unsoldPortion : 0);
+    }
+    return sum + financials.prodPrice;
+  }, 0);
+
+  const adjustmentsAndPayments = rawLedger.filter(isHumanLedgedPayout);
+
+  // Calculate net cash paid (all entries that are negative signed amounts)
+  const paymentsValue = adjustmentsAndPayments.reduce((sum: number, l: any) => {
+    const signed = getLedgerEntrySignedAmount(l);
+    return signed < 0 ? sum + Math.abs(signed) : sum;
+  }, 0);
+
+  // Calculate net adjustments (all entries that are positive signed amounts)
+  const reverseAdjustmentsValue = adjustmentsAndPayments.reduce((sum: number, l: any) => {
+    const signed = getLedgerEntrySignedAmount(l);
+    return signed > 0 ? sum + signed : sum;
+  }, 0);
+
+  const totalLedgerEffect = adjustmentsAndPayments.reduce((sum: number, l: any) => {
+    return sum + getLedgerEntrySignedAmount(l);
+  }, 0);
+
+  const outstanding =
+    openingBalance +
+    totalGoodsUploaded -
+    returnsDeliveredValue +
+    totalLedgerEffect;
+
+  const totalOrdersCount = supplierOrders.length;
+  const deliveredOrders = supplierOrders.filter(
+    (o: any) => getOrderStatus(o) === "تم التسليم",
+  );
+  const deliveredOrdersCount = deliveredOrders.length;
+  const deliveredOrdersValue = deliveredOrders.reduce((sum: number, o: any) => {
+    const financials = getOrderFinancials(o);
+    return sum + financials.prodPrice;
+  }, 0);
+
+  const returnsDeliveredCount = returnedOrders.length;
+  const rate = totalOrdersCount
+    ? Math.round((deliveredOrdersCount / totalOrdersCount) * 100)
+    : 0;
+
+  return {
+    openingBalance,
+    totalGoodsUploaded,
+    returnsDeliveredValue,
+    totalLedgerEffect,
+    outstanding,
+    paymentsValue,
+    reverseAdjustmentsValue,
+    adjustmentsAndPayments,
+    supplierOrders,
+    returnedOrders,
+    stats: {
+      totalOrdersCount,
+      totalGoodsUploaded,
+      totalCOD: totalGoodsUploaded,
+      deliveredOrdersCount,
+      deliveredOrdersValue,
+      returnsDeliveredCount,
+      returnsDeliveredValue,
+      paymentsValue,
+      reverseAdjustmentsValue,
+      outstanding,
+      rate,
+      openingBalance,
+    }
+  };
+}
+
+function getSupplierDailyLedger(db: any, supplierName: string) {
+  if (!db) {
+    return { days: [], outstandingBalance: 0 };
+  }
+
+  const {
+    openingBalance,
+    totalGoodsUploaded,
+    returnsDeliveredValue,
+    outstanding,
+    adjustmentsAndPayments,
+    supplierOrders,
+  } = calculateSupplierBalance(db, supplierName);
+
+  // Fetch settled days from supplierLedger
   const rawLedger = db.supplierLedger || [];
   const settledDaysSet = new Set<string>();
   for (const l of rawLedger) {
@@ -887,12 +1028,6 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
     }
   }
 
-  const sLedgerLoc = (db.supplierLedger || []).filter((l: any) => {
-    const s = l.supplier || l["المورد"];
-    return s && sameSup(s, supplierName);
-  });
-  const adjustmentsAndPayments = sLedgerLoc.filter(isHumanLedgedPayout);
-
   // Pre-group adjustmentsAndPayments by date for O(1) daily lookup
   const adjustmentsAndPaymentsByDate = new Map<string, any[]>();
   for (const l of adjustmentsAndPayments) {
@@ -905,7 +1040,7 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
     }
   }
 
-  // 3. Group supplier orders by their normalized date
+  // Group supplier orders by their normalized date
   const ordersByDay = new Map<string, any[]>();
   for (const o of supplierOrders) {
     const rawDate = o.orderDate || o.createdAt || o["تاريخ الطلب"] || "";
@@ -917,7 +1052,7 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
     ordersByDay.get(normDate)!.push(o);
   }
 
-  // 4. Compute accounts for each day
+  // Compute accounts for each day
   const daysList: any[] = [];
 
   for (const [dayDate, dayOrders] of ordersByDay.entries()) {
@@ -971,7 +1106,6 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
       return sum + financials.prodPrice;
     }, 0);
 
-    // D. مصاريف شحن المرتجعات لأي أوردر مرتجع في هذا اليوم (for backwards compatibility/reference, though hidden from view)
     const returnedOrdersAll = dayOrders.filter((o: any) => {
       const status = getOrderStatus(o);
       return isSomeReturn(status);
@@ -1055,35 +1189,6 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
 
   daysList.sort((a, b) => b.date.localeCompare(a.date));
 
-  // Fetch opening balance from supplier profile in db.suppliers
-  const supplierProfile = (db.suppliers || []).find((s: any) => sameSup(s.name, supplierName));
-  const openingBalance = supplierProfile ? Number(supplierProfile.openingBalance || supplierProfile.opening_balance || 0) : 0;
-
-  const totalGoodsUploaded = supplierOrders.reduce((sum: number, o: any) => {
-    const financials = getOrderFinancials(o);
-    return sum + financials.prodPrice;
-  }, 0);
-
-  const returnedOrders = supplierOrders.filter((o: any) => {
-    return isReturnedDeliveredToSupplier(getOrderStatus(o));
-  });
-  const returnsDeliveredValue = returnedOrders.reduce((sum: number, o: any) => {
-    const financials = getOrderFinancials(o);
-    const isPartial = o.isPartial === true || o.isPartial === "true" || ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].includes(o.status) || (o.returnSubStatus && o.returnSubStatus.includes("تسليم جزئي"));
-    if (isPartial) {
-      const soldValue = Number(o.partialAmount ?? o.actualReceivedCash ?? o.totalCOD ?? 0);
-      const unsoldPortion = financials.prodPrice - soldValue;
-      return sum + (unsoldPortion > 0 ? unsoldPortion : 0);
-    }
-    return sum + financials.prodPrice;
-  }, 0);
-
-  const totalLedgerEffect = adjustmentsAndPayments.reduce((sum: number, l: any) => {
-    return sum + getLedgerEntrySignedAmount(l);
-  }, 0);
-
-  const finalUnifiedOutstanding = openingBalance + totalGoodsUploaded - returnsDeliveredValue + totalLedgerEffect;
-
   const overallNetProductValue = supplierOrders.reduce(
     (sum: number, o: any) => {
       const status = getOrderStatus(o);
@@ -1114,7 +1219,7 @@ function getSupplierDailyLedger(db: any, supplierName: string) {
 
   return {
     days: daysList,
-    outstandingBalance: finalUnifiedOutstanding,
+    outstandingBalance: outstanding,
     totalGoodsUploaded,
     returnsDeliveredValue,
     overallNetProductValue,
@@ -1151,94 +1256,18 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
     };
   }
 
-  const supplierProfile = (db.suppliers || []).find((s: any) => sameSup(s.name, supplierName));
-  const openingBalance = supplierProfile ? Number(supplierProfile.openingBalance || supplierProfile.opening_balance || 0) : 0;
-
-  const allOrdersList = [...(db.orders || []), ...(db.archivedOrders || [])];
-  const rawOrders = allOrdersList.filter((o: any) =>
-    sameSup(getOrderSupplier(o), supplierName),
-  );
-
-  // Dedup rawOrders by tracking ID (Unique Order ID) keeping the latest instance/update
-  const supplierOrdersMap = new Map<string, any>();
-  for (const o of rawOrders) {
-    const track = getOrderTracking(o);
-    if (track) {
-      supplierOrdersMap.set(track, o);
-    } else {
-      supplierOrdersMap.set(`NO-TRACK-${Math.random()}`, o);
-    }
-  }
-  const supplierOrders = Array.from(supplierOrdersMap.values());
-
-  // Clean raw ledger: keep exact signed amounts as recorded in database
-  const rawLedger = (db.supplierLedger || [])
-    .filter((l: any) => {
-      const sup = l.supplier || l["المورد"];
-      return sup && sameSup(sup, supplierName);
-    })
-    .map((l: any) => {
-      return {
-        ...l,
-        amount: Number(l.amount || 0),
-      };
-    });
-
-  // 1. Total uploaded goods (value of products only without shipping) using getOrderFinancials
-  const totalGoodsUploaded = supplierOrders.reduce((sum: number, o: any) => {
-    const financials = getOrderFinancials(o);
-    return sum + financials.prodPrice;
-  }, 0);
-
-  // 2. Successful deliveries
-  const deliveredOrders = supplierOrders.filter(
-    (o: any) => getOrderStatus(o) === "تم التسليم",
-  );
-  const deliveredOrdersCount = deliveredOrders.length;
-  const deliveredOrdersValue = deliveredOrders.reduce((sum: number, o: any) => {
-    const financials = getOrderFinancials(o);
-    return sum + financials.prodPrice;
-  }, 0);
-
-  // 3. Returns delivered back to supplier
-  const returnedOrders = supplierOrders.filter((o: any) => {
-    return isReturnedDeliveredToSupplier(getOrderStatus(o));
-  });
-  const returnsDeliveredCount = returnedOrders.length;
-  const returnsDeliveredValue = returnedOrders.reduce((sum: number, o: any) => {
-    const financials = getOrderFinancials(o);
-    const isPartial = o.isPartial === true || o.isPartial === "true" || ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].includes(o.status) || (o.returnSubStatus && o.returnSubStatus.includes("تسليم جزئي"));
-    if (isPartial) {
-      const soldValue = Number(o.partialAmount ?? o.actualReceivedCash ?? o.totalCOD ?? 0);
-      const unsoldPortion = financials.prodPrice - soldValue;
-      return sum + (unsoldPortion > 0 ? unsoldPortion : 0);
-    }
-    return sum + financials.prodPrice;
-  }, 0);
-
-  // 4. Payments and Adjustments made to supplier from ledger (Strict human payout classification)
-  const adjustmentsAndPayments = rawLedger.filter(isHumanLedgedPayout);
-
-  // Calculate net cash paid (all entries that are negative signed amounts)
-  const paymentsValue = adjustmentsAndPayments.reduce((sum: number, l: any) => {
-    const signed = getLedgerEntrySignedAmount(l);
-    return signed < 0 ? sum + Math.abs(signed) : sum;
-  }, 0);
-
-  // Calculate net adjustments (all entries that are positive signed amounts)
-  const reverseAdjustmentsValue = adjustmentsAndPayments.reduce((sum: number, l: any) => {
-    const signed = getLedgerEntrySignedAmount(l);
-    return signed > 0 ? sum + signed : sum;
-  }, 0);
-
-  // 5. Calculate outstanding balance based on the approved formula
-  const totalCOD = totalGoodsUploaded;
-  const outstanding =
-    openingBalance +
-    totalCOD -
-    returnsDeliveredValue +
-    reverseAdjustmentsValue -
-    paymentsValue;
+  const {
+    openingBalance,
+    totalGoodsUploaded,
+    returnsDeliveredValue,
+    outstanding,
+    paymentsValue,
+    reverseAdjustmentsValue,
+    adjustmentsAndPayments,
+    supplierOrders,
+    returnedOrders,
+    stats,
+  } = calculateSupplierBalance(db, supplierName);
 
   // Let's build the ledger entries list for the detailed UI audit
   const entries: any[] = [];
@@ -1337,28 +1366,10 @@ function getSupplierUnifiedLedger(db: any, supplierName: string) {
     return { ...item, balanceAfter: runBal };
   });
 
-  const totalOrdersCount = supplierOrders.length;
-  const rate = totalOrdersCount
-    ? Math.round((deliveredOrdersCount / totalOrdersCount) * 100)
-    : 0;
-
   return {
     entries: finalEntries.reverse(), // latest first
     balance: outstanding,
-    stats: {
-      totalOrdersCount,
-      totalGoodsUploaded,
-      totalCOD,
-      deliveredOrdersCount,
-      deliveredOrdersValue,
-      returnsDeliveredCount,
-      returnsDeliveredValue,
-      paymentsValue,
-      reverseAdjustmentsValue,
-      outstanding,
-      rate,
-      openingBalance,
-    },
+    stats,
   };
 }
 
