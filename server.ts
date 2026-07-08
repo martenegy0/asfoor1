@@ -2642,21 +2642,17 @@ app.post("/api", async (req: Request, res: Response) => {
             // We omit the "supplier" parameter here so Google Sheets returns the entire list.
             // This allows us to perform robust, Arabic-normalization-safe filtering server-side
             // which standardizes characters like أ/إ/آ->ا, ي/ى->ي, ة->ه and is completely immune to spelling variations.
-            const resOrders = await executeProxyRequest(gscriptUrl, {
+            const isSup = isSupplierRole(currentRole);
+            const needsSuppliers = d.action === "supplierAccounts" && !isSup;
+
+            const fetchOrdersPromise = executeProxyRequest(gscriptUrl, {
               action: "getOrders",
               token: "14014",
               currentUser: "SystemAdmin",
               currentRole: "مدير",
             });
-            if (resOrders && resOrders.ok === false) {
-              return err(
-                res,
-                resOrders.error ||
-                  "فشل سحب قائمة طلبات الموردين من سكريبت جوجل شيت",
-              );
-            }
 
-            const resArchived = await executeProxyRequest(gscriptUrl, {
+            const fetchArchivedPromise = executeProxyRequest(gscriptUrl, {
               action: "getArchivedOrders",
               token: "14014",
               currentUser: "SystemAdmin",
@@ -2669,12 +2665,37 @@ app.post("/api", async (req: Request, res: Response) => {
               return { ok: true, orders: [] as any[] };
             });
 
-            const resLedger = await executeProxyRequest(gscriptUrl, {
+            const fetchLedgerPromise = executeProxyRequest(gscriptUrl, {
               action: "getSupplierLedger",
               token: "14014",
               currentUser: "SystemAdmin",
               currentRole: "مدير",
             });
+
+            const fetchSuppliersPromise = needsSuppliers
+              ? executeProxyRequest(gscriptUrl, {
+                  action: "getSuppliers",
+                  token: "14014",
+                  currentUser: "SystemAdmin",
+                  currentRole: "مدير",
+                })
+              : Promise.resolve({ ok: true, suppliers: [] as any[] });
+
+            const [resOrders, resArchived, resLedger, resSuppliers] = await Promise.all([
+              fetchOrdersPromise,
+              fetchArchivedPromise,
+              fetchLedgerPromise,
+              fetchSuppliersPromise,
+            ]);
+
+            if (resOrders && resOrders.ok === false) {
+              return err(
+                res,
+                resOrders.error ||
+                  "فشل سحب قائمة طلبات الموردين من سكريبت جوجل شيت",
+              );
+            }
+
             if (resLedger && resLedger.ok === false) {
               return err(
                 res,
@@ -2736,10 +2757,12 @@ app.post("/api", async (req: Request, res: Response) => {
               const supplierName = isSupplierRole(currentRole)
                 ? currentUser
                 : d.supplier || "";
+              const unified = getSupplierUnifiedLedger(mockDb, supplierName);
               const dailyData = getSupplierDailyLedger(mockDb, supplierName);
               return ok(res, {
-                entries: mockDb.supplierLedger || [],
-                balance: dailyData.outstandingBalance,
+                entries: unified.entries,
+                balance: unified.balance,
+                stats: unified.stats,
                 dailyLedger: dailyData,
               });
             }
@@ -2782,12 +2805,6 @@ app.post("/api", async (req: Request, res: Response) => {
               if (isSup) {
                 allSuppliers = [currentUser];
               } else {
-                const resSuppliers = await executeProxyRequest(gscriptUrl, {
-                  action: "getSuppliers",
-                  token: "14014",
-                  currentUser: "SystemAdmin",
-                  currentRole: "مدير",
-                });
                 if (resSuppliers && resSuppliers.ok === false) {
                   return err(
                     res,
@@ -3440,6 +3457,35 @@ app.post("/api", async (req: Request, res: Response) => {
         // Formula: Supplier_Net_Balance = Total_Collected - Shipping_Fees
         const prodPrice = totalCOD - shipPrice;
 
+        // Courier Auto-Assignment by Region (Primary and Secondary)
+        let matchedCourier = null;
+        const oRegion = o.region || "";
+        if (oRegion) {
+          const cleanOrderRegion = oRegion.toString().trim().toLowerCase();
+          if (cleanOrderRegion) {
+            matchedCourier = db.couriers.find((c: any) => {
+              if (!c.region) return false;
+              const regions = c.region.toString().split(/[,|،\s]+/).map((r: string) => r.trim().toLowerCase()).filter(Boolean);
+              if (regions.includes(cleanOrderRegion)) return true;
+
+              const cleanCourierRegion = c.region.toString().trim().toLowerCase();
+              if (cleanCourierRegion.includes(cleanOrderRegion) || cleanOrderRegion.includes(cleanCourierRegion)) return true;
+
+              const secRegion = c.secondary_region || c.secondaryRegion;
+              if (secRegion) {
+                const secRegions = secRegion.toString().split(/[,|،\s]+/).map((r: string) => r.trim().toLowerCase()).filter(Boolean);
+                if (secRegions.includes(cleanOrderRegion)) return true;
+              }
+
+              return false;
+            });
+          }
+        }
+
+        const initialCourier = matchedCourier ? matchedCourier.name : "";
+        const initialStatus = matchedCourier ? "مُسند جديد" : "جديد";
+        const initialCommission = matchedCourier ? Number(matchedCourier.commission || 25) : 0;
+
         const newOrder = {
           tracking: id,
           createdAt: tNow,
@@ -3459,13 +3505,13 @@ app.post("/api", async (req: Request, res: Response) => {
           shipPrice: shipPrice,
           totalCOD: totalCOD,
           shipCost: shipPrice, // ship cost defaults to ship price
-          courier: "", // MUST BE EMPTY during creation
-          status: "جديد", // ALWAYS starts as "جديد"
+          courier: initialCourier,
+          status: initialStatus,
           notes: o.notes || "",
           delivDate: "",
           retDate: "",
           addedBy: currentUser,
-          commission: 0,
+          commission: initialCommission,
           returnShippingType: "",
           returnQueueStatus: "",
           returnQueueAgent: "",
@@ -3505,7 +3551,7 @@ app.post("/api", async (req: Request, res: Response) => {
         db.statusHistory.push({
           tracking: id,
           oldStatus: "",
-          newStatus: "جديد",
+          newStatus: newOrder.status,
           updatedBy: currentUser,
           dateTime: tNow,
         });
@@ -3636,6 +3682,35 @@ app.post("/api", async (req: Request, res: Response) => {
 
           const id = generateID(db);
 
+          // Courier Auto-Assignment by Region (Primary and Secondary)
+          let matchedCourier = null;
+          const oRegion = item.region || "";
+          if (oRegion) {
+            const cleanOrderRegion = oRegion.toString().trim().toLowerCase();
+            if (cleanOrderRegion) {
+              matchedCourier = db.couriers.find((c: any) => {
+                if (!c.region) return false;
+                const regions = c.region.toString().split(/[,|،\s]+/).map((r: string) => r.trim().toLowerCase()).filter(Boolean);
+                if (regions.includes(cleanOrderRegion)) return true;
+
+                const cleanCourierRegion = c.region.toString().trim().toLowerCase();
+                if (cleanCourierRegion.includes(cleanOrderRegion) || cleanOrderRegion.includes(cleanCourierRegion)) return true;
+
+                const secRegion = c.secondary_region || c.secondaryRegion;
+                if (secRegion) {
+                  const secRegions = secRegion.toString().split(/[,|،\s]+/).map((r: string) => r.trim().toLowerCase()).filter(Boolean);
+                  if (secRegions.includes(cleanOrderRegion)) return true;
+                }
+
+                return false;
+              });
+            }
+          }
+
+          const initialCourier = matchedCourier ? matchedCourier.name : "";
+          const initialStatus = matchedCourier ? "مُسند جديد" : "جديد";
+          const initialCommission = matchedCourier ? Number(matchedCourier.commission || 25) : 0;
+
           const newObj = {
             tracking: id,
             createdAt: tNow,
@@ -3653,13 +3728,13 @@ app.post("/api", async (req: Request, res: Response) => {
             shipPrice: sPrice,
             totalCOD: tCOD,
             shipCost: sPrice,
-            courier: "", // EMPTY AT CREATION ALWAYS
-            status: "جديد",
+            courier: initialCourier,
+            status: initialStatus,
             notes: item.notes || "",
             delivDate: "",
             retDate: "",
             addedBy: currentUser,
-            commission: 0,
+            commission: initialCommission,
             returnShippingType: "",
             returnQueueStatus: "",
             returnQueueAgent: "",
@@ -3680,7 +3755,7 @@ app.post("/api", async (req: Request, res: Response) => {
           db.statusHistory.push({
             tracking: id,
             oldStatus: "",
-            newStatus: "جديد",
+            newStatus: initialStatus,
             updatedBy: currentUser,
             dateTime: tNow,
           });
@@ -4276,7 +4351,7 @@ app.post("/api", async (req: Request, res: Response) => {
           } else {
             order.courier = o.courier;
 
-            // If assigned (and old courier was empty/different), transition status to 'تم الإسناد' per workflow
+            // If assigned (and old courier was empty/different), transition status to 'مُسند جديد' per workflow
             if (
               o.courier &&
               (!oldCourier ||
@@ -4284,11 +4359,11 @@ app.post("/api", async (req: Request, res: Response) => {
                 oldCourier === "") &&
               order.status === "جديد"
             ) {
-              order.status = "تم الإسناد";
+              order.status = "مُسند جديد";
               db.statusHistory.push({
                 tracking,
                 oldStatus: "جديد",
-                newStatus: "تم الإسناد",
+                newStatus: "مُسند جديد",
                 updatedBy: currentUser,
                 dateTime: now(),
               });
@@ -4534,14 +4609,14 @@ app.post("/api", async (req: Request, res: Response) => {
                 ? Number(cProfile.commission || 25)
                 : 25;
 
-              // If courier is assigned, move 'جديد' to 'تم الإسناد'
+              // If courier is assigned, move 'جديد' to 'مُسند جديد'
               if (courier && oldStatus === "جديد") {
-                order.status = "تم الإسناد";
+                order.status = "مُسند جديد";
                 if (!db.statusHistory) db.statusHistory = [];
                 db.statusHistory.push({
                   tracking: t,
                   oldStatus: "جديد",
-                  newStatus: "تم الإسناد",
+                  newStatus: "مُسند جديد",
                   updatedBy: currentUser,
                   dateTime: now(),
                 });
@@ -4732,14 +4807,14 @@ app.post("/api", async (req: Request, res: Response) => {
                 ? Number(cProfile.commission || 25)
                 : 25;
 
-              // If courier is assigned, move 'جديد' to 'تم الإسناد'
+              // If courier is assigned, move 'جديد' to 'مُسند جديد'
               if (courier && oldStatus === "جديد") {
-                order.status = "تم الإسناد";
+                order.status = "مُسند جديد";
                 if (!db.statusHistory) db.statusHistory = [];
                 db.statusHistory.push({
                   tracking: t,
                   oldStatus: "جديد",
-                  newStatus: "تم الإسناد",
+                  newStatus: "مُسند جديد",
                   updatedBy: currentUser,
                   dateTime: now(),
                 });
@@ -5649,13 +5724,32 @@ app.post("/api", async (req: Request, res: Response) => {
         ];
 
         const getOrderActualCollection = (o: any): number => {
+          if (!o) return 0;
           const status = (o.status || "").toString().trim();
           if ([
             "تم التسليم",
             "تم التسليم بنجاح",
             "تم التسليم (ناجح كاش)"
           ].includes(status)) {
-            return Number(o.prodPrice || 0) + Number(o.shipPrice || 0);
+            return Number(o.totalCOD !== undefined && o.totalCOD !== "" && o.totalCOD !== null ? o.totalCOD : (Number(o.prodPrice || 0) + Number(o.shipPrice || 0)));
+          }
+          if ([
+            "تسليم جزئي",
+            "تسليم جزئي - معلق للجرد"
+          ].includes(status)) {
+            const raw = o.actualReceivedCash !== undefined ? o.actualReceivedCash : (o.partialAmount !== undefined ? o.partialAmount : (o["المبلغ المستلم"] !== undefined ? o["المبلغ المستلم"] : (o["التحصيل الجزئي"] !== undefined ? o["التحصيل الجزئي"] : (o["التحصيل"] !== undefined ? o["التحصيل"] : (o["المبلغ المحصل"] !== undefined ? o["المبلغ المحصل"] : (o["المبلغ المستلم الفعلي"] !== undefined ? o["المبلغ المستلم الفعلي"] : ""))))));
+            if (raw !== undefined && raw !== null && raw !== "") {
+              const val = Number(raw);
+              if (!isNaN(val)) return val;
+            }
+            return 0;
+          }
+          if ([
+            "مرتجع والعميل دفع الشحن",
+            "مرتجع مدفوع الشحن",
+            "مرتجع وتم دفع الشحن"
+          ].includes(status) || (status === "مرتجع" && o.returnShippingType === "paid")) {
+            return Number(o.shipPrice || o.shipCost || 0);
           }
           return 0;
         };
@@ -5667,14 +5761,16 @@ app.post("/api", async (req: Request, res: Response) => {
               "تم التسليم",
               "تم التسليم بنجاح",
               "تم التسليم (ناجح كاش)",
-            ].includes(o.status) &&
+              "تسليم جزئي",
+              "تسليم جزئي - معلق للجرد",
+            ].includes((o.status || "").toString().trim()) &&
             o.delivDate &&
             isDateToday(o.delivDate),
         );
 
         const returnedOrdersToday = courierOrders.filter(
           (o: any) =>
-            returnStatuses.includes(o.status) &&
+            returnStatuses.includes((o.status || "").toString().trim()) &&
             o.retDate &&
             isDateToday(o.retDate),
         );
@@ -5683,8 +5779,11 @@ app.post("/api", async (req: Request, res: Response) => {
         const todayReturnedCount = returnedOrdersToday.length;
         const todayTotalCount = todayDeliveredCount + todayReturnedCount;
 
-        // 【إجمالي التحصيل الفعلي الميداني】: مجموع المبالغ الفعلية المستلمة من العملاء للأوردرات الناجحة فقط. المرتجع = 0.
+        // 【إجمالي التحصيل الفعلي الميداني】: مجموع المبالغ الفعلية المستلمة من العملاء للأوردرات الناجحة والجزئية والمرتجع مدفوع الشحن اليوم.
         const todayDeliveredCash = successOrdersToday.reduce(
+          (sum: number, o: any) => sum + getOrderActualCollection(o),
+          0,
+        ) + returnedOrdersToday.reduce(
           (sum: number, o: any) => sum + getOrderActualCollection(o),
           0,
         );
@@ -5704,12 +5803,14 @@ app.post("/api", async (req: Request, res: Response) => {
               "تم التسليم",
               "تم التسليم بنجاح",
               "تم التسليم (ناجح كاش)",
-            ].includes(o.status)
+              "تسليم جزئي",
+              "تسليم جزئي - معلق للجرد",
+            ].includes((o.status || "").toString().trim())
         );
         const deliveredCount = historicalSuccessOrders.length;
 
         const historicalReturnedOrders = courierOrders.filter(
-          (o: any) => returnStatuses.includes(o.status)
+          (o: any) => returnStatuses.includes((o.status || "").toString().trim())
         );
         const returnedCount = historicalReturnedOrders.length;
         const returnedPaidCount = 0; // simplified to unified collection
@@ -6055,13 +6156,32 @@ app.post("/api", async (req: Request, res: Response) => {
         ];
 
         const getOrderActualCollection = (o: any): number => {
+          if (!o) return 0;
           const status = (o.status || "").toString().trim();
           if ([
             "تم التسليم",
             "تم التسليم بنجاح",
             "تم التسليم (ناجح كاش)"
           ].includes(status)) {
-            return Number(o.prodPrice || 0) + Number(o.shipPrice || 0);
+            return Number(o.totalCOD !== undefined && o.totalCOD !== "" && o.totalCOD !== null ? o.totalCOD : (Number(o.prodPrice || 0) + Number(o.shipPrice || 0)));
+          }
+          if ([
+            "تسليم جزئي",
+            "تسليم جزئي - معلق للجرد"
+          ].includes(status)) {
+            const raw = o.actualReceivedCash !== undefined ? o.actualReceivedCash : (o.partialAmount !== undefined ? o.partialAmount : (o["المبلغ المستلم"] !== undefined ? o["المبلغ المستلم"] : (o["التحصيل الجزئي"] !== undefined ? o["التحصيل الجزئي"] : (o["التحصيل"] !== undefined ? o["التحصيل"] : (o["المبلغ المحصل"] !== undefined ? o["المبلغ المحصل"] : (o["المبلغ المستلم الفعلي"] !== undefined ? o["المبلغ المستلم الفعلي"] : ""))))));
+            if (raw !== undefined && raw !== null && raw !== "") {
+              const val = Number(raw);
+              if (!isNaN(val)) return val;
+            }
+            return 0;
+          }
+          if ([
+            "مرتجع والعميل دفع الشحن",
+            "مرتجع مدفوع الشحن",
+            "مرتجع وتم دفع الشحن"
+          ].includes(status) || (status === "مرتجع" && o.returnShippingType === "paid")) {
+            return Number(o.shipPrice || o.shipCost || 0);
           }
           return 0;
         };
@@ -6082,11 +6202,13 @@ app.post("/api", async (req: Request, res: Response) => {
               "تم التسليم",
               "تم التسليم بنجاح",
               "تم التسليم (ناجح كاش)",
-            ].includes(o.status)
+              "تسليم جزئي",
+              "تسليم جزئي - معلق للجرد",
+            ].includes((o.status || "").toString().trim())
         ).length;
         const returnedPaid = 0; // unified field-collection model ignores separate returned-paid shipping counts
         const returnedAll = ordersList.filter((o: any) =>
-          returnStatuses.includes(o.status)
+          returnStatuses.includes((o.status || "").toString().trim())
         ).length;
 
         const basicSalary =
@@ -6131,14 +6253,16 @@ app.post("/api", async (req: Request, res: Response) => {
               "تم التسليم",
               "تم التسليم بنجاح",
               "تم التسليم (ناجح كاش)",
-            ].includes(o.status) &&
+              "تسليم جزئي",
+              "تسليم جزئي - معلق للجرد",
+            ].includes((o.status || "").toString().trim()) &&
             o.delivDate &&
             isDateToday(o.delivDate),
         );
 
         const returnedOrdersToday = ordersList.filter(
           (o: any) =>
-            returnStatuses.includes(o.status) &&
+            returnStatuses.includes((o.status || "").toString().trim()) &&
             o.retDate &&
             isDateToday(o.retDate),
         );
@@ -6148,6 +6272,9 @@ app.post("/api", async (req: Request, res: Response) => {
 
         // 【إجمالي التحصيل الفعلي الميداني】
         const todayDeliveredCash = successOrdersToday.reduce(
+          (sum: number, o: any) => sum + getOrderActualCollection(o),
+          0,
+        ) + returnedOrdersToday.reduce(
           (sum: number, o: any) => sum + getOrderActualCollection(o),
           0,
         );

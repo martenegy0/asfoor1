@@ -507,6 +507,36 @@ function addOrder(sheets, d) {
   const tCOD = Number(o.totalCOD || (Number(o.prodPrice || 0) + sPrice));
   const pPrice = tCOD - sPrice;
 
+  // Courier Auto-Assignment by Region (Primary and Secondary)
+  const couriers = getTableData(sheets.couriers) || [];
+  let matchedCourier = null;
+  const orderRegion = o.region || "";
+  if (orderRegion) {
+    const cleanOrderRegion = orderRegion.toString().trim().toLowerCase();
+    if (cleanOrderRegion) {
+      matchedCourier = couriers.find(function(c) {
+        if (!c.region) return false;
+        const regions = c.region.toString().split(/[,|،\s]+/).map(function(r) { return r.trim().toLowerCase(); }).filter(Boolean);
+        if (regions.indexOf(cleanOrderRegion) !== -1) return true;
+
+        const cleanCourierRegion = c.region.toString().trim().toLowerCase();
+        if (cleanCourierRegion.indexOf(cleanOrderRegion) !== -1 || cleanOrderRegion.indexOf(cleanCourierRegion) !== -1) return true;
+
+        const secRegion = c.secondary_region || c.secondaryRegion;
+        if (secRegion) {
+          const secRegions = secRegion.toString().split(/[,|،\s]+/).map(function(r) { return r.trim().toLowerCase(); }).filter(Boolean);
+          if (secRegions.indexOf(cleanOrderRegion) !== -1) return true;
+        }
+
+        return false;
+      });
+    }
+  }
+
+  const initialCourier = matchedCourier ? matchedCourier.name : "";
+  const initialStatus = matchedCourier ? "مُسند جديد" : "جديد";
+  const initialCommission = matchedCourier ? Number(matchedCourier.commission || 25) : 0;
+
   const newOrder = {
     tracking: trackingId,
     createdAt: now(),
@@ -523,14 +553,14 @@ function addOrder(sheets, d) {
     shipPrice: sPrice,
     totalCOD: tCOD,
     shipCost: sPrice,
-    courier: "", // Empty during creation
-    status: o.status || "جديد",
+    courier: initialCourier,
+    status: initialStatus,
     prodType: o.prodType || "",
     notes: o.notes || "",
     delivDate: "",
     retDate: "",
     addedBy: d.currentUser || "إدارة",
-    commission: 0,
+    commission: initialCommission,
     returnShippingType: "",
     returnQueueStatus: "",
     returnQueueAgent: "",
@@ -553,7 +583,7 @@ function addOrder(sheets, d) {
   appendToSheet(sheets.statusHistory, ["tracking", "oldStatus", "newStatus", "updatedBy", "dateTime"], {
     tracking: newOrder.tracking,
     oldStatus: "",
-    newStatus: "جديد",
+    newStatus: initialStatus,
     updatedBy: d.currentUser || "موظف",
     dateTime: now()
   });
@@ -588,6 +618,8 @@ function addBulk(sheets, d) {
 
   // Pre-fetch all registered suppliers from sheets to check against dynamically
   const registeredSuppliers = getTableData(sheets.suppliers);
+  // Pre-fetch all registered couriers
+  const couriers = getTableData(sheets.couriers) || [];
 
   list.forEach(o => {
     if (!o.tracking) {
@@ -663,6 +695,35 @@ function addBulk(sheets, d) {
         tCOD = pPrice + sPrice;
       }
 
+      // Courier Auto-Assignment by Region (Primary and Secondary)
+      let matchedCourier = null;
+      const orderRegion = o.region || "";
+      if (orderRegion) {
+        const cleanOrderRegion = orderRegion.toString().trim().toLowerCase();
+        if (cleanOrderRegion) {
+          matchedCourier = couriers.find(function(c) {
+            if (!c.region) return false;
+            const regions = c.region.toString().split(/[,|،\s]+/).map(function(r) { return r.trim().toLowerCase(); }).filter(Boolean);
+            if (regions.indexOf(cleanOrderRegion) !== -1) return true;
+
+            const cleanCourierRegion = c.region.toString().trim().toLowerCase();
+            if (cleanCourierRegion.indexOf(cleanOrderRegion) !== -1 || cleanOrderRegion.indexOf(cleanCourierRegion) !== -1) return true;
+
+            const secRegion = c.secondary_region || c.secondaryRegion;
+            if (secRegion) {
+              const secRegions = secRegion.toString().split(/[,|،\s]+/).map(function(r) { return r.trim().toLowerCase(); }).filter(Boolean);
+              if (secRegions.indexOf(cleanOrderRegion) !== -1) return true;
+            }
+
+            return false;
+          });
+        }
+      }
+
+      const initialCourier = matchedCourier ? matchedCourier.name : "";
+      const initialStatus = matchedCourier ? "مُسند جديد" : "جديد";
+      const initialCommission = matchedCourier ? Number(matchedCourier.commission || 25) : 0;
+
       const draft = {
         tracking: o.tracking,
         createdAt: now(),
@@ -679,14 +740,14 @@ function addBulk(sheets, d) {
         shipPrice: sPrice,
         totalCOD: tCOD,
         shipCost: sPrice,
-        courier: "",
-        status: o.status || "جديد",
+        courier: initialCourier,
+        status: initialStatus,
         prodType: o.prodType || "",
         notes: o.notes || "",
         delivDate: "",
         retDate: "",
         addedBy: d.currentUser || "إدارة",
-        commission: 0,
+        commission: initialCommission,
         returnShippingType: "",
         returnQueueStatus: "",
         returnQueueAgent: ""
@@ -698,7 +759,7 @@ function addBulk(sheets, d) {
       appendToSheet(sheets.statusHistory, ["tracking", "oldStatus", "newStatus", "updatedBy", "dateTime"], {
         tracking: draft.tracking,
         oldStatus: "",
-        newStatus: "جديد",
+        newStatus: initialStatus,
         updatedBy: d.currentUser || "موظف",
         dateTime: now()
       });
@@ -1097,11 +1158,11 @@ function updateOrder(sheets, d) {
       o.courier = o.courier;
       // If assigned (and old courier was empty/different), transition status to 'تم الإسناد' per workflow
       if (o.courier && (!oldCourier || oldCourier === "reset_warehouse" || oldCourier === "") && order.status === "جديد") {
-        o.status = "تم الإسناد";
+        o.status = "مُسند جديد";
         appendToSheet(sheets.statusHistory, ["tracking", "oldStatus", "newStatus", "updatedBy", "dateTime"], {
           tracking: o.tracking,
           oldStatus: "جديد",
-          newStatus: "تم الإسناد",
+          newStatus: "مُسند جديد",
           updatedBy: d.currentUser || "إدارة",
           dateTime: now()
         });
@@ -1390,7 +1451,7 @@ function updateOrdersStatusBulk(sheets, d) {
           updateObj.commission = comm;
 
           if (oldStatus === "جديد") {
-            updateObj.status = "تم الإسناد";
+            updateObj.status = "مُسند جديد";
           }
         }
       }
@@ -1665,22 +1726,31 @@ function normalizeDateStrAr(dateStr) {
   return s.split("T")[0];
 }
 
-function calculateSupplierBalance(sheets, supplierName) {
+function calculateSupplierBalance(sheets, supplierName, preloadedDb) {
   var suppliersList = [];
-  try {
-    suppliersList = getTableData(sheets.suppliers) || [];
-  } catch (e) {}
+  if (preloadedDb && preloadedDb.suppliers) {
+    suppliersList = preloadedDb.suppliers;
+  } else {
+    try {
+      suppliersList = getTableData(sheets.suppliers) || [];
+    } catch (e) {}
+  }
   var supplierProfile = suppliersList.find(function(s) {
     return s.name && isSameSupplier(s.name, supplierName);
   });
   var openingBalance = supplierProfile ? Number(supplierProfile.openingBalance || supplierProfile.opening_balance || 0) : 0;
 
-  var orders = getTableData(sheets.orders) || [];
-  var archived = [];
-  try {
-    archived = getTableData(sheets.archivedOrders) || [];
-  } catch (e) {}
-  var allOrders = orders.concat(archived);
+  var allOrders = [];
+  if (preloadedDb && preloadedDb.allOrders) {
+    allOrders = preloadedDb.allOrders;
+  } else {
+    var orders = getTableData(sheets.orders) || [];
+    var archived = [];
+    try {
+      archived = getTableData(sheets.archivedOrders) || [];
+    } catch (e) {}
+    allOrders = orders.concat(archived);
+  }
 
   var rawSupOrders = allOrders.filter(function(o) {
     var oSup = o.supplier !== undefined ? o.supplier : (o["المورد"] !== undefined ? o["المورد"] : (o["اسم المورد"] !== undefined ? o["اسم المورد"] : (o["مورد"] !== undefined ? o["مورد"] : (o["merchant"] !== undefined ? o["merchant"] : (o["merchant_name"] !== undefined ? o["merchant_name"] : "")))));
@@ -1705,9 +1775,13 @@ function calculateSupplierBalance(sheets, supplierName) {
   }
 
   var ledgerEntries = [];
-  try {
-    ledgerEntries = getTableData(sheets.supplierLedger) || [];
-  } catch (e) {}
+  if (preloadedDb && preloadedDb.supplierLedger) {
+    ledgerEntries = preloadedDb.supplierLedger;
+  } else {
+    try {
+      ledgerEntries = getTableData(sheets.supplierLedger) || [];
+    } catch (e) {}
+  }
   
   var rawLedger = ledgerEntries.filter(function(l) {
     var lSup = l.supplier || l["المورد"] || "";
@@ -2366,6 +2440,13 @@ function getSupplierAccounts(sheets) {
     // Graceful fallback if sheet does not exist
   }
   const combinedOrders = orders.concat(archivedOrders);
+  const supplierLedger = getTableData(sheets.supplierLedger) || [];
+
+  const preloadedDb = {
+    suppliers: suppliers,
+    allOrders: combinedOrders,
+    supplierLedger: supplierLedger
+  };
 
   // Extract all unique names from both suppliers list and orders list
   const registeredNames = suppliers.map(function(s) { return s.name; }).filter(Boolean);
@@ -2390,7 +2471,7 @@ function getSupplierAccounts(sheets) {
       return s.name && s.name.toString().trim().toLowerCase() === supplierName.toLowerCase();
     });
 
-    const calc = calculateSupplierBalance(sheets, supplierName);
+    const calc = calculateSupplierBalance(sheets, supplierName, preloadedDb);
 
     return {
       name: supplierName,
@@ -2515,36 +2596,52 @@ function getCourierLedger(sheets, d) {
   ];
 
   const getOrderActualCollection = function(o) {
+    if (!o) return 0;
     var status = (o.status || "").toString().trim();
     if ([
       "تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"
     ].indexOf(status) !== -1) {
-      return Number(o.prodPrice || 0) + Number(o.shipPrice || 0);
+      return Number(o.totalCOD !== undefined && o.totalCOD !== "" && o.totalCOD !== null ? o.totalCOD : (Number(o.prodPrice || 0) + Number(o.shipPrice || 0)));
+    }
+    if ([
+      "تسليم جزئي", "تسليم جزئي - معلق للجرد"
+    ].indexOf(status) !== -1) {
+      var raw = o.actualReceivedCash !== undefined ? o.actualReceivedCash : (o.partialAmount !== undefined ? o.partialAmount : (o["المبلغ المستلم"] !== undefined ? o["المبلغ المستلم"] : (o["التحصيل الجزئي"] !== undefined ? o["التحصيل الجزئي"] : (o["التحصيل"] !== undefined ? o["التحصيل"] : (o["المبلغ المحصل"] !== undefined ? o["المبلغ المحصل"] : (o["المبلغ المستلم الفعلي"] !== undefined ? o["المبلغ المستلم الفعلي"] : ""))))));
+      if (raw !== undefined && raw !== null && raw !== "") {
+        var val = Number(raw);
+        if (!isNaN(val)) return val;
+      }
+      return 0;
+    }
+    if ([
+      "مرتجع والعميل دفع الشحن", "مرتجع مدفوع الشحن", "مرتجع وتم دفع الشحن"
+    ].indexOf(status) !== -1 || (status === "مرتجع" && o.returnShippingType === "paid")) {
+      return Number(o.shipPrice || o.shipCost || 0);
     }
     return 0;
   };
 
   // Strict Courier Settlement Calculations (Today's performance):
   const successOrdersToday = courierOrders.filter(o => 
-    ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].indexOf(o.status) !== -1 && 
+    ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي", "تسليم جزئي - معلق للجرد"].indexOf((o.status || "").toString().trim()) !== -1 && 
     o.delivDate && o.delivDate.substring(0, 10) === todayDate
   );
   
   const returnedOrdersToday = courierOrders.filter(o => 
-    returnStatuses.includes(o.status) && 
+    returnStatuses.includes((o.status || "").toString().trim()) && 
     o.retDate && o.retDate.substring(0, 10) === todayDate
   );
 
   const todayDeliveredCount = successOrdersToday.length;
   const todayReturnedCount = returnedOrdersToday.length;
 
-  const todayDeliveredCash = successOrdersToday.reduce((sum, o) => sum + getOrderActualCollection(o), 0);
+  const todayDeliveredCash = successOrdersToday.reduce((sum, o) => sum + getOrderActualCollection(o), 0) + returnedOrdersToday.reduce((sum, o) => sum + getOrderActualCollection(o), 0);
   const todayReturnedPaidCash = 0;
 
   const todayTotalCommission = (todayDeliveredCount * commissionSuccess) + (todayReturnedCount * commissionReturn);
 
   const deliveredCount = courierOrders.filter(o => 
-    ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].indexOf(o.status) !== -1
+    ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي", "تسليم جزئي - معلق للجرد"].indexOf((o.status || "").toString().trim()) !== -1
   ).length;
   const delivCommission = deliveredCount * commissionSuccess;
 
@@ -2683,11 +2780,27 @@ function getCourierInfo(sheets, d) {
   ];
 
   const getOrderActualCollection = function(o) {
+    if (!o) return 0;
     var status = (o.status || "").toString().trim();
     if ([
       "تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"
     ].indexOf(status) !== -1) {
-      return Number(o.prodPrice || 0) + Number(o.shipPrice || 0);
+      return Number(o.totalCOD !== undefined && o.totalCOD !== "" && o.totalCOD !== null ? o.totalCOD : (Number(o.prodPrice || 0) + Number(o.shipPrice || 0)));
+    }
+    if ([
+      "تسليم جزئي", "تسليم جزئي - معلق للجرد"
+    ].indexOf(status) !== -1) {
+      var raw = o.actualReceivedCash !== undefined ? o.actualReceivedCash : (o.partialAmount !== undefined ? o.partialAmount : (o["المبلغ المستلم"] !== undefined ? o["المبلغ المستلم"] : (o["التحصيل الجزئي"] !== undefined ? o["التحصيل الجزئي"] : (o["التحصيل"] !== undefined ? o["التحصيل"] : (o["المبلغ المحصل"] !== undefined ? o["المبلغ المحصل"] : (o["المبلغ المستلم الفعلي"] !== undefined ? o["المبلغ المستلم الفعلي"] : ""))))));
+      if (raw !== undefined && raw !== null && raw !== "") {
+        var val = Number(raw);
+        if (!isNaN(val)) return val;
+      }
+      return 0;
+    }
+    if ([
+      "مرتجع والعميل دفع الشحن", "مرتجع مدفوع الشحن", "مرتجع وتم دفع الشحن"
+    ].indexOf(status) !== -1 || (status === "مرتجع" && o.returnShippingType === "paid")) {
+      return Number(o.shipPrice || o.shipCost || 0);
     }
     return 0;
   };
@@ -2703,19 +2816,19 @@ function getCourierInfo(sheets, d) {
 
   // Strict Courier Settlement Calculations (Today's performance):
   const successOrdersToday = courierOrders.filter(o => 
-    ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].indexOf(o.status) !== -1 && 
+    ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي", "تسليم جزئي - معلق للجرد"].indexOf((o.status || "").toString().trim()) !== -1 && 
     o.delivDate && o.delivDate.substring(0, 10) === todayDate
   );
 
   const returnedOrdersToday = courierOrders.filter(o => 
-    returnStatuses.includes(o.status) && 
+    returnStatuses.includes((o.status || "").toString().trim()) && 
     o.retDate && o.retDate.substring(0, 10) === todayDate
   );
 
   const todayDeliveredCount = successOrdersToday.length;
   const todayReturnedCount = returnedOrdersToday.length;
 
-  const todayDeliveredCash = successOrdersToday.reduce((sum, o) => sum + getOrderActualCollection(o), 0);
+  const todayDeliveredCash = successOrdersToday.reduce((sum, o) => sum + getOrderActualCollection(o), 0) + returnedOrdersToday.reduce((sum, o) => sum + getOrderActualCollection(o), 0);
   const todayReturnedPaidCash = 0;
 
   const todayTotalCommission = (todayDeliveredCount * commissionSuccess) + (todayReturnedCount * commissionReturn);

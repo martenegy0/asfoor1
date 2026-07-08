@@ -196,7 +196,7 @@ export default function Dashboard({
   const [settleSuccess, setSettleSuccess] = useState(false);
 
   // Drilldown Modal Statuses
-  const [activeDrilldown, setActiveDrilldown] = useState<"street" | "warehouse" | "active_operational" | "supplier_returns" | null>(null);
+  const [activeDrilldown, setActiveDrilldown] = useState<"street" | "warehouse" | "active_operational" | "supplier_returns" | "pending_return_settlement" | null>(null);
   const [selectedCourierBag, setSelectedCourierBag] = useState<string | null>(null);
 
   // Fast Coordination Panel Statuses
@@ -256,7 +256,9 @@ export default function Dashboard({
         activeOperationalStockCount: 0,
         activeOperationalStockValue: 0,
         supplierReturnStockCount: 0,
-        supplierReturnStockValue: 0
+        supplierReturnStockValue: 0,
+        pendingReturnSettlementCount: 0,
+        pendingReturnSettlementValue: 0
       };
 
       const courierStats: { [name: string]: { total: number; delivered: number; returned: number; cod: number } } = {};
@@ -313,6 +315,12 @@ export default function Dashboard({
         if (isRealWarehouseReturnStock && !isHandedOverToSupplier && !o.isArchived && statusStr !== "مؤرشف" && !isSettled) {
           dStats.supplierReturnStockCount++;
           dStats.supplierReturnStockValue += Number(o.prodPrice || 0); // product net price
+        }
+
+        const isPendingReturnSettlement = ["مرتجع", "مرتجع جديد", "مرفوض", "فشل", "مسترجع", "مرتجع والعميل دفع الشحن", "مرتجع مدفوع الشحن"].includes(statusStr) && !isSettled && !o.isArchived && !o.isClosed;
+        if (isPendingReturnSettlement) {
+          dStats.pendingReturnSettlementCount++;
+          dStats.pendingReturnSettlementValue += Number(o.prodPrice || 0);
         }
 
         if (isAssignedOnStreet && !o.isArchived && statusStr !== "مؤرشف" && !o.isClosed && !isSettled) {
@@ -657,6 +665,16 @@ export default function Dashboard({
     return stat === "مرتجع بالمستودع" || stat === "مرتجع جزئي بالمستودع";
   });
 
+  // 5. Returned Orders Awaiting Settlement/Liquidation at the office (marked as return by courier but not physically checked-in/settled yet)
+  const pendingReturnSettlementOrders = allOrders.filter(o => {
+    if (o.isClosed || o.isArchived) return false;
+    const isSettled = o.isSettled === true || o.isSettled === "true" || o.is_settled === "true" || o.is_settled === true;
+    if (isSettled) return false;
+    const stat = (o.status || "").toString().trim();
+    const isReturn = ["مرتجع", "مرتجع جديد", "مرفوض", "فشل", "مسترجع", "مرتجع والعميل دفع الشحن", "مرتجع مدفوع الشحن"].includes(stat);
+    return isReturn;
+  });
+
   // -------------------------------------------------------------
   // FAST COORDINATION SUBMITTER (إرسال تحديث الأوردر للخلفية والذاكرة المحلية فوراً)
   // -------------------------------------------------------------
@@ -998,7 +1016,7 @@ export default function Dashboard({
           )}
 
           {/* Interactive Metric Cards Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
             
             {/* Card 1: Today's Orders */}
             <div 
@@ -1115,6 +1133,35 @@ export default function Dashboard({
               <div className="border-t border-white/5 pt-2 mt-2 flex justify-between items-center">
                 <div className="text-[9px] font-bold text-slate-400">المبلغ التقديري المتوقع</div>
                 <div className="text-xs font-black text-violet-300 font-mono">{(s.marketPendingValue || 0).toLocaleString("ar")} ج.م</div>
+              </div>
+            </div>
+
+            {/* Card 5: Returned Orders Awaiting Settlement */}
+            <div 
+              id="card-pending-return-settlement"
+              onClick={() => {
+                setModalSearch("");
+                setActiveDrilldown("pending_return_settlement");
+              }}
+              className="bg-slate-900 border border-white/5 hover:border-red-500/30 rounded-2xl p-6 relative overflow-hidden flex flex-col justify-between min-h-[143px] transition-all cursor-pointer group hover:scale-[1.02] active:scale-95 duration-200 hover:shadow-xl hover:shadow-red-950/5"
+              title="اضغط لتفقد المرتجعات المعلقة مع المناديب وجردها"
+            >
+              <div className="absolute top-2 left-2 text-red-500/5 group-hover:text-red-500/10 transition-colors">
+                <AlertTriangle size={52} className="rotate-12" />
+              </div>
+              <div>
+                <div className="text-3xl font-black text-red-400 font-mono flex items-baseline gap-1">
+                  <span>{s.pendingReturnSettlementCount ?? 0}</span> 
+                  <span className="text-xs font-bold text-slate-400">طلب</span>
+                </div>
+                <div className="text-[11px] font-black text-slate-200 mt-1 uppercase tracking-wider flex items-center gap-1 font-sans">
+                  <span>مرتجعات بانتظار التصفية في المكتب</span>
+                  <span className="text-[8px] px-1 bg-red-950 text-red-400 rounded">افحص 🔍</span>
+                </div>
+              </div>
+              <div className="border-t border-white/5 pt-2 mt-2 flex justify-between items-center">
+                <div className="text-[9px] font-extrabold text-slate-400">قيمة المرتجعات المعلقة</div>
+                <div className="text-xs font-black text-red-400 font-mono">{(s.pendingReturnSettlementValue || 0).toLocaleString("ar")} ج.م</div>
               </div>
             </div>
           </div>
@@ -1553,6 +1600,11 @@ export default function Dashboard({
                         <RefreshCw className="text-rose-400" size={16} />
                         <span>كشف عهدة المرتجعات بالمكتب (Supplier Return Stock)</span>
                       </>
+                    ) : activeDrilldown === "pending_return_settlement" ? (
+                      <>
+                        <AlertTriangle className="text-red-400" size={16} />
+                        <span>كشف الأوردرات المرتجعة بانتظار التصفية في المكتب</span>
+                      </>
                     ) : (
                       <>
                         <Package className="text-orange-400" size={16} />
@@ -1567,6 +1619,8 @@ export default function Dashboard({
                       ? `تم العثور على ${activeOperationalStockOrders.length} أوردرات نشطة بالمستودع لفرزها وإعادة جدولتها.`
                       : activeDrilldown === "supplier_returns"
                       ? `تم العثور على ${supplierReturnStockOrders.length} أوردرات مرتجعة وبواقي تسليم جزئي منتظرة للموردين.`
+                      : activeDrilldown === "pending_return_settlement"
+                      ? `تم العثور على ${pendingReturnSettlementOrders.length} أوردرات مرتجعة معلقة بالخارج وبانتظار تصفية عهدة المناديب.`
                       : `تم العثور على ${warehouseOrders.length} أوردرات في ذمة الرفوف داخل المستودع.`}
                   </p>
                 </div>
@@ -1602,6 +1656,7 @@ export default function Dashboard({
                     activeDrilldown === "street" ? streetCustodyOrders :
                     activeDrilldown === "active_operational" ? activeOperationalStockOrders :
                     activeDrilldown === "supplier_returns" ? supplierReturnStockOrders :
+                    activeDrilldown === "pending_return_settlement" ? pendingReturnSettlementOrders :
                     warehouseOrders;
                   const filtered = items.filter(o => {
                     if (!modalSearch.trim()) return true;

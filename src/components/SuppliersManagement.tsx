@@ -203,13 +203,15 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
     setIsLoading(true);
     setErrorMsg("");
     try {
-      // 1. Fetch directories
-      const resAcc = await apiCall("supplierAccounts", token);
+      // 1. Fetch directories in parallel
+      const [resAcc, resSup] = await Promise.all([
+        apiCall("supplierAccounts", token),
+        apiCall("getSuppliers", token)
+      ]);
+
       if (resAcc.ok && resAcc.accounts) {
         setAccounts(resAcc.accounts);
       }
-
-      const resSup = await apiCall("getSuppliers", token);
       if (resSup.ok && resSup.suppliers) {
         setAllRegisteredSuppliers(resSup.suppliers);
       }

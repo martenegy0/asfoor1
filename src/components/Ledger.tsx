@@ -85,29 +85,36 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
   // Populate drop-downs for Admin/Accountant
   async function fetchResourceLists() {
     try {
-      const resDetails = await apiCall("getSuppliers", token);
-      if (resDetails.ok && resDetails.suppliers) {
+      const promises: Promise<any>[] = [apiCall("getSuppliers", token)];
+      
+      const financialCheck = isFinancial || role === "مشرف";
+      if (financialCheck) {
+        promises.push(apiCall("supplierAccounts", token));
+        promises.push(apiCall("getCouriers", token));
+      }
+
+      const results = await Promise.all(promises);
+      
+      const resDetails = results[0];
+      if (resDetails && resDetails.ok && resDetails.suppliers) {
         setSuppliersDetails(resDetails.suppliers);
       }
-    } catch (e) {
-      console.error("Failed to load raw suppliers list", e);
-    }
 
-    if (isFinancial || role === "مشرف") {
-      try {
-        const resSuppliers = await apiCall("supplierAccounts", token);
-        if (resSuppliers.ok && resSuppliers.accounts && resSuppliers.accounts.length > 0) {
+      if (financialCheck) {
+        const resSuppliers = results[1];
+        if (resSuppliers && resSuppliers.ok && resSuppliers.accounts && resSuppliers.accounts.length > 0) {
           setAllSuppliers(resSuppliers.accounts);
           if (!selectedSupplier) setSelectedSupplier(resSuppliers.accounts[0].name);
         }
-        const resCouriers = await apiCall("getCouriers", token);
-        if (resCouriers.ok && resCouriers.couriers.length > 0) {
+        
+        const resCouriers = results[2];
+        if (resCouriers && resCouriers.ok && resCouriers.couriers && resCouriers.couriers.length > 0) {
           setAllCouriers(resCouriers.couriers);
           if (!selectedCourier) setSelectedCourier(resCouriers.couriers[0].name);
         }
-      } catch (err) {
-        console.error("Failed to load selectors lists", err);
       }
+    } catch (err) {
+      console.error("Failed to load resource lists in parallel", err);
     }
   }
 

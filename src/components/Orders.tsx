@@ -574,13 +574,13 @@ export default function Orders({ token, role, username, orders, setOrders, couri
         // Operational Daily Report Mode (groups New, Assigned, Pending, Coordinating statuses)
         if (!hasSearch && showOperationalReport) {
           const status = (o.status || "").toString().trim();
-          const isOperational = ["جديد", "تم الإسناد", "مسند", "تم الاسناد", "مؤجل", "لا يوجد رد", "العميل لم يقم بالرد", "تم رد العميل وجاري التنسيق", "العميل رد وجاري التسليم"].includes(status) || status.includes("رد وجاري");
+          const isOperational = ["جديد", "تم الإسناد", "مسند", "تم الاسناد", "مُسند جديد", "مؤجل", "لا يوجد رد", "العميل لم يقم بالرد", "تم رد العميل وجاري التنسيق", "العميل رد وجاري التسليم"].includes(status) || status.includes("رد وجاري");
           if (!isOperational) return false;
         } else if (!hasSearch && activeFilter !== "all") {
           // Logistic Status Categorization & Fallback mapping
           const status = (o.status || "").toString().trim();
           if (activeFilter === "جديد" && status !== "جديد") return false;
-          if (activeFilter === "مسند" && !["تم الإسناد", "مسند", "تم الاسناد"].includes(status)) return false;
+          if (activeFilter === "مسند" && !["تم الإسناد", "مسند", "تم الاسناد", "مُسند جديد"].includes(status)) return false;
           if (activeFilter === "خارج مع المندوب" && !["خارج مع المندوب", "خارج للتسليم", "خارج للتوصيل", "مع المندوب"].includes(status)) return false;
           if (activeFilter === "العميل رد وجاري التسليم" && !["تم رد العميل وجاري التنسيق", "العميل رد وجاري التسليم"].includes(status) && !status.includes("رد وجاري")) return false;
           if (activeFilter === "تم التسليم" && !["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(status)) return false;
@@ -698,7 +698,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
     dayOrders.forEach((o) => {
       const status = (o.status || "").toString().trim();
       if (status === "جديد") counts["جديد"]++;
-      else if (["تم الإسناد", "مسند", "تم الاسناد"].includes(status)) counts["مسند"]++;
+      else if (["تم الإسناد", "مسند", "تم الاسناد", "مُسند جديد"].includes(status)) counts["مسند"]++;
       else if (["خارج مع المندوب", "خارج للتسليم", "خارج للتوصيل", "مع المندوب"].includes(status)) counts["خارج مع المندوب"]++;
       else if (["تم رد العميل وجاري التنسيق", "العميل رد وجاري التسليم"].includes(status) || status.includes("رد وجاري")) counts["العميل رد وجاري التسليم"]++;
       else if (["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(status)) counts["تم التسليم"]++;
@@ -1324,6 +1324,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
     switch (status) {
       case "جديد": return "bg-blue-950/40 text-blue-400 border border-blue-900/30";
       case "تم الإسناد": return "bg-indigo-950/40 text-indigo-400 border border-indigo-900/30";
+      case "مُسند جديد": return "bg-sky-950/40 text-sky-400 border border-sky-900/30 font-bold";
       case "خارج مع المندوب": return "bg-amber-950/40 text-amber-500 border border-amber-900/30";
       case "تم التسليم": return "bg-emerald-950/40 text-emerald-400 border border-emerald-900/30";
       case "مرتجع": return "bg-red-950/40 text-red-550 border border-red-900/30";
@@ -2682,6 +2683,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                       <option value="جديد">جديد (إعادة للانتظار)</option>
                     )}
                     <option value="تم الإسناد">تم الإسناد</option>
+                    <option value="مُسند جديد">مُسند جديد</option>
                     <option value="خارج مع المندوب">خارج مع المندوب</option>
                     <option value="تم التسليم">تم التسليم (ناجح كاش)</option>
                     <option value="تسليم جزئي">تسليم جزئي</option>
@@ -3390,6 +3392,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                   className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-xl px-3 py-2.5 text-xs text-right"
                 >
                   <option value="">-- لا يتم تغيير الحالة --</option>
+                  <option value="مُسند جديد">مُسند جديد</option>
                   <option value="خارج مع المندوب">خارج مع المندوب</option>
                   <option value="تم التسليم">تم التسليم</option>
                   <option value="مرتجع">مرتجع</option>

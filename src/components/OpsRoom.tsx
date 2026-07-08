@@ -17,9 +17,10 @@ import {
   MessageSquare,
   Sparkles,
   ClipboardCheck,
-  Package
+  Package,
+  AlertTriangle
 } from "lucide-react";
-import { getTodayDateStr, normalizeDateToYMD, toWA, toWAUrl, getOrderWAMessage } from "../utils";
+import { getTodayDateStr, normalizeDateToYMD, toWA, toWAUrl, getOrderWAMessage, apiCall } from "../utils";
 import { motion, AnimatePresence } from "motion/react";
 import { Order } from "../types";
 
@@ -38,6 +39,57 @@ export default function OpsRoom({ token, role, username, orders, couriers, onRef
   const [selectedCourier, setSelectedCourier] = useState<string | null>(null);
   const [orderSearchTerm, setOrderSearchTerm] = useState<string>("");
   const [copiedTracking, setCopiedTracking] = useState<string | null>(null);
+
+  // States for settle all returns feature
+  const [showConfirmSettleAll, setShowConfirmSettleAll] = useState(false);
+  const [isSettlingAll, setIsSettlingAll] = useState(false);
+  const [settleAllFeedback, setSettleAllFeedback] = useState<string | null>(null);
+
+  // Pending returned orders of the selected courier on the selected date that are not fully settled yet
+  const pendingReturns = useMemo(() => {
+    if (!selectedCourier) return [];
+    const rawOrders = getCourierDailyOrders(selectedCourier, selectedDate);
+    return rawOrders.filter(o => {
+      const statusStr = (o.status || "").toString().trim();
+      const isAlreadySettled = ["تم تسليم المرتجع للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "تم تسليمه للمورد", "مرتجع تم تسليمه للمورد"].includes(statusStr);
+      if (isAlreadySettled) return false;
+      
+      const isReturn = ["مرتجع", "مرتجع جديد", "مرتجع بالمستودع", "مرفوض", "فشل", "مسترجع", "جاري الرجوع للمورد", "التسليم للمورد", "مرتجع والعميل دفع الشحن", "مرتجع مدفوع الشحن"].includes(statusStr) || statusStr.includes("مرتجع");
+      return isReturn;
+    });
+  }, [selectedCourier, selectedDate, orders]);
+
+  const handleSettleAllReturns = async () => {
+    if (!selectedCourier || pendingReturns.length === 0) return;
+    setIsSettlingAll(true);
+    setSettleAllFeedback("جاري تصفية كافة الأوردرات المرتجعة وتحديثها في قاعدة البيانات...");
+    
+    try {
+      const updatesList = pendingReturns.map(o => ({
+        tracking: o.tracking,
+        status: "تم تسليمه للمورد"
+      }));
+      
+      const res = await apiCall("updateOrdersStatusBulk", token, {
+        updates: updatesList
+      });
+      
+      if (res && res.ok) {
+        setSettleAllFeedback(`✅ نجحت تصفية ${res.done || updatesList.length} أوردر مرتجع بنجاح تام!`);
+        setTimeout(() => {
+          setShowConfirmSettleAll(false);
+          setSettleAllFeedback(null);
+          onRefresh();
+        }, 1500);
+      } else {
+        setSettleAllFeedback(`⚠️ فشلت التصفية: ${res?.error || "خطأ غير معروف في الخادم"}`);
+      }
+    } catch (err: any) {
+      setSettleAllFeedback(`⚠️ حدث خطأ أثناء الاتصال بالخادم: ${err?.message || err}`);
+    } finally {
+      setIsSettlingAll(false);
+    }
+  };
 
   // 1. Get filtered list of couriers based on search term (name or region)
   const filteredCouriers = useMemo(() => {
@@ -517,6 +569,19 @@ export default function OpsRoom({ token, role, username, orders, couriers, onRef
                   <span className="px-2.5 py-1 bg-red-950/40 text-red-400 border border-red-900/30 rounded-lg">
                     {inspectedStats.returned} مرتجع ومرفوض
                   </span>
+                  {pendingReturns.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSettleAllFeedback(null);
+                        setShowConfirmSettleAll(true);
+                      }}
+                      className="px-3 py-1 bg-red-600 hover:bg-red-500 text-slate-950 font-black text-[11px] rounded-lg cursor-pointer transition-all active:scale-95 duration-150 flex items-center gap-1.5 shrink-0 shadow-lg shadow-red-900/20"
+                      title="تصفية كافة الأوردرات المرتجعة لهذا المندوب دفعة واحدة"
+                    >
+                      <span>🤝 تصفية الكل</span>
+                    </button>
+                  )}
                   <span className="px-2.5 py-1 bg-blue-950/40 text-blue-400 border border-blue-900/30 rounded-lg">
                     {inspectedStats.active} معلق قيد التشغيل
                   </span>
@@ -660,6 +725,71 @@ export default function OpsRoom({ token, role, username, orders, couriers, onRef
                   className="px-5 py-2 bg-slate-900 hover:bg-slate-850 border border-white/6 hover:border-slate-800 text-slate-300 font-black text-xs rounded-xl cursor-pointer active:scale-95 transition-all"
                 >
                   إغلاق الشاشة
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Settle All Returns Confirmation Modal */}
+      <AnimatePresence>
+        {showConfirmSettleAll && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-[100] flex items-center justify-center p-4"
+            onClick={() => {
+              if (!isSettlingAll) setShowConfirmSettleAll(false);
+            }}
+          >
+            <motion.div
+              initial={{ scale: 0.95, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 20 }}
+              className="bg-slate-900 border border-white/10 w-full max-w-md rounded-2xl overflow-hidden shadow-2xl p-6 text-right space-y-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-2 text-red-500">
+                <AlertTriangle className="w-5 h-5 animate-bounce" />
+                <h4 className="text-sm font-black text-slate-100">تأكيد التصفية الجماعية للمرتجعات</h4>
+              </div>
+              
+              <p className="text-xs text-slate-300 leading-relaxed font-bold">
+                هل أنت متأكد من تصفية جميع الأوردرات المرتجعة المعلقة <span className="text-red-400 font-mono">({pendingReturns.length} أوردر)</span> للمندوب <span className="text-amber-500 font-extrabold">{selectedCourier}</span> دفعة واحدة؟
+              </p>
+              
+              <p className="text-[10px] text-slate-400 leading-normal">
+                * سيتم تحويل حالة هذه الأوردرات إلى <span className="text-emerald-400">"تم تسليم المرتجع للمورد"</span> وتصفية عهدة المندوب منها فوراً.
+              </p>
+
+              {settleAllFeedback && (
+                <div className="p-3 bg-slate-950 rounded-xl border border-white/5 text-[11px] font-black text-center text-amber-400">
+                  {settleAllFeedback}
+                </div>
+              )}
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  disabled={isSettlingAll}
+                  onClick={handleSettleAllReturns}
+                  className="flex-1 py-2 bg-red-600 hover:bg-red-500 text-slate-950 hover:text-slate-950 disabled:opacity-50 font-black text-xs rounded-xl cursor-pointer transition-colors flex items-center justify-center gap-1.5"
+                >
+                  {isSettlingAll ? (
+                    <span className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <span>نعم، تصفية الكل 🤝</span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  disabled={isSettlingAll}
+                  onClick={() => setShowConfirmSettleAll(false)}
+                  className="px-4 py-2 bg-slate-850 hover:bg-slate-800 text-slate-300 font-black text-xs rounded-xl cursor-pointer transition-colors"
+                >
+                  إلغاء
                 </button>
               </div>
             </motion.div>
