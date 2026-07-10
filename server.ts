@@ -410,7 +410,12 @@ function getSeededOrders(): any[] {
   ];
 }
 
+let cachedDB: any = null;
+
 function readDB(): any {
+  if (cachedDB) {
+    return cachedDB;
+  }
   let db: any;
   if (!fs.existsSync(DB_PATH)) {
     console.warn(
@@ -426,6 +431,9 @@ function readDB(): any {
       db = JSON.parse(JSON.stringify(DEFAULT_DB));
     }
   }
+
+  // Save parsed database in cache
+  cachedDB = db;
 
   // Auto seed rich mock records if orders lists are empty or mock size is small
   if (!db.orders || db.orders.length < 10) {
@@ -527,6 +535,7 @@ function readDB(): any {
 }
 
 function writeDB(data: any): void {
+  cachedDB = data;
   try {
     fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2), "utf-8");
   } catch (error) {
@@ -1704,7 +1713,14 @@ async function executeProxyRequest(
   ].includes(payload.action);
 
   if (isWrite) {
-    READ_CACHE.clear();
+    // SWR Optimization: Instead of clearing the cache completely (which causes subsequent reads
+    // to block for 5-10 seconds while contacting Google Sheets), we only mark existing cache entries
+    // as "stale" (by setting their timestamp back). This allows subsequent reads to serve cached data
+    // INSTANTLY (<1ms) while triggering background updates.
+    const nowMs = Date.now();
+    for (const [key, entry] of READ_CACHE.entries()) {
+      entry.timestamp = nowMs - (15000 + 5000); // 20 seconds ago (stale, but valid)
+    }
     ACTIVE_FETCHES.clear();
 
     try {
@@ -1751,9 +1767,12 @@ async function executeProxyRequest(
             payload.action,
             bgErr instanceof Error ? bgErr.message : bgErr,
           );
+        } finally {
+          ACTIVE_FETCHES.delete(cacheKey);
         }
       })();
-      // Do not await the background promise: let it complete in the background!
+      // Register bgPromise to prevent multiple concurrent background fetches for the same key
+      ACTIVE_FETCHES.set(cacheKey, bgPromise);
     }
 
     // Return the cached data instantly if it is younger than MAX_TTL

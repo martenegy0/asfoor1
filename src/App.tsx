@@ -24,6 +24,7 @@ export default function App() {
   const [orders, setOrders] = useState<any[]>([]);
   const [couriers, setCouriers] = useState<any[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
+  const bgFetchTimeoutRef = React.useRef<any>(null);
 
   // --- Treasury / Cashbox lists and states (Admin & Accountant only!) ---
   const [cashboxEntries, setCashboxEntries] = useState<any[]>([]);
@@ -277,6 +278,9 @@ export default function App() {
   // Dual data pull
   async function refreshAllData(tk = token, activeRole = role, activeUser = username) {
     if (!tk) return;
+    if (bgFetchTimeoutRef.current) {
+      clearTimeout(bgFetchTimeoutRef.current);
+    }
     setLoadingOrders(true);
     try {
       const cleanRole = (activeRole || "").toString().trim();
@@ -284,13 +288,12 @@ export default function App() {
       const isSupplier = cleanRole === "مورد" || cleanRole.includes("مورد");
       const isReturnsOfficer = cleanRole === "مسؤول مرتجعات" || cleanRole.includes("مرتجعات");
 
-      // 1. Fetch Orders List
-      // If user is Courier (Agent), todayOnly true is enforced to prevent lagging
+      // 1. Fetch Orders List (Stage 1: Fast initial load of active/current orders only)
       let rawOrders: any[] = [];
       try {
         const resOrd = await apiCall("getOrders", tk, { 
           todayOnly: isAgent,
-          includeArchived: !isAgent // Load archived orders for admin/ops/returns to allow unified search over both tables
+          includeArchived: false // Default Lazy Loading: Exclude archived database initially for instant response
         });
         if (resOrd && resOrd.ok) {
           rawOrders = resOrd.orders || [];
@@ -356,6 +359,73 @@ export default function App() {
       setQuickActive(orderList.filter((o: any) => o.status === "خارج مع المندوب" || o.status === "تم الإسناد").length);
       setQuickTotalCOD(cumulativeCollection);
       setQuickTodayCOD(todayCollection);
+
+      // Stage 2: Load archived orders in background if needed (e.g. for non-Agent roles to cover full historical searches)
+      if (!isAgent) {
+        bgFetchTimeoutRef.current = setTimeout(async () => {
+          try {
+            const resOrdFull = await apiCall("getOrders", tk, { 
+              todayOnly: isAgent,
+              includeArchived: true
+            });
+            if (resOrdFull && resOrdFull.ok) {
+              const fullRaw = resOrdFull.orders || [];
+              let fullOrderList = [...fullRaw];
+
+              if (isAgent) {
+                fullOrderList = fullOrderList.filter((o: any) => o.courier && o.courier.toString().trim().toLowerCase() === cleanUser);
+              } else if (isSupplier) {
+                fullOrderList = fullOrderList.filter((o: any) => o.supplier && o.supplier.toString().trim().toLowerCase() === cleanUser);
+              } else if (isReturnsOfficer) {
+                fullOrderList = fullOrderList.filter((o: any) => 
+                  [
+                    "مرتجع",
+                    "مرتجع بالمستودع",
+                    "مرتجع جديد",
+                    "مرتجع جاري تسليمه للمكتب",
+                    "جاري الرجوع للمورد",
+                    "تم تسليم المرتجع للمورد",
+                    "جاهز للتسليم للمورد",
+                    "مرتجع تم تسليمه للمورد",
+                    "تم تسليم المرتجع للمورد وتصفية حسابه",
+                    "مرتجع جزئي بالمستودع",
+                    "قيد المرتجع",
+                    "التسليم للمورد",
+                    "جاري تجهيز المرتجع"
+                  ].includes(o.status) || 
+                  o.returnQueueStatus ||
+                  (o.status || "").toString().includes("مرتجع") ||
+                  (o.status || "").toString().includes("للمورد")
+                );
+              }
+
+              setOrders(fullOrderList);
+
+              const fullDeliveredOrders = fullOrderList.filter((o: any) => o.status === "تم التسليم");
+              const fullCumulativeCollection = fullDeliveredOrders.reduce((sum, o) => {
+                return sum + (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
+              }, 0);
+
+              const fullTodayDeliveredOrders = fullDeliveredOrders.filter((o: any) => {
+                const delDate = o.delivDate || o.updatedAt || "";
+                return delDate.startsWith(todayStr);
+              });
+              const fullTodayCollection = fullTodayDeliveredOrders.reduce((sum, o) => {
+                return sum + (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
+              }, 0);
+
+              setQuickTotal(fullOrderList.length);
+              setQuickDelivered(fullDeliveredOrders.length);
+              setQuickReturned(fullOrderList.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length);
+              setQuickActive(fullOrderList.filter((o: any) => o.status === "خارج مع المندوب" || o.status === "تم الإسناد").length);
+              setQuickTotalCOD(fullCumulativeCollection);
+              setQuickTodayCOD(fullTodayCollection);
+            }
+          } catch (bgErr) {
+            console.warn("Background full orders fetch failed:", bgErr);
+          }
+        }, 600); // 600ms non-blocking staged delay
+      }
 
       // 1.5. If the logged user is a supplier, retrieve their authentic outstanding cumulative balance
       if (isSupplier) {

@@ -318,6 +318,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
   const [selectedDate, setSelectedDate] = useState<string>(getTodayDateStr());
   const [selectedSupplierFilter, setSelectedSupplierFilter] = useState<string>("");
   const [selectedCourierFilter, setSelectedCourierFilter] = useState<string>("");
+  const [selectedRegionFilter, setSelectedRegionFilter] = useState<string>("");
   const [showOperationalReport, setShowOperationalReport] = useState<boolean>(false);
   const [displayLimit, setDisplayLimit] = useState<number>(25);
   const [courierConfirmModal, setCourierConfirmModal] = useState<{
@@ -332,7 +333,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
 
   React.useEffect(() => {
     setDisplayLimit(25);
-  }, [search, activeFilter, selectedDate, selectedSupplierFilter, selectedCourierFilter, showOperationalReport]);
+  }, [search, activeFilter, selectedDate, selectedSupplierFilter, selectedCourierFilter, showOperationalReport, selectedRegionFilter]);
 
   const lastDays = React.useMemo(() => {
     const days = [];
@@ -571,6 +572,16 @@ export default function Orders({ token, role, username, orders, setOrders, couri
           }
         }
 
+        // Filter by selected region / governorate
+        if (selectedRegionFilter) {
+          const rVal = selectedRegionFilter.trim().toLowerCase();
+          const orderRegion = (o.region || "").toString().trim().toLowerCase();
+          const orderGov = (o.gov || "").toString().trim().toLowerCase();
+          if (!orderRegion.includes(rVal) && !orderGov.includes(rVal)) {
+            return false;
+          }
+        }
+
         // Operational Daily Report Mode (groups New, Assigned, Pending, Coordinating statuses)
         if (!hasSearch && showOperationalReport) {
           const status = (o.status || "").toString().trim();
@@ -637,7 +648,30 @@ export default function Orders({ token, role, username, orders, setOrders, couri
         const timeB = valB ? new Date(valB.replace(" ", "T")).getTime() : 0;
         return timeB - timeA;
       });
-  }, [roleFilteredOrders, isAgent, username, activeFilter, isSupplier, isReturnsOfficer, selectedDate, search, selectedSupplierFilter, selectedCourierFilter, showOperationalReport]);
+  }, [roleFilteredOrders, isAgent, username, activeFilter, isSupplier, isReturnsOfficer, selectedDate, search, selectedSupplierFilter, selectedCourierFilter, showOperationalReport, selectedRegionFilter]);
+
+  const availableRegions = React.useMemo(() => {
+    const regions = new Set<string>();
+    (orders || []).forEach((o: any) => {
+      if (o.region) regions.add(o.region.toString().trim());
+      if (o.gov) regions.add(o.gov.toString().trim());
+    });
+    return Array.from(regions).filter(Boolean).sort();
+  }, [orders]);
+
+  const availableStatuses = [
+    { key: "all", label: "🗓️ كافة الحالات" },
+    { key: "جديد", label: "🆕 جديد" },
+    { key: "مسند", label: "📋 مسند" },
+    { key: "خارج مع المندوب", label: "🚚 خارج مع المندوب" },
+    { key: "العميل رد وجاري التسليم", label: "📞 العميل رد وجاري التسليم" },
+    { key: "تم التسليم", label: "✅ تم التسليم" },
+    { key: "تسليم جزئي", label: "📦 تسليم جزئي" },
+    { key: "مؤجل", label: "⏳ مؤجل" },
+    { key: "العميل لا يرد", label: "📵 العميل لا يرد" },
+    { key: "مرتجع بالمستودع", label: "📦 مرتجع بالمستودع" },
+    { key: "تم تسليمه للمورد", label: "↩️ تم تسليمه للمورد" }
+  ];
 
   // Today's hold-ups / suspended orders ("معلقات اليوم") for agent/courier view
   const suspendedOrders = React.useMemo(() => {
@@ -2034,6 +2068,130 @@ export default function Orders({ token, role, username, orders, setOrders, couri
 
   return (
     <div className="font-sans text-right select-none space-y-4">
+      {/* 🔍 Advanced Filter Bar / شريط التصفية المتقدم */}
+      <div className="mx-4 p-4 bg-slate-900 border border-white/6 rounded-2xl space-y-4 text-right animate-fadeIn">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/5 pb-3">
+          <div className="flex items-center gap-2.5">
+            <span className="p-2 bg-amber-500/15 text-amber-500 rounded-xl text-xs shrink-0">🎛️</span>
+            <div>
+              <h3 className="text-xs font-black text-slate-100">بوابة الفلترة الذكية والتصفية المتقدمة</h3>
+              <p className="text-[10px] text-slate-400 font-medium mt-0.5">قم بتصفية الشحنات والبحث الفوري حسب المنطقة، الحالة، أو التاريخ دون إبطاء النظام</p>
+            </div>
+          </div>
+          
+          {(selectedRegionFilter || selectedDate !== "all" || activeFilter !== "all" || search.trim() || selectedSupplierFilter || selectedCourierFilter) && (
+            <button
+              onClick={() => {
+                setSelectedRegionFilter("");
+                setSelectedDate("all");
+                setActiveFilter("all");
+                setSearch("");
+                setSelectedSupplierFilter("");
+                setSelectedCourierFilter("");
+                setSelected(new Set());
+              }}
+              className="text-[10px] text-red-400 hover:text-red-300 transition-all font-black cursor-pointer border border-red-900/30 bg-red-950/20 px-3 py-1.5 rounded-xl flex items-center gap-1.5 self-end sm:self-auto"
+            >
+              <span>🔄 إعادة تعيين كافة الفلاتر</span>
+            </button>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 md:grid-cols-4 gap-3.5">
+          {/* 1. Date Filter Dropdown/Input */}
+          <div className="space-y-1.5 text-right">
+            <label className="text-[10px] font-black text-slate-400 block">📅 تاريخ الطلب</label>
+            <div className="flex gap-2">
+              <select
+                value={selectedDate === "all" ? "all" : lastDays.some(d => d.ymd === selectedDate) ? selectedDate : "custom"}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val === "all") {
+                    setSelectedDate("all");
+                  } else if (val === "custom") {
+                    setSelectedDate(getTodayDateStr());
+                  } else {
+                    setSelectedDate(val);
+                  }
+                  setSelected(new Set());
+                }}
+                className="flex-1 bg-slate-950 border border-white/6 rounded-xl py-2 px-3 text-xs font-bold text-slate-200 outline-none text-right focus:border-amber-500 cursor-pointer"
+              >
+                <option value="all">🗓️ جميع الأوقات (تصفية مفتوحة)</option>
+                {lastDays.map(d => (
+                  <option key={d.ymd} value={d.ymd}>{d.label} ({d.ymd})</option>
+                ))}
+                <option value="custom">📅 تاريخ مخصص...</option>
+              </select>
+
+              {(selectedDate !== "all" && !lastDays.some(d => d.ymd === selectedDate)) && (
+                <input
+                  type="date"
+                  value={selectedDate}
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      setSelectedDate(e.target.value);
+                    } else {
+                      setSelectedDate("all");
+                    }
+                    setSelected(new Set());
+                  }}
+                  className="bg-slate-950 border border-amber-500/40 rounded-xl py-1 px-2 text-xs font-mono text-amber-400 font-bold outline-none text-center cursor-pointer"
+                />
+              )}
+            </div>
+          </div>
+
+          {/* 2. Status Filter Dropdown */}
+          <div className="space-y-1.5 text-right">
+            <label className="text-[10px] font-black text-slate-400 block">⚙️ حالة الشحنة</label>
+            <select
+              value={activeFilter}
+              onChange={(e) => {
+                setActiveFilter(e.target.value);
+                setSelected(new Set());
+              }}
+              className="w-full bg-slate-950 border border-white/6 rounded-xl py-2 px-3 text-xs font-bold text-slate-200 outline-none text-right focus:border-amber-500 cursor-pointer"
+            >
+              {availableStatuses.map(s => (
+                <option key={s.key} value={s.key}>{s.label}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* 3. Region Filter Dropdown */}
+          <div className="space-y-1.5 text-right">
+            <label className="text-[10px] font-black text-slate-400 block">📍 المنطقة / المحافظة</label>
+            <select
+              value={selectedRegionFilter}
+              onChange={(e) => {
+                setSelectedRegionFilter(e.target.value);
+                setSelected(new Set());
+              }}
+              className="w-full bg-slate-950 border border-white/6 rounded-xl py-2 px-3 text-xs font-bold text-slate-200 outline-none text-right focus:border-amber-500 cursor-pointer"
+            >
+              <option value="">🗺️ كافة المناطق والمحافظات</option>
+              {availableRegions.map(reg => (
+                <option key={reg} value={reg}>📍 {reg}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* 4. Instant Stats */}
+          <div className="bg-slate-950 border border-white/4 rounded-xl p-3 flex flex-col justify-between sm:col-span-3 md:col-span-1">
+            <div className="flex items-center justify-between text-[10px] text-slate-400 font-bold">
+              <span>طرد مطابق للتصفية:</span>
+              <span className="font-mono text-amber-400 font-black text-xs">{visibleOrders.length}</span>
+            </div>
+            
+            <div className="flex items-center gap-1.5 mt-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span className="text-[9px] text-slate-400 font-medium leading-none">تحديث فوري دون تحميل</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* 📱 Mobile Interface (visible on block md:hidden) */}
       <MobileOrders
         orders={orders}
