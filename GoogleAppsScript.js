@@ -63,7 +63,7 @@ function doPost(e) {
     "addCourierAdjustment", "addCashbox", "addExpense", "addUser", 
     "registerUser", "updateUser", "updateCourier", "addDailyClosing",
     "settleCourierOrders", "settleSupplierDay", "requestWithdrawal",
-    "approveWithdrawal", "rejectWithdrawal"
+    "approveWithdrawal", "rejectWithdrawal", "instantCourierSettlement"
   ];
   
   var isWrite = writeActions.indexOf(action) !== -1;
@@ -151,6 +151,9 @@ function doPost(e) {
         break;
       case "settleCourierOrders":
         result = settleCourierOrders(sheets, requestData);
+        break;
+      case "instantCourierSettlement":
+        result = instantCourierSettlement(sheets, requestData);
         break;
       case "closeCourierMonth":
         result = closeCourierMonth(sheets, requestData);
@@ -3977,5 +3980,226 @@ function rejectWithdrawal(sheets, d) {
     return { ok: true, msg: "تم رفض طلب السحب رقم " + id + " بنجاح." };
   } catch (err) {
     return { ok: false, error: err.toString() };
+  }
+}
+
+function instantCourierSettlement(sheets, d) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+
+  try {
+    var courier = d.courier;
+    var cashAmount = d.cashAmount;
+    var commissionAmount = d.commissionAmount;
+    var adjustmentType = d.adjustmentType;
+    var adjustmentAmount = d.adjustmentAmount;
+    var adjustmentDesc = d.adjustmentDesc;
+    var currentUser = d.currentUser;
+
+    if (!courier) return { ok: false, error: "المندوب غير محدد" };
+
+    var nowCairoStr = now();
+
+    // 1. If cashAmount > 0, record deposit in cashbox (Main Treasury)
+    var cashVal = Number(cashAmount || 0);
+    if (cashVal > 0) {
+      appendToSheet(sheets.cashbox, ["date", "desc", "type", "amount", "ref", "addedBy"], {
+        date: nowCairoStr,
+        desc: "تصفية كاش وإغلاق العهدة اليومية للمندوب: " + courier,
+        type: "استلام عهدة مندوب",
+        amount: cashVal,
+        ref: courier,
+        addedBy: currentUser || "إدارة الحسابات"
+      });
+    }
+
+    // 2. Record commissions earned in courierLedger as a positive entry
+    var commVal = Number(commissionAmount || 0);
+    if (commVal > 0) {
+      appendToSheet(sheets.courierLedger, ["courier", "date", "type", "tracking", "amount", "desc"], {
+        courier: courier,
+        date: nowCairoStr,
+        type: "عمولة توصيل",
+        tracking: "—",
+        amount: commVal,
+        desc: "إجمالي العمولات المستحقة لليوم المصفى"
+      });
+    }
+
+    // 3. Record adjustment if adjustmentAmount > 0
+    var adjVal = Number(adjustmentAmount || 0);
+    if (adjVal > 0 && adjustmentType) {
+      appendToSheet(sheets.courierLedger, ["courier", "date", "type", "tracking", "amount", "desc"], {
+        courier: courier,
+        date: nowCairoStr,
+        type: adjustmentType,
+        tracking: "—",
+        amount: adjustmentType === "جزاء" ? -adjVal : adjVal,
+        desc: adjustmentDesc || ("تسوية يدوية مصاحبة للتصفية اليومية - " + adjustmentType)
+      });
+
+      if (adjustmentType === "مكافأة") {
+        appendToSheet(sheets.cashbox, ["date", "desc", "type", "amount", "ref", "addedBy"], {
+          date: nowCairoStr,
+          desc: "مكافأة منصرفة للمندوب مصاحبة للتصفية اليومية: " + courier + " - " + (adjustmentDesc || ""),
+          type: "صرف",
+          amount: adjVal,
+          ref: "BONUS",
+          addedBy: currentUser || "إدارة الحسابات"
+        });
+      } else if (adjustmentType === "جزاء") {
+        appendToSheet(sheets.cashbox, ["date", "desc", "type", "amount", "ref", "addedBy"], {
+          date: nowCairoStr,
+          desc: "تسوية خصم/جزاء مستقطع مصاحب للتصفية اليومية للمندوب: " + courier + " - " + (adjustmentDesc || ""),
+          type: "استلام عهدة مندوب",
+          amount: adjVal,
+          ref: "PENALTY",
+          addedBy: currentUser || "إدارة الحسابات"
+        });
+      }
+    }
+
+    // 4. Now perform logical status settlement and archiving of active orders in Google Sheets
+    var sheet = sheets.orders;
+    var lastRow = sheet.getLastRow();
+    var settledCount = 0;
+
+    if (lastRow > 1) {
+      var lastCol = sheet.getLastColumn();
+      var dataRange = sheet.getRange(1, 1, lastRow, lastCol);
+      var data = dataRange.getValues();
+      var headers = data[0].map(function(h) { return h ? h.toString().trim() : ""; });
+
+      var trackingIdx = headers.indexOf("tracking");
+      var courierIdx = headers.indexOf("courier");
+      var statusIdx = headers.indexOf("status");
+      var commissionIdx = headers.indexOf("commission");
+      var lastCourierIdx = headers.indexOf("lastCourier");
+      var lastCommissionIdx = headers.indexOf("lastCommission");
+      var courierSignatureIdx = headers.indexOf("courierSignature");
+      var updatedAtIdx = headers.indexOf("updatedAt");
+      var isSettledIdx = headers.indexOf("isSettled");
+      var is_settledIdx = headers.indexOf("is_settled");
+      var partialAmountIdx = headers.indexOf("partialAmount");
+      var actualReceivedCashIdx = headers.indexOf("actualReceivedCash");
+
+      if (trackingIdx !== -1 && courierIdx !== -1 && statusIdx !== -1) {
+        var searchCourier = courier.toString().trim().toLowerCase();
+        var archiveSheet = sheets.archivedOrders;
+        var archiveHeaders = archiveSheet.getRange(1, 1, 1, archiveSheet.getLastColumn()).getValues()[0].map(function(h) { return h ? h.toString().trim() : ""; });
+
+        for (var r = data.length - 1; r >= 1; r--) {
+          var rowCourier = data[r][courierIdx] ? data[r][courierIdx].toString().trim() : "";
+          if (rowCourier.toLowerCase() === searchCourier) {
+            var trackingVal = data[r][trackingIdx] ? data[r][trackingIdx].toString().trim() : "";
+            var oldStatus = data[r][statusIdx] ? data[r][statusIdx].toString().trim() : "";
+            var oldCommission = data[r][commissionIdx] ? Number(data[r][commissionIdx] || 0) : 0;
+            var rowIndex = r + 1;
+
+            var rowDataMap = {};
+            for (var c = 0; c < headers.length; c++) {
+              if (headers[c]) {
+                rowDataMap[headers[c]] = data[r][c];
+              }
+            }
+
+            rowDataMap["lastCourier"] = rowCourier;
+            rowDataMap["lastCommission"] = oldCommission;
+
+            var nextStatus = oldStatus;
+            if (oldStatus === "مرتجع" || oldStatus === "مرتجع جديد") {
+              nextStatus = "مرتجع بالمستودع";
+              rowDataMap["courierSignature"] = rowCourier + " (توقيع تصفية المرتجع الميداني ✍️)";
+            } else if (oldStatus === "تسليم جزئي" || oldStatus === "مرتجع جزئي" || oldStatus === "تسليم جزئي - معلق للجرد") {
+              nextStatus = "مرتجع جزئي بالمستودع";
+              rowDataMap["returnReason"] = "مرتجع جزئي متبقي";
+              rowDataMap["returnSubStatus"] = "بضاعة متبقية من تسليم جزئي";
+              rowDataMap["courierSignature"] = rowCourier + " (توقيع تصفية المرتجع الجزئي ✍️)";
+            } else if (oldStatus === "مؤجل" || oldStatus === "Delayed" || oldStatus === "مؤجل من المندوب" || oldStatus === "مؤجل بناءً على طلب العميل") {
+              nextStatus = "مؤجل بالمستودع";
+              rowDataMap["courierSignature"] = rowCourier + " (توقيع تصفية المؤجل ✍️)";
+            } else if (oldStatus === "لا يوجد رد" || oldStatus === "العميل لا يرد" || oldStatus === "No Answer" || oldStatus === "العميل لم يقم بالرد") {
+              nextStatus = "لا يوجد رد بالمستودع";
+              rowDataMap["courierSignature"] = rowCourier + " (توقيع تصفية عدم الرد ✍️)";
+            }
+
+            rowDataMap["status"] = nextStatus;
+            var isSuccessfullyClosed = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي"].indexOf(oldStatus) !== -1;
+            
+            if (isSuccessfullyClosed) {
+              rowDataMap["isSettled"] = "true";
+              rowDataMap["is_settled"] = "true";
+            } else {
+              rowDataMap["courier"] = "";
+              rowDataMap["commission"] = 0;
+              rowDataMap["isSettled"] = "false";
+              rowDataMap["is_settled"] = "false";
+            }
+            rowDataMap["updatedAt"] = nowCairoStr;
+
+            // Record status history event
+            appendToSheet(sheets.statusHistory, ["tracking", "oldStatus", "newStatus", "updatedBy", "dateTime"], {
+              tracking: trackingVal,
+              oldStatus: oldStatus,
+              newStatus: nextStatus,
+              updatedBy: currentUser || "إدارة",
+              dateTime: nowCairoStr
+            });
+
+            var shouldArchive = false;
+            if (nextStatus === "تم التسليم" || nextStatus === "تم التسليم بنجاح" || nextStatus === "تم التسليم (ناجح كاش)" || nextStatus === "التسليم للمورد" || nextStatus === "تم تسليم المرتجع للمورد") {
+              shouldArchive = true;
+            }
+
+            if (shouldArchive) {
+              var archiveRowValues = [];
+              for (var h = 0; h < archiveHeaders.length; h++) {
+                var headerName = archiveHeaders[h];
+                var val = rowDataMap[headerName] !== undefined ? rowDataMap[headerName] : "";
+                archiveRowValues.push(val);
+              }
+              archiveSheet.appendRow(archiveRowValues);
+              
+              var lastArchRow = archiveSheet.getLastRow();
+              var trColIdx = archiveHeaders.indexOf("tracking") + 1;
+              var confirmTracking = "";
+              if (trColIdx > 0 && lastArchRow > 0) {
+                confirmTracking = archiveSheet.getRange(lastArchRow, trColIdx).getValue().toString().trim();
+              }
+
+              if (confirmTracking.toUpperCase() === trackingVal.toUpperCase()) {
+                sheet.deleteRow(rowIndex);
+                settledCount++;
+              } else {
+                updateRowByObject(sheet, rowIndex, rowDataMap);
+              }
+            } else {
+              updateRowByObject(sheet, rowIndex, rowDataMap);
+            }
+          }
+        }
+      }
+    }
+
+    // Write audit log entry
+    appendToSheet(sheets.auditLog, ["user", "type", "dateTime", "oldVal", "newVal", "reason"], {
+      user: currentUser || "إدارة الحسابات",
+      type: "تصفية عهدة يومية فورية",
+      dateTime: nowCairoStr,
+      oldVal: "عامل: " + courier,
+      newVal: "كاش: " + cashVal + " | عمولة: " + commVal,
+      reason: "اعتماد تصفية الحساب وإغلاق العهدة اليومية"
+    });
+
+    return { 
+      ok: true, 
+      settled: settledCount, 
+      msg: "✅ تم اعتماد تصفية الحساب وإغلاق العهدة اليومية للمندوب بنجاح! تم إيداع مبلغ " + cashVal + " ج.م بالخزنة كأثر فوري، وتصفير العداد لليوم الجديد."
+    };
+
+  } catch (e) {
+    return { ok: false, error: "خطأ في سكريبت جوجل شيت أثناء التصفية الفورية: " + e.toString() };
+  } finally {
+    lock.releaseLock();
   }
 }

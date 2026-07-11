@@ -985,11 +985,11 @@ export default function App() {
         )}
 
         {activeTab === "supplier_ledger" && showSupplierLedgerTab && (
-          <Ledger token={token} role={role} user={username} activeLedgerMode="supplier" />
+          <Ledger token={token} role={role} user={username} activeLedgerMode="supplier" orders={orders} />
         )}
 
         {activeTab === "courier_ledger" && showCourierLedgerTab && (
-          <Ledger token={token} role={role} user={username} activeLedgerMode="courier" />
+          <Ledger token={token} role={role} user={username} activeLedgerMode="courier" orders={orders} />
         )}
 
         {/* --- CASHBOX INTEGRATION (Only visible to accountant & admin per rules) --- */}
