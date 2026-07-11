@@ -1767,11 +1767,78 @@ export default function Orders({ token, role, username, orders, setOrders, couri
           </div>
         )}
 
-        {o.notes && (
+        {o.notes ? (
           <div className="p-2.5 bg-slate-950/40 rounded-xl text-[11px] text-slate-400 border border-white/4 leading-relaxed mt-2">
             💬 <span className="font-bold">ملاحظات:</span> {o.notes}
           </div>
+        ) : (
+          <div className="p-2 bg-slate-950/20 rounded-xl text-[10px] text-slate-500 italic mt-2 text-center">
+            لا توجد ملاحظات مسجلة على هذه الشحنة بعد.
+          </div>
         )}
+
+        {/* نظام الملاحظات السياقية وبوابة الواتساب السريعة للاتصال والتصعيد */}
+        <div className="mt-3.5 pt-3 border-t border-white/4 space-y-2">
+          <div className="flex flex-col md:flex-row gap-2">
+            <input
+              id={`quick-note-input-${o.tracking}`}
+              type="text"
+              placeholder="اكتب نتيجة الاتصال أو ملاحظة جديدة لدمجها..."
+              className="flex-1 bg-slate-950/80 border border-white/6 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-amber-500 font-medium"
+            />
+            <div className="flex gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={async () => {
+                  const el = document.getElementById(`quick-note-input-${o.tracking}`) as HTMLInputElement | null;
+                  if (el && el.value.trim()) {
+                    const newNote = el.value.trim();
+                    const now = new Date();
+                    const timeStr = now.toLocaleTimeString("ar-EG", { hour: '2-digit', minute: '2-digit' });
+                    const appendedNotes = o.notes 
+                      ? `${o.notes} | ${newNote} (${username} ${timeStr})`
+                      : `${newNote} (${username} ${timeStr})`;
+                    
+                    el.disabled = true;
+                    try {
+                      await triggerStatusUpdate(o.tracking, o.status, o.returnShippingType || "", appendedNotes, o.delivDate || "");
+                      el.value = "";
+                    } catch (e) {
+                      console.error(e);
+                    } finally {
+                      el.disabled = false;
+                    }
+                  }
+                }}
+                className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-[10px] rounded-lg cursor-pointer transition active:scale-95"
+              >
+                حفظ الملاحظة
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const el = document.getElementById(`quick-note-input-${o.tracking}`) as HTMLInputElement | null;
+                  const noteVal = el ? el.value.trim() : "";
+                  const msg = `🚨 *طلب تصعيد فني بخصوص الشحنة* 🚨
+- *رقم الشحنة:* ${o.tracking}
+- *العميل:* ${o.customer || "—"}
+- *الهاتف:* ${o.phone || "—"}
+- *المحافظة/المنطقة:* ${o.gov || "—"} · ${o.region || "—"}
+- *المبلغ المالي:* ${o.totalCOD || o.prodPrice || 0} ج.م
+- *الموظف الحالي:* ${username} (${role})
+- *الملاحظة المكتوبة:* ${noteVal || o.notes || "لا توجد ملاحظة مكتوبة بعد"}`;
+                  
+                  const waUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`;
+                  window.open(waUrl, "_blank");
+                }}
+                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[10px] rounded-lg flex items-center gap-1 cursor-pointer transition active:scale-95"
+                title="تصعيد المشكلة للدعم الفني والواتساب مباشرة"
+              >
+                <span>📞</span> التصعيد للدعم
+              </button>
+            </div>
+          </div>
+        </div>
 
         {o.returnQueueStatus && (
           <div className="p-3 bg-purple-950/10 border border-purple-900/30 rounded-xl text-[11px] text-purple-300 flex items-center justify-between mt-2">
@@ -3376,11 +3443,78 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                     </div>
                   )}
 
-                  {o.notes && (
+                   {o.notes ? (
                     <div className="col-span-1 md:col-span-2 p-2.5 bg-slate-950/40 rounded-xl text-[11px] text-slate-400 border border-white/4 leading-relaxed">
                       💬 <span className="font-bold">ملاحظات:</span> {o.notes}
                     </div>
+                  ) : (
+                    <div className="col-span-1 md:col-span-2 p-2 bg-slate-950/20 rounded-xl text-[10px] text-slate-500 italic text-center">
+                      لا توجد ملاحظات مسجلة على هذه الشحنة بعد.
+                    </div>
                   )}
+
+                  {/* نظام الملاحظات السياقية وبوابة الواتساب السريعة للاتصال والتصعيد */}
+                  <div className="col-span-1 md:col-span-2 mt-1 pt-2 border-t border-white/4 space-y-2">
+                    <div className="flex flex-col md:flex-row gap-2">
+                      <input
+                        id={`quick-note-compact-${o.tracking}`}
+                        type="text"
+                        placeholder="اكتب نتيجة الاتصال أو ملاحظة جديدة لدمجها..."
+                        className="flex-1 bg-slate-950/80 border border-white/6 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-amber-500 font-medium"
+                      />
+                      <div className="flex gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const el = document.getElementById(`quick-note-compact-${o.tracking}`) as HTMLInputElement | null;
+                            if (el && el.value.trim()) {
+                              const newNote = el.value.trim();
+                              const now = new Date();
+                              const timeStr = now.toLocaleTimeString("ar-EG", { hour: '2-digit', minute: '2-digit' });
+                              const appendedNotes = o.notes 
+                                ? `${o.notes} | ${newNote} (${username} ${timeStr})`
+                                : `${newNote} (${username} ${timeStr})`;
+                              
+                              el.disabled = true;
+                              try {
+                                await triggerStatusUpdate(o.tracking, o.status, o.returnShippingType || "", appendedNotes, o.delivDate || "");
+                                el.value = "";
+                              } catch (e) {
+                                console.error(e);
+                              } finally {
+                                el.disabled = false;
+                              }
+                            }
+                          }}
+                          className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-[10px] rounded-lg cursor-pointer transition active:scale-95"
+                        >
+                          حفظ الملاحظة
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const el = document.getElementById(`quick-note-compact-${o.tracking}`) as HTMLInputElement | null;
+                            const noteVal = el ? el.value.trim() : "";
+                            const msg = `🚨 *طلب تصعيد فني بخصوص الشحنة* 🚨
+- *رقم الشحنة:* ${o.tracking}
+- *العميل:* ${o.customer || "—"}
+- *الهاتف:* ${o.phone || "—"}
+- *المحافظة/المنطقة:* ${o.gov || "—"} · ${o.region || "—"}
+- *المبلغ المالي:* ${o.totalCOD || o.prodPrice || 0} ج.م
+- *الموظف الحالي:* ${username} (${role})
+- *الملاحظة المكتوبة:* ${noteVal || o.notes || "لا توجد ملاحظة مكتوبة بعد"}`;
+                            
+                            const waUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`;
+                            window.open(waUrl, "_blank");
+                          }}
+                          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[10px] rounded-lg flex items-center gap-1 cursor-pointer transition active:scale-95"
+                          title="تصعيد المشكلة للدعم الفني والواتساب مباشرة"
+                        >
+                          <span>📞</span> التصعيد للدعم
+                        </button>
+                      </div>
+                    </div>
+                  </div>
 
                   {/* Returns management officer details (Return Queue indicators) */}
                   {o.returnQueueStatus && (

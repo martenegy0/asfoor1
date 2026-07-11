@@ -63,7 +63,8 @@ function doPost(e) {
     "addCourierAdjustment", "addCashbox", "addExpense", "addUser", 
     "registerUser", "updateUser", "updateCourier", "addDailyClosing",
     "settleCourierOrders", "settleSupplierDay", "requestWithdrawal",
-    "approveWithdrawal", "rejectWithdrawal", "instantCourierSettlement"
+    "approveWithdrawal", "rejectWithdrawal", "instantCourierSettlement",
+    "saveStaffPermissions"
   ];
   
   var isWrite = writeActions.indexOf(action) !== -1;
@@ -86,7 +87,7 @@ function doPost(e) {
 
     switch (action) {
       case "getOrders":
-        result = getOrders(sheets);
+        result = getOrders(sheets, requestData);
         break;
       case "getArchivedOrders":
         result = getArchivedOrders(sheets);
@@ -176,6 +177,12 @@ function doPost(e) {
       case "getUsers":
         result = getUsers(sheets);
         break;
+      case "getStaffPermissions":
+        result = getStaffPermissions(sheets, requestData);
+        break;
+      case "saveStaffPermissions":
+        result = saveStaffPermissions(sheets, requestData);
+        break;
       case "addUser":
       case "registerUser":
         result = registerUser(sheets, requestData);
@@ -187,7 +194,7 @@ function doPost(e) {
         result = checkPhone(sheets, requestData);
         break;
       case "getCouriers":
-        result = getCouriers(sheets);
+        result = getCouriers(sheets, requestData);
         break;
       case "updateCourier":
         result = updateCourier(sheets, requestData);
@@ -270,7 +277,8 @@ function initSheets() {
     courierLedger: ["courier", "date", "type", "tracking", "amount", "desc", "isSettledMonth"],
     auditLog: ["user", "type", "dateTime", "oldVal", "newVal", "reason"],
     dailyClosing: ["date", "deliveredCount", "returnedCount", "totalCOD", "shippingCost", "addedBy"],
-    withdrawalRequests: ["id", "date", "supplier", "amount", "paymentMethod", "status", "notes"]
+    withdrawalRequests: ["id", "date", "supplier", "amount", "paymentMethod", "status", "notes"],
+    staffPermissions: ["name", "phone", "role", "salary", "perm_dashboard", "perm_orders", "perm_ledger", "perm_expenses", "perm_staff", "supervisor_id"]
   };
 
   // 🔄 قائمة مرادفات أسماء الشيتات (عربي / إنجليزي) لربط الشيتات الموجودة مسبقاً ومنع تكرارها
@@ -288,7 +296,8 @@ function initSheets() {
     courierLedger: ["كشف حساب المناديب", "حساب المناديب", "حساب المندوبين", "courierLedger"],
     auditLog: ["سجل العمليات", "سجل التدقيق", "audit.log", "auditLog"],
     dailyClosing: ["التقفيل اليومي", "dailyClosing"],
-    withdrawalRequests: ["Withdrawal_Requests", "طلبات السحب", "withdrawalRequests"]
+    withdrawalRequests: ["Withdrawal_Requests", "طلبات السحب", "withdrawalRequests"],
+    staffPermissions: ["صلاحيات الموظفين", "Staff_Permissions", "staffPermissions", "staff_permissions"]
   };
 
   const sheets = {};
@@ -468,7 +477,7 @@ function updateRowByObject(sheet, rowIndex, obj) {
 // (أ) الدوال الرئيسية للتعامل مع الأوردرات
 // ───────────────────────────────────────────────
 
-function getOrders(sheets) {
+function getOrders(sheets, d) {
   var orders = getTableData(sheets.orders) || [];
   orders.forEach(function(o) { if (o) o.isArchived = false; });
   var archived = [];
@@ -495,6 +504,24 @@ function getOrders(sheets) {
       seen[track] = true;
       uniqueMerged.push(o);
     }
+  }
+
+  // Supervisor Hierarchy Filter in Google Sheets backend
+  if (d && d.currentRole === "مشرف") {
+    var supervisorName = (d.currentUser || "").toString().trim();
+    var staffPermissionsList = getTableData(sheets.staffPermissions) || [];
+    var supervisedNames = [];
+    for (var j = 0; j < staffPermissionsList.length; j++) {
+      var item = staffPermissionsList[j];
+      if ((item.supervisor_id || "").toString().trim() === supervisorName) {
+        supervisedNames.push((item.name || "").toString().trim());
+      }
+    }
+    // Filter merged orders list to show only those assigned to supervised couriers
+    uniqueMerged = uniqueMerged.filter(function(o) {
+      var oCou = (o.courier || "").toString().trim();
+      return oCou && supervisedNames.indexOf(oCou) !== -1;
+    });
   }
   
   return { ok: true, orders: uniqueMerged };
@@ -3307,16 +3334,36 @@ function checkPhone(sheets, d) {
   return { ok: true, exists: found };
 }
 
-function getCouriers(sheets) {
+function getCouriers(sheets, d) {
   const users = getTableData(sheets.users);
   const profiles = getTableData(sheets.couriers);
 
-  const activeUsersCouriers = users.filter(function(u) {
+  let activeUsersCouriers = users.filter(function(u) {
     const role = (u.role || "").toString().trim();
     const active = (u.active || "").toString().trim();
     const name = (u.name || "").toString().trim();
     return (role === "مندوب" || role.indexOf("مندوب") > -1 || name === "عصفور") && active !== "لا";
   });
+
+  // Supervisor Hierarchy Filter in Google Sheets backend
+  var cleanRole = d ? (d.currentRole || "").toString().trim() : "";
+  var currentUser = d ? (d.currentUser || "").toString().trim() : "";
+  var isAdmin = cleanRole === "مدير";
+
+  if (cleanRole === "مشرف" && currentUser) {
+    var staffPermissionsList = getTableData(sheets.staffPermissions) || [];
+    var supervisedNames = [];
+    for (var j = 0; j < staffPermissionsList.length; j++) {
+      var item = staffPermissionsList[j];
+      if ((item.supervisor_id || "").toString().trim() === currentUser) {
+        supervisedNames.push((item.name || "").toString().trim());
+      }
+    }
+    activeUsersCouriers = activeUsersCouriers.filter(function(u) {
+      var uName = (u.name || "").toString().trim();
+      return supervisedNames.indexOf(uName) !== -1;
+    });
+  }
 
   const list = activeUsersCouriers.map(function(u) {
     const profile = profiles.find(function(c) {
@@ -3327,9 +3374,9 @@ function getCouriers(sheets) {
       name: u.name,
       phone: profile.phone || "—",
       commission: profile.commission !== undefined ? profile.commission : 25,
-      salary: profile.salary !== undefined ? profile.salary : 3000,
+      salary: isAdmin ? (profile.salary !== undefined ? profile.salary : 3000) : null,
       region: profile.region || "—",
-      base_fixed_salary: profile.base_fixed_salary !== undefined ? profile.base_fixed_salary : (profile.salary || 3000),
+      base_fixed_salary: isAdmin ? (profile.base_fixed_salary !== undefined ? profile.base_fixed_salary : (profile.salary || 3000)) : null,
       commission_success: profile.commission_success !== undefined ? profile.commission_success : (profile.commission || 25),
       commission_return: profile.commission_return !== undefined ? profile.commission_return : 10
     };
@@ -4202,4 +4249,95 @@ function instantCourierSettlement(sheets, d) {
   } finally {
     lock.releaseLock();
   }
+}
+
+function getStaffPermissions(sheets, d) {
+  var list = getTableData(sheets.staffPermissions) || [];
+  var cleanRole = d ? (d.currentRole || "").toString().trim() : "";
+  var isAdmin = cleanRole === "مدير";
+  
+  // Salary protection: Hide salary from non-admins
+  var safeList = list.map(function(item) {
+    var copy = {};
+    for (var k in item) {
+      if (k === "salary" && !isAdmin) {
+        copy[k] = ""; // strip salary
+      } else {
+        copy[k] = item[k];
+      }
+    }
+    return copy;
+  });
+  
+  return { ok: true, staff: safeList };
+}
+
+function saveStaffPermissions(sheets, d) {
+  var staff = d.staff || {};
+  if (!staff.name) return { ok: false, error: "اسم الموظف مفقود" };
+  
+  // Find or create in staff_permissions
+  var staffIdx = findRowIndex(sheets.staffPermissions, "name", staff.name);
+  if (staffIdx === -1) {
+    appendToSheet(sheets.staffPermissions, ["name", "phone", "role", "salary", "perm_dashboard", "perm_orders", "perm_ledger", "perm_expenses", "perm_staff", "supervisor_id"], staff);
+  } else {
+    updateRowByObject(sheets.staffPermissions, staffIdx, staff);
+  }
+  
+  // Make sure they have a matching login user in `users`
+  var userIdx = findRowIndex(sheets.users, "name", staff.name);
+  var userObj = {
+    name: staff.name,
+    role: staff.role,
+    active: "نعم",
+    pass: d.pass || "123456", // default password if brand new
+    email: staff.name + "@friendplus.com",
+    perms: getPermissionsStringForStaff(staff)
+  };
+  
+  if (userIdx === -1) {
+    appendToSheet(sheets.users, ["name", "role", "pass", "active", "email", "perms"], userObj);
+  } else {
+    updateRowByObject(sheets.users, userIdx, {
+      role: staff.role,
+      perms: getPermissionsStringForStaff(staff)
+    });
+  }
+
+  // Also update or create courier profile if the role is "مندوب"
+  var roleLower = (staff.role || "").toString().toLowerCase();
+  if (roleLower === "مندوب" || roleLower.indexOf("مندوب") > -1) {
+    var courierIdx = findRowIndex(sheets.couriers, "name", staff.name);
+    var courierObj = {
+      name: staff.name,
+      phone: staff.phone,
+      salary: staff.salary || 3000,
+      base_fixed_salary: staff.salary || 3000,
+      commission: 25,
+      commission_success: 25,
+      commission_return: 10,
+      region: "—"
+    };
+    if (courierIdx === -1) {
+      appendToSheet(sheets.couriers, ["name", "phone", "commission", "salary", "region", "base_fixed_salary", "commission_success", "commission_return", "hire_date", "last_closing_date"], courierObj);
+    } else {
+      updateRowByObject(sheets.couriers, courierIdx, {
+        phone: staff.phone,
+        salary: staff.salary || 3000,
+        base_fixed_salary: staff.salary || 3000
+      });
+    }
+  }
+
+  return { ok: true, msg: "تم حفظ وتحديث بيانات وصلاحيات الموظف بنجاح" };
+}
+
+function getPermissionsStringForStaff(staff) {
+  var p = [];
+  if (staff.perm_dashboard === "true" || staff.perm_dashboard === true) p.push("لوحة القيادة");
+  if (staff.perm_orders === "true" || staff.perm_orders === true) p.push("الطلبات");
+  if (staff.perm_ledger === "true" || staff.perm_ledger === true) p.push("الحسابات");
+  if (staff.perm_expenses === "true" || staff.perm_expenses === true) p.push("المصاريف");
+  if (staff.perm_staff === "true" || staff.perm_staff === true) p.push("الموظفين");
+  return p.join(" · ") || "صلاحيات أساسية";
 }

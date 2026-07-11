@@ -11,6 +11,7 @@ import DailyClosing from "./components/DailyClosing";
 import SuppliersManagement from "./components/SuppliersManagement";
 import OpsRoom from "./components/OpsRoom";
 import ArchivePortal from "./components/ArchivePortal";
+import { StaffPermissions } from "./components/StaffPermissions";
 
 export default function App() {
   const [token, setToken] = useState("");
@@ -160,6 +161,24 @@ export default function App() {
     const savedRole = localStorage.getItem("fp_role");
     const savedPerms = localStorage.getItem("fp_perms");
 
+    const cachedOrders = localStorage.getItem("fp_orders_cache");
+    if (cachedOrders) {
+      try {
+        setOrders(JSON.parse(cachedOrders));
+      } catch (e) {
+        console.error("Failed to restore orders cache", e);
+      }
+    }
+
+    const cachedCouriers = localStorage.getItem("fp_couriers_cache");
+    if (cachedCouriers) {
+      try {
+        setCouriers(JSON.parse(cachedCouriers));
+      } catch (e) {
+        console.error("Failed to restore couriers cache", e);
+      }
+    }
+
     if (savedToken && savedUser && savedRole) {
       setToken(savedToken);
       setUsername(savedUser);
@@ -287,6 +306,7 @@ export default function App() {
       const isAgent = cleanRole === "مندوب" || cleanRole.includes("مندوب");
       const isSupplier = cleanRole === "مورد" || cleanRole.includes("مورد");
       const isReturnsOfficer = cleanRole === "مسؤول مرتجعات" || cleanRole.includes("مرتجعات");
+      const isSupervisor = cleanRole === "مشرف" || cleanRole.includes("مشرف");
 
       // 1. Fetch Orders List (Stage 1: Fast initial load of active/current orders only)
       let rawOrders: any[] = [];
@@ -310,6 +330,23 @@ export default function App() {
 
       if (isAgent) {
         orderList = orderList.filter((o: any) => o.courier && o.courier.toString().trim().toLowerCase() === cleanUser);
+      } else if (isSupervisor) {
+        const staffCached = localStorage.getItem("fp_staff_permissions_cache");
+        let supervisedNames: string[] = [];
+        if (staffCached) {
+          try {
+            const list = JSON.parse(staffCached);
+            supervisedNames = list
+              .filter((item: any) => (item.supervisor_id || "").toString().trim().toLowerCase() === cleanUser)
+              .map((item: any) => (item.name || "").toString().trim().toLowerCase());
+          } catch (e) {
+            console.error("Error reading staff cache for supervisor filter", e);
+          }
+        }
+        orderList = orderList.filter((o: any) => {
+          const oCou = (o.courier || "").toString().trim().toLowerCase();
+          return oCou && supervisedNames.includes(oCou);
+        });
       } else if (isSupplier) {
         orderList = orderList.filter((o: any) => o.supplier && o.supplier.toString().trim().toLowerCase() === cleanUser);
       } else if (isReturnsOfficer) {
@@ -336,6 +373,7 @@ export default function App() {
       }
 
       setOrders(orderList);
+      localStorage.setItem("fp_orders_cache", JSON.stringify(orderList));
 
       // Compute calculations programmatically (client-side)
       const deliveredOrders = orderList.filter((o: any) => o.status === "تم التسليم");
@@ -374,6 +412,23 @@ export default function App() {
 
               if (isAgent) {
                 fullOrderList = fullOrderList.filter((o: any) => o.courier && o.courier.toString().trim().toLowerCase() === cleanUser);
+              } else if (isSupervisor) {
+                const staffCached = localStorage.getItem("fp_staff_permissions_cache");
+                let supervisedNames: string[] = [];
+                if (staffCached) {
+                  try {
+                    const list = JSON.parse(staffCached);
+                    supervisedNames = list
+                      .filter((item: any) => (item.supervisor_id || "").toString().trim().toLowerCase() === cleanUser)
+                      .map((item: any) => (item.name || "").toString().trim().toLowerCase());
+                  } catch (e) {
+                    console.error("Error reading staff cache for lazy supervisor filter", e);
+                  }
+                }
+                fullOrderList = fullOrderList.filter((o: any) => {
+                  const oCou = (o.courier || "").toString().trim().toLowerCase();
+                  return oCou && supervisedNames.includes(oCou);
+                });
               } else if (isSupplier) {
                 fullOrderList = fullOrderList.filter((o: any) => o.supplier && o.supplier.toString().trim().toLowerCase() === cleanUser);
               } else if (isReturnsOfficer) {
@@ -400,6 +455,7 @@ export default function App() {
               }
 
               setOrders(fullOrderList);
+              localStorage.setItem("fp_orders_cache", JSON.stringify(fullOrderList));
 
               const fullDeliveredOrders = fullOrderList.filter((o: any) => o.status === "تم التسليم");
               const fullCumulativeCollection = fullDeliveredOrders.reduce((sum, o) => {
@@ -443,6 +499,7 @@ export default function App() {
       const resCourier = await apiCall("getCouriers", tk);
       if (resCourier.ok) {
         setCouriers(resCourier.couriers || []);
+        localStorage.setItem("fp_couriers_cache", JSON.stringify(resCourier.couriers || []));
       }
 
       // 3. Fetch specific financial lists if permitted
@@ -1166,82 +1223,14 @@ export default function App() {
           <DailyClosing token={token} role={role} user={username} orders={orders} />
         )}
 
-        {/* --- USERS MANAGEMENT TAB (Admin only per rules) --- */}
+        {/* --- USERS MANAGEMENT TAB (Odoo-Style RBAC & Hierarchy) --- */}
         {activeTab === "users" && showUsersTab && (
-          <div className="p-4 space-y-6 text-right">
-            <div className="flex items-center justify-between bg-slate-900 border border-white/6 p-4 rounded-xl">
-              <div>
-                <h3 className="text-xs font-black text-slate-100">👥 إدارة صلاحيات المستخدمين والمناديب</h3>
-                <p className="text-[10px] text-slate-500 mt-1">تفعيل أو إيقاف حسابات المناديب والمشرفين التابعين للشركة.</p>
-              </div>
-              <button
-                onClick={() => setAddUserModalOpen(true)}
-                className="px-3.5 py-2 bg-amber-500 text-slate-950 font-black text-xs rounded-xl cursor-pointer"
-              >
-                + إضافة مستخدم
-              </button>
-            </div>
-
-            <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 space-y-3">
-              {usersList.length === 0 ? (
-                <div className="text-center py-6 text-xs text-slate-500 animate-pulse">جاري تحميل سجلات المستخدمين...</div>
-              ) : (
-                usersList.map((u) => {
-                  const isActive = u.active === "نعم";
-                  return (
-                    <div
-                      key={u.row}
-                      className="bg-slate-950 border border-white/4 p-4 rounded-xl flex items-center justify-between hover:bg-slate-950/70"
-                    >
-                      <div>
-                        <div className="text-xs font-bold text-slate-100">
-                          {u.name}{" "}
-                          <span className="text-[10px] font-bold text-amber-500 bg-amber-950/20 px-1.5 py-0.5 rounded border border-amber-900/40 font-mono">
-                            {u.role}
-                          </span>
-                        </div>
-                        <div className="text-[10px] text-slate-500 mt-1 font-semibold leading-relaxed">
-                          الصلاحية الممنوحة: {u.perms || "صلاحيات محدودة"} · البريد: {u.email || "—"}
-                        </div>
-                      </div>
-
-                      <div className="flex gap-2 items-center">
-                        {u.role === "مندوب" && (
-                          <button
-                            onClick={() => {
-                              const courierItem = couriers.find((c: any) => c.name === u.name) || {};
-                              setSelectedCourierName(u.name);
-                              setCourierPhone(courierItem.phone || "");
-                              setCourierRegion(courierItem.region || "");
-                              setCourierBaseSalary(courierItem.base_fixed_salary !== undefined ? Number(courierItem.base_fixed_salary) : Number(courierItem.salary || 3000));
-                              setCourierCommissionSuccess(courierItem.commission_success !== undefined ? Number(courierItem.commission_success) : Number(courierItem.commission || 25));
-                              setCourierCommissionReturn(courierItem.commission_return !== undefined ? Number(courierItem.commission_return) : 10);
-                              setCourierHireDate(courierItem.hire_date || "");
-                              setCourierEditModalOpen(true);
-                            }}
-                            className="px-2.5 py-1.5 rounded-lg text-[10px] font-black cursor-pointer bg-slate-900 text-slate-300 border border-white/8 hover:text-white transition-colors"
-                          >
-                            ⚙️ جدول الراتب والعمولة
-                          </button>
-                        )}
-
-                        <button
-                          onClick={() => toggleUserActivation(u.row, u.name, u.active, u.role)}
-                          className={`px-3 py-1.5 rounded-lg text-[10px] font-black cursor-pointer transition-colors ${
-                            isActive
-                              ? "bg-red-950/20 text-red-500 border border-red-900/30 hover:bg-red-950/40"
-                              : "bg-emerald-950/20 text-emerald-400 border border-emerald-900/30 hover:bg-emerald-950/40"
-                          }`}
-                        >
-                          {isActive ? "إيقاف الحساب" : "تفعيل الحساب"}
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
+          <StaffPermissions
+            token={token}
+            role={role}
+            username={username}
+            onRefreshAll={() => refreshAllData()}
+          />
         )}
 
         {/* --- COURIERS FINANCIAL PROFILES TAB (Admin/Accountant/Supervisor only) --- */}

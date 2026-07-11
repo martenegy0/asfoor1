@@ -198,6 +198,7 @@ const DEFAULT_DB = {
   statusHistory: [],
   supplierLedger: [],
   courierLedger: [],
+  staffPermissions: [],
   settings: {
     COUNTER: 1005,
     COMPANY: "فريند بلس",
@@ -3311,6 +3312,18 @@ app.post("/api", async (req: Request, res: Response) => {
           }
         }
         ordersList = Array.from(uniqueLocalSeen.values());
+
+        const isSupervisor = currentRole === "مشرف" || (currentRole || "").toString().includes("مشرف");
+        if (isSupervisor) {
+          const staffPermissionsList = db.staffPermissions || [];
+          const supervisedNames = staffPermissionsList
+            .filter((item: any) => (item.supervisor_id || "").toString().trim().toLowerCase() === currentUser.trim().toLowerCase())
+            .map((item: any) => (item.name || "").toString().trim().toLowerCase());
+          ordersList = ordersList.filter((o: any) => {
+            const oCou = (o.courier || "").toString().trim().toLowerCase();
+            return oCou && supervisedNames.includes(oCou);
+          });
+        }
 
         // Apply role filter
         if (isAgent || isOps) {
@@ -6835,6 +6848,95 @@ app.post("/api", async (req: Request, res: Response) => {
         return ok(res, { msg: "تم تحديث بيانات المستخدم بنجاح" });
       }
 
+      case "getStaffPermissions": {
+        const list = db.staffPermissions || [];
+        const isAdmin = currentRole === "مدير";
+        
+        // Salary protection
+        const safeList = list.map((item: any) => {
+          const copy = { ...item };
+          if (!isAdmin) {
+            copy.salary = null;
+          }
+          return copy;
+        });
+        return ok(res, { staff: safeList });
+      }
+
+      case "saveStaffPermissions": {
+        if (currentRole !== "مدير") {
+          return err(res, "صلاحية حصرية لمدير النظام");
+        }
+        const staff = d.staff || {};
+        if (!staff.name) return err(res, "اسم الموظف مفقود");
+        
+        if (!db.staffPermissions) {
+          db.staffPermissions = [];
+        }
+        
+        const idx = db.staffPermissions.findIndex((item: any) => item.name.toString().trim() === staff.name.toString().trim());
+        if (idx === -1) {
+          db.staffPermissions.push(staff);
+        } else {
+          db.staffPermissions[idx] = { ...db.staffPermissions[idx], ...staff };
+        }
+        
+        // Make sure they have a matching login user in db.users
+        let uIdx = db.users.findIndex((item: any) => item.name.toString().trim() === staff.name.toString().trim());
+        
+        const getPermissionsStringForStaff = (s: any) => {
+          const p = [];
+          if (s.perm_dashboard === "true" || s.perm_dashboard === true) p.push("لوحة القيادة");
+          if (s.perm_orders === "true" || s.perm_orders === true) p.push("الطلبات");
+          if (s.perm_ledger === "true" || s.perm_ledger === true) p.push("الحسابات");
+          if (s.perm_expenses === "true" || s.perm_expenses === true) p.push("المصاريف");
+          if (s.perm_staff === "true" || s.perm_staff === true) p.push("الموظفين");
+          return p.join(" · ") || "صلاحيات أساسية";
+        };
+        
+        const userObj = {
+          name: staff.name.trim(),
+          role: staff.role,
+          pass: d.pass || "123456",
+          active: "نعم",
+          email: staff.name.trim() + "@friendplus.com",
+          perms: getPermissionsStringForStaff(staff)
+        };
+        
+        if (uIdx === -1) {
+          db.users.push(userObj);
+        } else {
+          db.users[uIdx].role = staff.role;
+          db.users[uIdx].perms = getPermissionsStringForStaff(staff);
+        }
+        
+        // Also update or create courier profile if the role is "مندوب"
+        const roleLower = (staff.role || "").toString().toLowerCase();
+        if (roleLower === "مندوب" || roleLower.includes("مندوب")) {
+          let cIdx = db.couriers.findIndex((item: any) => item.name.toString().trim() === staff.name.toString().trim());
+          const courierObj = {
+            name: staff.name.trim(),
+            phone: staff.phone || "",
+            salary: Number(staff.salary) || 3000,
+            base_fixed_salary: Number(staff.salary) || 3000,
+            commission: 25,
+            commission_success: 25,
+            commission_return: 10,
+            region: "—"
+          };
+          if (cIdx === -1) {
+            db.couriers.push(courierObj);
+          } else {
+            db.couriers[cIdx].phone = staff.phone || db.couriers[cIdx].phone;
+            db.couriers[cIdx].salary = Number(staff.salary) || db.couriers[cIdx].salary;
+            db.couriers[cIdx].base_fixed_salary = Number(staff.salary) || db.couriers[cIdx].base_fixed_salary;
+          }
+        }
+        
+        writeDB(db);
+        return ok(res, { msg: "تم حفظ وتحديث بيانات وصلاحيات الموظف بنجاح" });
+      }
+
       // ─────────────────────────────────────────────────────────────
       // PHONE NUMBER PRE-SCREEN CONTROLS
       // ─────────────────────────────────────────────────────────────
@@ -6861,13 +6963,28 @@ app.post("/api", async (req: Request, res: Response) => {
       // RESOURCE MANAGEMENT / STATIC ARRAYS
       // ─────────────────────────────────────────────────────────────
       case "getCouriers": {
-        const activeUsersCouriers = db.users.filter(
+        let activeUsersCouriers = db.users.filter(
           (u: any) =>
             ((u.role || "").toString().trim() === "مندوب" ||
               (u.role || "").toString().trim().indexOf("مندوب") > -1 ||
               (u.name || "").toString().trim() === "عصفور") &&
             u.active !== "لا",
         );
+
+        const isAdmin = currentRole === "مدير";
+        const isSupervisor = currentRole === "مشرف" || (currentRole || "").toString().includes("مشرف");
+
+        if (isSupervisor) {
+          const staffPermissionsList = db.staffPermissions || [];
+          const supervisedNames = staffPermissionsList
+            .filter((item: any) => (item.supervisor_id || "").toString().trim().toLowerCase() === currentUser.trim().toLowerCase())
+            .map((item: any) => (item.name || "").toString().trim().toLowerCase());
+          activeUsersCouriers = activeUsersCouriers.filter((u: any) => {
+            const uName = (u.name || "").toString().trim().toLowerCase();
+            return supervisedNames.includes(uName);
+          });
+        }
+
         const list = activeUsersCouriers.map((u: any) => {
           const profile =
             db.couriers.find(
@@ -6878,12 +6995,13 @@ app.post("/api", async (req: Request, res: Response) => {
             phone: profile.phone || "—",
             commission:
               profile.commission !== undefined ? profile.commission : 25,
-            salary: profile.salary !== undefined ? profile.salary : 3000,
+            salary: isAdmin ? (profile.salary !== undefined ? profile.salary : 3000) : null,
             region: profile.region || "—",
-            base_fixed_salary:
+            base_fixed_salary: isAdmin ? (
               profile.base_fixed_salary !== undefined
                 ? profile.base_fixed_salary
-                : profile.salary || 3000,
+                : profile.salary || 3000
+            ) : null,
             commission_success:
               profile.commission_success !== undefined
                 ? profile.commission_success
