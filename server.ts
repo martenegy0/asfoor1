@@ -3515,7 +3515,7 @@ app.post("/api", async (req: Request, res: Response) => {
         }
 
         const initialCourier = matchedCourier ? matchedCourier.name : "";
-        const initialStatus = matchedCourier ? "مُسند جديد" : "جديد";
+        const initialStatus = o.status || (matchedCourier ? "مُسند جديد" : "جاهز للاستلام من المورد");
         const initialCommission = matchedCourier ? Number(matchedCourier.commission || 25) : 0;
 
         const newOrder = {
@@ -3740,7 +3740,7 @@ app.post("/api", async (req: Request, res: Response) => {
           }
 
           const initialCourier = matchedCourier ? matchedCourier.name : "";
-          const initialStatus = matchedCourier ? "مُسند جديد" : "جديد";
+          const initialStatus = item.status || (matchedCourier ? "مُسند جديد" : "جاهز للاستلام من المورد");
           const initialCommission = matchedCourier ? Number(matchedCourier.commission || 25) : 0;
 
           const newObj = {
@@ -3836,6 +3836,7 @@ app.post("/api", async (req: Request, res: Response) => {
           delivDate,
           partialAmount,
           customerConfirmed,
+          actionLogText,
         } = d;
         if (!tracking || !rawStatus) return err(res, "معاملات مفقودة");
         let status = rawStatus;
@@ -4228,6 +4229,15 @@ app.post("/api", async (req: Request, res: Response) => {
           updatedBy: currentUser,
           dateTime: now(),
         });
+
+        if (actionLogText && actionLogText.toString().trim()) {
+          if (!order.actionLogs) order.actionLogs = [];
+          order.actionLogs.push({
+            dateTime: now(),
+            user: currentUser,
+            text: actionLogText.toString().trim()
+          });
+        }
 
         writeDB(db);
         return ok(res, {

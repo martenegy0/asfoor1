@@ -1,7 +1,19 @@
-import React, { useState, useRef } from "react";
-import { Search, MapPin, Phone, MessageSquare, Check, Truck, User, Calendar, Trash2, Edit3, ShieldAlert, ArrowLeftRight, Download, FileSpreadsheet, Upload, Loader2, XCircle } from "lucide-react";
+import React, { useState, useRef, useEffect } from "react";
+import { Search, MapPin, Phone, MessageSquare, Check, Truck, User, Calendar, Trash2, Edit3, ShieldAlert, ArrowLeftRight, Download, FileSpreadsheet, Upload, Loader2, XCircle, Printer, Camera, Layers } from "lucide-react";
 import { apiCall, toWA, toWAUrl, getOrderWAMessage, getTodayDateStr, normalizeDateToYMD } from "../utils";
+import { Html5Qrcode } from "html5-qrcode";
 import MobileOrders from "./MobileOrders";
+import { OrdersInMemorySQLIndex, useBackgroundAccounting, HighPerformanceVirtualList } from "../utils/performance";
+
+const OrderCard = React.memo(({ o, isSel, isExpanded, isLoadingHistory, historyList, render }: any) => {
+  return render(o);
+}, (prev, next) => {
+  return prev.isSel === next.isSel &&
+         prev.isExpanded === next.isExpanded &&
+         prev.isLoadingHistory === next.isLoadingHistory &&
+         prev.historyList === next.historyList &&
+         prev.o === next.o;
+});
 
 interface OrdersProps {
   token: string;
@@ -340,39 +352,22 @@ export default function Orders({ token, role, username, orders, setOrders, couri
     });
   }, [orders]);
 
+  // High-Speed In-Memory SQL Index (Blueprint v105)
+  const ordersIndex = React.useMemo(() => {
+    return new OrdersInMemorySQLIndex(deDuplicatedOrders);
+  }, [deDuplicatedOrders]);
+
   const roleFilteredOrders = React.useMemo(() => {
     const isSearching = search.trim().length > 0;
 
-    // Strip settled orders out of active daily operations completely, EXCEPT when searching
-    const activeUnsettledOrders = deDuplicatedOrders.filter((o: any) => {
-      if (isSearching) return true; // Include archived/settled orders during active search queries
-      const isS = o.isSettled === true || o.isSettled === "true" || o.is_settled === "true" || o.is_settled === true;
-      return !isS;
-    });
+    // Use our high-performance index to retrieve courier-specific orders in O(1)
+    if (isAgent) {
+      const courierOrders = ordersIndex.getByCourier(username);
+      if (isSearching) return courierOrders;
 
-    if (isReturnsOfficer) {
-      if (isSearching) return deDuplicatedOrders; // Allow returns officer to search all matching orders
-      return deDuplicatedOrders.filter((o: any) => {
-        const isHandedOver = ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status);
-        if (isHandedOver) {
-          const updateDateYMD = o.updatedAt ? normalizeDateToYMD(o.updatedAt) : o.retDate ? normalizeDateToYMD(o.retDate) : "";
-          return updateDateYMD === todayDateStr;
-        }
-        const isTargetStatus = ["مرتجع بالمستودع", "تسليم جزئي", "مرتجع", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "جاري الرجوع للمورد"].includes(o.status);
-        return isTargetStatus;
-      });
-    }
-
-    if (isAgent || isOps) {
-      return activeUnsettledOrders.filter((o: any) => {
-        if (isSearching) {
-          if (isAgent) {
-            // Courier can search all their assigned orders
-            const oCou = (o.courier || o.lastCourier || "").toString().trim().toLowerCase();
-            return oCou === username.trim().toLowerCase();
-          }
-          return true; // Ops can search everything including settled
-        }
+      return courierOrders.filter((o: any) => {
+        const isS = o.isSettled === true || o.isSettled === "true" || o.is_settled === "true" || o.is_settled === true;
+        if (isS) return false;
 
         const orderDateYMD = normalizeDateToYMD(o.orderDate || o.createdAt);
         const updateDateYMD = o.updatedAt ? normalizeDateToYMD(o.updatedAt) : "";
@@ -389,8 +384,58 @@ export default function Orders({ token, role, username, orders, setOrders, couri
         return activeOrUpdatedToday;
       });
     }
+
+    if (isSupplier) {
+      const supplierOrders = ordersIndex.getBySupplier(username);
+      if (isSearching) return supplierOrders;
+      return supplierOrders.filter((o: any) => {
+        const isS = o.isSettled === true || o.isSettled === "true" || o.is_settled === "true" || o.is_settled === true;
+        return !isS;
+      });
+    }
+
+    // Strip settled orders out of active daily operations completely, EXCEPT when searching
+    const activeUnsettledOrders = deDuplicatedOrders.filter((o: any) => {
+      if (isSearching) return true;
+      const isS = o.isSettled === true || o.isSettled === "true" || o.is_settled === "true" || o.is_settled === true;
+      return !isS;
+    });
+
+    if (isReturnsOfficer) {
+      if (isSearching) return deDuplicatedOrders;
+      return deDuplicatedOrders.filter((o: any) => {
+        const isHandedOver = ["تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تم تسليمه للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(o.status);
+        if (isHandedOver) {
+          const updateDateYMD = o.updatedAt ? normalizeDateToYMD(o.updatedAt) : o.retDate ? normalizeDateToYMD(o.retDate) : "";
+          return updateDateYMD === todayDateStr;
+        }
+        const isTargetStatus = ["مرتجع بالمستودع", "تسليم جزئي", "مرتجع", "مرتجع جديد", "جاري تجهيز المرتجع", "جاهز للتسليم للمورد", "جاري الرجوع للمورد"].includes(o.status);
+        return isTargetStatus;
+      });
+    }
+
+    if (isOps) {
+      return activeUnsettledOrders.filter((o: any) => {
+        if (isSearching) return true;
+
+        const orderDateYMD = normalizeDateToYMD(o.orderDate || o.createdAt);
+        const updateDateYMD = o.updatedAt ? normalizeDateToYMD(o.updatedAt) : "";
+        const delivDateYMD = o.delivDate ? normalizeDateToYMD(o.delivDate) : "";
+        const retDateYMD = o.retDate ? normalizeDateToYMD(o.retDate) : "";
+        const isClosedStatus = o.isClosed || ["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع والعميل دفع الشحن", "مرتجع مدفوع الشحن"].includes(o.status);
+        
+        if (isClosedStatus) {
+          const completedToday = (delivDateYMD === todayDateStr) || (retDateYMD === todayDateStr) || (updateDateYMD === todayDateStr);
+          if (!completedToday) return false;
+        }
+        
+        const activeOrUpdatedToday = (orderDateYMD === todayDateStr) || (updateDateYMD === todayDateStr) || !isClosedStatus;
+        return activeOrUpdatedToday;
+      });
+    }
+
     return activeUnsettledOrders;
-  }, [deDuplicatedOrders, isAgent, isReturnsOfficer, isOps, todayDateStr, search, username]);
+  }, [deDuplicatedOrders, ordersIndex, isAgent, isSupplier, isReturnsOfficer, isOps, todayDateStr, search, username]);
 
   const todayDeliveredOrders = roleFilteredOrders.filter((o: any) => {
     const isMyDeliv = o.courier === username && o.status === "تم التسليم";
@@ -467,6 +512,143 @@ export default function Orders({ token, role, username, orders, setOrders, couri
   }, []);
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  // --- New state for Bulk Printing & Scanning (Blueprint v100) ---
+  const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
+  const [scannerStatus, setScannerStatus] = useState("تم إيقاف الكاميرا");
+  const [scannerSelectedStatus, setScannerSelectedStatus] = useState("تم التسليم");
+  const [scannerSelectedCourier, setScannerSelectedCourier] = useState("");
+  const scannerRef = useRef<any>(null);
+
+  function playBeep() {
+    try {
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const oscillator = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+      oscillator.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(880, audioCtx.currentTime);
+      gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+      oscillator.start();
+      oscillator.stop(audioCtx.currentTime + 0.15);
+    } catch (e) {
+      console.log("Beep audio blocked:", e);
+    }
+  }
+
+  function toggleCameraScan() {
+    if (isScanning) {
+      if (scannerRef.current) {
+        scannerRef.current.stop().then(() => {
+          setIsScanning(false);
+          setScannerStatus("تم إيقاف الكاميرا");
+        }).catch((err: any) => {
+          console.error("Stop error:", err);
+          setIsScanning(false);
+        });
+      } else {
+        setIsScanning(false);
+      }
+    } else {
+      setIsScanning(true);
+      setScannerStatus("جاري تهيئة الكاميرا...");
+      setTimeout(() => {
+        try {
+          const html5QrcodeScanner = new Html5Qrcode("camera-scanner-view");
+          scannerRef.current = html5QrcodeScanner;
+          html5QrcodeScanner.start(
+            { facingMode: "environment" },
+            {
+              fps: 10,
+              qrbox: (width, height) => {
+                const minSide = Math.min(width, height);
+                return { width: Math.round(minSide * 0.7), height: Math.round(minSide * 0.7) };
+              }
+            },
+            (decodedText) => {
+              playBeep();
+              handleScannedBarcode(decodedText);
+            },
+            (errorMessage) => {
+              // Ignore scanning errors
+            }
+          ).then(() => {
+            setScannerStatus("✅ الكاميرا تعمل بنشاط، يرجى وضع الباركود أمام العدسة");
+          }).catch(err => {
+            setScannerStatus(`⚠️ فشل تشغيل الكاميرا: ${err.message || err}`);
+            setIsScanning(false);
+          });
+        } catch (e: any) {
+          setScannerStatus(`⚠️ خطأ في التهيئة: ${e.message || e}`);
+          setIsScanning(false);
+        }
+      }, 500);
+    }
+  }
+
+  async function handleScannedBarcode(trackingId: string) {
+    if (!trackingId) return;
+    const cleanId = trackingId.trim().toUpperCase();
+    setScannerStatus(`⏳ جاري معالجة وتحديث الشحنة: ${cleanId}...`);
+
+    const nowEgyptStr = new Date().toISOString().replace("T", " ").substring(0, 16);
+    const updatedFields: any = {
+      status: scannerSelectedStatus,
+      updatedAt: nowEgyptStr,
+    };
+    if (scannerSelectedStatus === "تم التسليم") {
+      updatedFields.delivDate = nowEgyptStr;
+    }
+    if (scannerSelectedCourier) {
+      updatedFields.courier = scannerSelectedCourier;
+    }
+
+    if (setOrders) {
+      setOrders(prev => {
+        const next = prev.map(o => o.tracking === cleanId ? { ...o, ...updatedFields } : o);
+        localStorage.setItem("fp_cached_orders", JSON.stringify(next));
+        return next;
+      });
+    }
+
+    try {
+      if (scannerSelectedCourier) {
+        await apiCall("assignCourier", token, { tracking: cleanId, courier: scannerSelectedCourier });
+      }
+      
+      const res = await apiCall("updateStatus", token, {
+        tracking: cleanId,
+        status: scannerSelectedStatus,
+        actionLogText: `[تحديث تلقائي بالمسح الضوئي الكاميرا] تم تغيير الحالة إلى [${scannerSelectedStatus}]` + (scannerSelectedCourier ? ` وإسنادها للمندوب: ${scannerSelectedCourier}` : "")
+      });
+      if (res && res.ok) {
+        setScannerStatus(`✅ تم تحديث الأوردر ${cleanId} بنجاح إلى [${scannerSelectedStatus}]!`);
+        playBeep();
+        onRefresh();
+      } else {
+        setScannerStatus(`⚠️ فشل التحديث بالخادم: ${res?.error || "خطأ مجهول"}`);
+        onRefresh();
+      }
+    } catch (err: any) {
+      setScannerStatus(`⚠️ خطأ في الشبكة أثناء تحديث ${cleanId}`);
+      onRefresh();
+    }
+  }
+
+  // Stop camera scanning when component unmounts to prevent leaks
+  useEffect(() => {
+    return () => {
+      if (scannerRef.current) {
+        try {
+          scannerRef.current.stop();
+        } catch (e) {
+          // ignore
+        }
+      }
+    };
+  }, []);
 
   // --- Modals States ---
   const [editOrder, setEditOrder] = useState<any>(null);
@@ -758,43 +940,19 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       });
   }, [roleFilteredOrders, isAgent, username, activeFilter, isSupplier, isReturnsOfficer, selectedDate, search, selectedSupplierFilter, selectedCourierFilter, showOperationalReport, selectedRegionFilter]);
 
-  // Real-time financial calculations for matching orders
-  const filteredFinancials = React.useMemo(() => {
-    if (!selectedSupplierFilter) return { keptGoodsValue: 0, settledValue: 0, netValue: 0 };
+  // Background Worker-based Accounting & KPI calculations (Blueprint v105)
+  const backgroundMetrics = useBackgroundAccounting(
+    deDuplicatedOrders,
+    selectedSupplierFilter,
+    username,
+    selectedDate,
+    rawCommission,
+    courierExpenses,
+    todayDateStr
+  );
 
-    let keptGoodsValue = 0;
-    let settledValue = 0;
-
-    visibleOrders.forEach((o: any) => {
-      const financials = getOrderFinancials(o);
-      const status = (o.status || "").toString().trim();
-      const isDelivered = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(status);
-      const isPartial = o.isPartial === true || o.isPartial === "true" || ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].includes(status);
-      
-      let oKept = 0;
-      if (isDelivered) {
-        oKept = financials.prodPrice;
-      } else if (isPartial) {
-        const shipPrice = Number(o.shipPrice || financials.shipPrice || 60);
-        let soldValue = Number(o.actualReceivedCash || o.partialAmount || o["المبلغ المحصل"] || 0);
-        if (isNaN(soldValue)) soldValue = 0;
-        oKept = Math.max(0, soldValue - shipPrice);
-      }
-
-      keptGoodsValue += oKept;
-
-      const isS = o.isSettled === true || o.isSettled === "true" || o.is_settled === true || o.is_settled === "true";
-      if (isS) {
-        settledValue += oKept;
-      }
-    });
-
-    return {
-      keptGoodsValue,
-      settledValue,
-      netValue: Math.max(0, keptGoodsValue - settledValue)
-    };
-  }, [visibleOrders, selectedSupplierFilter]);
+  const filteredFinancials = backgroundMetrics.supplierFinancials;
+  const backgroundCourierKPIs = backgroundMetrics.courierKPIs;
 
   const availableRegions = React.useMemo(() => {
     const regions = new Set<string>();
@@ -1774,6 +1932,27 @@ export default function Orders({ token, role, username, orders, setOrders, couri
         ) : (
           <div className="p-2 bg-slate-950/20 rounded-xl text-[10px] text-slate-500 italic mt-2 text-center">
             لا توجد ملاحظات مسجلة على هذه الشحنة بعد.
+          </div>
+        )}
+
+        {/* CS Action Logs Timeline (Blueprint v100) */}
+        {o.actionLogs && o.actionLogs.length > 0 && (
+          <div className="mt-3 bg-slate-950/60 p-3 rounded-xl border border-white/4 text-right space-y-2">
+            <span className="text-[10px] font-black text-amber-500 block">📊 جدول زمني للإجراءات وخدمة العملاء (CS Timeline):</span>
+            <div className="space-y-2 max-h-[160px] overflow-y-auto scrollbar-thin pl-1">
+              {o.actionLogs.map((log: any, lIdx: number) => (
+                <div key={lIdx} className="relative flex gap-2.5 items-start text-[10.5px] border-r-2 border-white/10 pr-3 pb-1">
+                  <div className="absolute right-[-5px] top-1.5 w-2.5 h-2.5 rounded-full bg-amber-500/80 shadow shadow-amber-500" />
+                  <div className="flex-1 space-y-0.5 leading-relaxed">
+                    <div className="flex items-center justify-between">
+                      <span className="font-extrabold text-slate-300">{log.user || "نظام لوجستي آلي"}</span>
+                      <span className="text-[9px] font-mono text-slate-500">{log.dateTime}</span>
+                    </div>
+                    <p className="text-slate-400 font-medium">{log.text}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
@@ -2777,58 +2956,122 @@ export default function Orders({ token, role, username, orders, setOrders, couri
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Quick Single Scan / Paste */}
-            <div className="bg-slate-950 p-4 rounded-xl border border-white/4 space-y-3 text-right">
-              <div className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest text-right">
-                🔍 إدخال يدوي سريع للباركود / رقم التتبع
-              </div>
-              
-              <div className="space-y-2">
-                <label className="block text-[10px] text-slate-400 text-right">رقم التتبع (مثال: FP-1002-26)</label>
-                <input
-                  type="text"
-                  value={reconcileBarcode}
-                  onChange={(e) => setReconcileBarcode(e.target.value)}
-                  placeholder="اكتب رقم التتبع أو الباركود هنا..."
-                  className="w-full bg-slate-900 border border-white/8 rounded-lg px-3 py-2 text-xs font-black text-slate-200 outline-none text-right focus:border-amber-500/30"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleSingleReconciliation();
-                  }}
-                />
-              </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Column 1: Quick Single Scan / Paste */}
+            <div className="bg-slate-950 p-4 rounded-xl border border-white/4 space-y-3 text-right flex flex-col justify-between">
+              <div>
+                <div className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest text-right">
+                  🔍 إدخال يدوي سريع للباركود / رقم التتبع
+                </div>
+                
+                <div className="space-y-2 mt-2">
+                  <label className="block text-[10px] text-slate-400 text-right">رقم التتبع (مثال: FP-1002-26)</label>
+                  <input
+                    type="text"
+                    value={reconcileBarcode}
+                    onChange={(e) => setReconcileBarcode(e.target.value)}
+                    placeholder="اكتب رقم التتبع أو الباركود هنا..."
+                    className="w-full bg-slate-900 border border-white/8 rounded-lg px-3 py-2 text-xs font-black text-slate-200 outline-none text-right focus:border-amber-500/30"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleSingleReconciliation();
+                    }}
+                  />
+                </div>
 
-              <div className="space-y-2">
-                <label className="block text-[10px] text-slate-400 text-right">الحالة المستهدفة المعمدة الشحن</label>
-                <select
-                  value={reconcileStatus}
-                  onChange={(e) => setReconcileStatus(e.target.value)}
-                  className="w-full bg-slate-900 border border-white/8 rounded-lg px-3 py-2 text-xs font-bold text-slate-200 outline-none text-right focus:border-amber-500/30"
-                >
-                  <option value="تم التسليم">✅ تم التسليم</option>
-                  <option value="مرتجع">↩️ مرتجع (تجهيز تصفية)</option>
-                  <option value="تم تسليم المرتجع للمورد">📦 تم تسليم المرتجع للمورد (استرداد المرتجعات)</option>
-                  <option value="خارج مع المندوب">🚚 خارج للتوصيل مع المندوب</option>
-                </select>
+                <div className="space-y-2 mt-2">
+                  <label className="block text-[10px] text-slate-400 text-right">الحالة المستهدفة المعمدة الشحن</label>
+                  <select
+                    value={reconcileStatus}
+                    onChange={(e) => setReconcileStatus(e.target.value)}
+                    className="w-full bg-slate-900 border border-white/8 rounded-lg px-3 py-2 text-xs font-bold text-slate-200 outline-none text-right focus:border-amber-500/30"
+                  >
+                    <option value="تم التسليم">✅ تم التسليم</option>
+                    <option value="مرتجع">↩️ مرتجع (تجهيز تصفية)</option>
+                    <option value="تم تسليم المرتجع للمورد">📦 تم تسليم المرتجع للمورد (استرداد المرتجعات)</option>
+                    <option value="خارج مع المندوب">🚚 خارج للتوصيل مع المندوب</option>
+                  </select>
+                </div>
               </div>
 
               <button
                 onClick={handleSingleReconciliation}
                 disabled={reconLoading}
-                className="w-full py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 font-black text-xs rounded-lg cursor-pointer transition-colors flex items-center justify-center gap-1"
+                className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 font-black text-xs rounded-lg cursor-pointer transition-colors flex items-center justify-center gap-1 mt-3"
               >
                 {reconLoading && <Loader2 size={13} className="animate-spin" />}
                 <span>تثبيت وتحديث حالة الشحنة آلياً</span>
               </button>
             </div>
 
-            {/* Quick Bulk CSV / Excel File */}
+            {/* Column 2: Live Barcode Camera Scanner */}
+            <div className="bg-slate-950 p-4 rounded-xl border border-amber-500/30 space-y-3 text-right flex flex-col justify-between">
+              <div>
+                <div className="text-[10px] font-extrabold text-amber-400 uppercase tracking-widest text-right flex items-center gap-1.5 justify-end">
+                  <span>📷 مسح الباركود بالكاميرا المباشرة</span>
+                  {isScanning && <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />}
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 mt-2">
+                  <div className="space-y-1">
+                    <label className="block text-[9px] text-slate-400 text-right">حالة المسح آلياً</label>
+                    <select
+                      value={scannerSelectedStatus}
+                      onChange={(e) => setScannerSelectedStatus(e.target.value)}
+                      className="w-full bg-slate-900 border border-white/8 rounded-lg px-2 py-1.5 text-[10px] font-bold text-slate-200 outline-none text-right"
+                    >
+                      <option value="تم التسليم">✅ تم التسليم</option>
+                      <option value="خارج مع المندوب">🚚 خارج للتوصيل</option>
+                      <option value="مرتجع">↩️ مرتجع</option>
+                      <option value="تم تسليم المرتجع للمورد">📦 تصفية للمورد</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="block text-[9px] text-slate-400 text-right">المندوب المصاحب</label>
+                    <select
+                      value={scannerSelectedCourier}
+                      onChange={(e) => setScannerSelectedCourier(e.target.value)}
+                      className="w-full bg-slate-900 border border-white/8 rounded-lg px-2 py-1.5 text-[10px] font-bold text-slate-200 outline-none text-right"
+                    >
+                      <option value="">-- بدون تعديل مندوب --</option>
+                      {couriers.map((c, idx) => (
+                        <option key={idx} value={c.name}>{c.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {isScanning && (
+                  <div className="mt-2 border border-white/10 rounded-xl overflow-hidden relative bg-black aspect-video max-h-[140px]">
+                    <div id="camera-scanner-view" className="w-full h-full" />
+                    <div className="absolute inset-0 border-2 border-amber-500/30 pointer-events-none rounded-xl animate-pulse flex items-center justify-center">
+                      <div className="w-3/4 h-0.5 bg-red-500 absolute animate-bounce" />
+                    </div>
+                  </div>
+                )}
+
+                <div className="text-[9.5px] font-medium text-slate-400 mt-2 bg-slate-900/60 p-2 rounded-lg text-center leading-relaxed">
+                  {scannerStatus}
+                </div>
+              </div>
+
+              <button
+                onClick={toggleCameraScan}
+                className={`w-full py-2.5 rounded-lg font-black text-xs cursor-pointer flex items-center justify-center gap-1.5 transition-colors mt-2 ${
+                  isScanning ? "bg-red-600 hover:bg-red-700 text-white" : "bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg shadow-indigo-600/10"
+                }`}
+              >
+                <Camera size={14} />
+                <span>{isScanning ? "إيقاف كاميرا الباركود ✕" : "تشغيل كاميرا المسح الضوئي المباشر"}</span>
+              </button>
+            </div>
+
+            {/* Column 3: Quick Bulk CSV / Excel File */}
             <div className="bg-slate-950 p-4 rounded-xl border border-white/4 flex flex-col justify-between space-y-3 text-right">
-              <div className="space-y-2">
+              <div>
                 <div className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest text-right">
                   📄 رفــع وتصفية ملف إكسيل / CSV دفعة واحدة
                 </div>
-                <p className="text-[9px] text-slate-400 leading-relaxed text-right font-bold">
+                <p className="text-[9px] text-slate-400 leading-relaxed text-right font-medium mt-1">
                   ارفع شيت CSV يتضمن قائمة أرقام التتبع في العمود الأول فقط. سيقوم النظام فوراً بتمرير وتحديث حالتها إلى [{reconcileStatus}] دفعة واحدة وبسرعة فائقة.
                 </p>
               </div>
@@ -2843,7 +3086,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                 <button
                   onClick={() => fileInputRef.current?.click()}
                   disabled={reconLoading}
-                  className="w-full py-3 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-slate-300 border border-white/8 rounded-lg text-xs font-bold flex items-center justify-center gap-2 cursor-pointer transition-all"
+                  className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-slate-300 border border-white/8 rounded-lg text-xs font-bold flex items-center justify-center gap-2 cursor-pointer transition-all"
                 >
                   <Upload size={14} />
                   <span>اختار شيت للتصفية (Excel/CSV)</span>
@@ -2870,66 +3113,25 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       {/* 📊 Courier Dashboard Operational Counters */}
       {isAgent && (() => {
         const targetDateStr = selectedDate === "all" ? getTodayDateStr() : selectedDate;
-        const myActiveOrders = roleFilteredOrders.filter((o) => o.courier === username);
-        const myTotal = myActiveOrders.filter((o) => normalizeDateToYMD(o.orderDate || o.createdAt) === targetDateStr).length;
 
-        const myDelivered = myActiveOrders.filter((o) => 
-          o.status === "تم التسليم" && 
-          o.delivDate && 
-          normalizeDateToYMD(o.delivDate) === targetDateStr
-        ).length;
+        const myTotal = backgroundCourierKPIs.myTotal;
+        const myDelivered = backgroundCourierKPIs.myDelivered;
+        const myPartialDelivered = backgroundCourierKPIs.myPartialDelivered;
+        const myReturned = backgroundCourierKPIs.myReturned;
+        const mySuspended = backgroundCourierKPIs.mySuspended;
+        const myRemaining = backgroundCourierKPIs.myRemaining;
 
-        const myPartialDelivered = myActiveOrders.filter((o) => 
-          (o.status === "تسليم جزئي" || o.status === "تسليم جزئي - معلق للجرد") && 
-          o.delivDate && 
-          normalizeDateToYMD(o.delivDate) === targetDateStr
-        ).length;
+        const totalCODDelivered = backgroundCourierKPIs.totalCODDelivered;
+        const totalCODPartial = backgroundCourierKPIs.totalCODPartial;
+        const totalShipReturnsPaidByCust = backgroundCourierKPIs.totalShipReturnsPaidByCust;
 
-        const myReturned = myActiveOrders.filter((o) => 
-          ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع بالمستودع", "مرتجع جزئي بالمستودع"].includes(o.status) && 
-          o.retDate && 
-          normalizeDateToYMD(o.retDate) === targetDateStr
-        ).length;
+        const totalReceivedCashInHand = backgroundCourierKPIs.totalReceivedCashInHand;
+        const totalCommissionsEarned = backgroundCourierKPIs.totalCommissionsEarned;
+        const netRequiredHandover = backgroundCourierKPIs.netRequiredHandover;
 
-        const mySuspended = myActiveOrders.filter((o) => 
-          ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد", "العميل لا يرد", "مؤجل بالمستودع", "لا يوجد رد بالمستودع"].includes(o.status) && 
-          o.updatedAt && 
-          normalizeDateToYMD(o.updatedAt) === targetDateStr
-        ).length;
-
-        const myRemaining = Math.max(0, myActiveOrders.filter((o) => 
-          !o.isClosed && 
-          o.is_settled !== "true" && 
-          o.isSettled !== true && 
-          !["تم التسليم", "تسليم جزئي", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي - معلق للجرد", "مرتجع", "مرتجع بالمستودع", "مرتجع جزئي بالمستودع", "تم تسليمه للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)
-        ).length);
-
-        // Financial Math
-        const agentDeliveredOrders = roleFilteredOrders.filter(o => o.courier === username && o.status === "تم التسليم" && o.delivDate && normalizeDateToYMD(o.delivDate) === targetDateStr);
-        const agentPartialDeliveredOrders = roleFilteredOrders.filter(o => 
-          o.courier === username && 
-          (o.status === "تسليم جزئي" || o.status === "تسليم جزئي - معلق للجرد") && 
-          o.delivDate && 
-          normalizeDateToYMD(o.delivDate) === targetDateStr
-        );
-        const agentCustomerPaidReturns = roleFilteredOrders.filter(o => 
-          o.courier === username && 
-          (o.status === "مرتجع والعميل دفع الشحن" || o.status === "مرتجع مدفوع الشحن" || (o.status === "مرتجع" && o.returnShippingType === "paid")) && 
-          o.retDate && 
-          normalizeDateToYMD(o.retDate) === targetDateStr
-        );
-        
-        const totalCODDelivered = agentDeliveredOrders.reduce((sum, o) => sum + Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0))), 0);
-        const totalCODPartial = agentPartialDeliveredOrders.reduce((sum, o) => {
-          const amt = o.partialAmount !== undefined && o.partialAmount !== null && o.partialAmount !== "" ? Number(o.partialAmount) :
-                      (o.actualReceivedCash !== undefined && o.actualReceivedCash !== null && o.actualReceivedCash !== "" ? Number(o.actualReceivedCash) : Number(o.totalCOD || 0));
-          return sum + amt;
-        }, 0);
-        const totalShipReturnsPaidByCust = agentCustomerPaidReturns.reduce((sum, o) => sum + Number(o.shipPrice || o.shipCost || 0), 0);
-        
-        const totalReceivedCashInHand = totalCODDelivered + totalCODPartial + totalShipReturnsPaidByCust;
-        const totalCommissionsEarned = ((agentDeliveredOrders.length + agentPartialDeliveredOrders.length) * rawCommission) + (agentCustomerPaidReturns.length * rawCommission);
-        const netRequiredHandover = totalReceivedCashInHand - totalCommissionsEarned - courierExpenses;
+        const agentDeliveredCount = backgroundCourierKPIs.agentDeliveredCount;
+        const agentPartialCount = backgroundCourierKPIs.agentPartialCount;
+        const agentPaidReturnsCount = backgroundCourierKPIs.agentPaidReturnsCount;
 
         return (
           <>
@@ -3013,7 +3215,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                   <span className="text-[10px] text-slate-400 font-bold block font-sans">🎖️ عمولات التسليم المكتسبة اليوم</span>
                   <div className="text-lg font-black text-indigo-400 font-mono">-{totalCommissionsEarned.toLocaleString("ar")} ج.م</div>
                   <p className="text-[9px] text-slate-500 leading-relaxed font-sans">
-                    إجمالي عمولة {agentDeliveredOrders.length} أوردر ناجح (عمولة الطلب: {rawCommission} ج.م)
+                    إجمالي عمولة {agentDeliveredCount} أوردر ناجح (عمولة الطلب: {rawCommission} ج.م)
                   </p>
                 </div>
 
@@ -3165,6 +3367,14 @@ export default function Orders({ token, role, username, orders, setOrders, couri
             >
               حفظ التعديل الجماعي لحساب {selected.size} طلبات
             </button>
+
+            <button
+              onClick={() => setIsPrintModalOpen(true)}
+              className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 border border-white/8 text-slate-100 font-bold text-xs rounded-xl cursor-pointer shadow-lg active:scale-98 transition-all text-center flex items-center justify-center gap-2 mt-2"
+            >
+              <Printer size={13} className="text-amber-500 animate-pulse" />
+              <span>🖨️ طباعة ملصقات حرارية جماعية ({selected.size})</span>
+            </button>
           </div>
         </div>
       )}
@@ -3271,20 +3481,22 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                 )}
               </div>
             ) : (
-              <>
-                {visibleOrders.slice(0, displayLimit).map((o) => renderOrderCard(o))}
-                {visibleOrders.length > displayLimit && (
-                  <div className="flex justify-center pt-4 pb-2">
-                    <button
-                      type="button"
-                      onClick={() => setDisplayLimit((prev) => prev + 25)}
-                      className="px-6 py-2.5 bg-slate-900 border border-white/10 hover:border-amber-500 text-slate-300 hover:text-amber-500 font-bold text-xs rounded-xl transition-all cursor-pointer shadow-md flex items-center gap-2"
-                    >
-                      🚀 عرض المزيد من الشحنات ({visibleOrders.length - displayLimit} متبقية)
-                    </button>
-                  </div>
+              <HighPerformanceVirtualList
+                items={visibleOrders}
+                itemHeight={320}
+                containerHeight="720px"
+                renderItem={(o: any) => (
+                  <OrderCard
+                    key={o.tracking}
+                    o={o}
+                    isSel={selected.has(o.tracking)}
+                    isExpanded={!!expandedHistories[o.tracking]}
+                    isLoadingHistory={!!loadingHistories[o.tracking]}
+                    historyList={histories[o.tracking]}
+                    render={renderOrderCard}
+                  />
                 )}
-              </>
+              />
             )}
           </div>
 
@@ -3301,7 +3513,17 @@ export default function Orders({ token, role, username, orders, setOrders, couri
             <p className="text-[10px] text-slate-400 font-bold">شحنات معلقة تحتاج إعادة محاولة لاحقاً</p>
           </div>
           <div className="px-4 space-y-4">
-            {suspendedOrders.map((o) => renderOrderCard(o))}
+            {suspendedOrders.map((o) => (
+              <OrderCard
+                key={o.tracking}
+                o={o}
+                isSel={selected.has(o.tracking)}
+                isExpanded={!!expandedHistories[o.tracking]}
+                isLoadingHistory={!!loadingHistories[o.tracking]}
+                historyList={histories[o.tracking]}
+                render={renderOrderCard}
+              />
+            ))}
           </div>
         </div>
       )}
@@ -3450,6 +3672,27 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                   ) : (
                     <div className="col-span-1 md:col-span-2 p-2 bg-slate-950/20 rounded-xl text-[10px] text-slate-500 italic text-center">
                       لا توجد ملاحظات مسجلة على هذه الشحنة بعد.
+                    </div>
+                  )}
+
+                  {/* CS Action Logs Timeline (Blueprint v100) */}
+                  {o.actionLogs && o.actionLogs.length > 0 && (
+                    <div className="col-span-1 md:col-span-2 bg-slate-950/60 p-3 rounded-xl border border-white/4 text-right space-y-2">
+                      <span className="text-[10px] font-black text-amber-500 block">📊 جدول زمني للإجراءات وخدمة العملاء (CS Timeline):</span>
+                      <div className="space-y-2 max-h-[160px] overflow-y-auto scrollbar-thin pl-1">
+                        {o.actionLogs.map((log: any, lIdx: number) => (
+                          <div key={lIdx} className="relative flex gap-2.5 items-start text-[10.5px] border-r-2 border-white/10 pr-3 pb-1">
+                            <div className="absolute right-[-5px] top-1.5 w-2.5 h-2.5 rounded-full bg-amber-500/80 shadow shadow-amber-500" />
+                            <div className="flex-1 space-y-0.5 leading-relaxed">
+                              <div className="flex items-center justify-between">
+                                <span className="font-extrabold text-slate-300">{log.user || "نظام لوجستي آلي"}</span>
+                                <span className="text-[9px] font-mono text-slate-500">{log.dateTime}</span>
+                              </div>
+                              <p className="text-slate-400 font-medium">{log.text}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
 
@@ -4226,6 +4469,165 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                 className="text-[11px] font-bold text-slate-500 hover:text-slate-300"
               >
                 تراجع وإغلاق النافذة
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- Thermal Bulk Labels Printing Modal Overlay (Blueprint v100) --- */}
+      {isPrintModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/95 backdrop-blur-md flex flex-col items-center justify-center p-4 z-50 overflow-y-auto no-print">
+          <div className="bg-slate-900 border border-white/10 rounded-2xl p-6 max-w-3xl w-full space-y-6 text-right font-sans shadow-2xl my-8">
+            <div className="flex items-center justify-between border-b border-white/6 pb-4">
+              <div className="flex items-center gap-2">
+                <Printer className="text-amber-500 animate-pulse" size={20} />
+                <h3 className="text-base font-black text-slate-150">بوابة طباعة الملصقات الحرارية الجماعية (4×6)</h3>
+              </div>
+              <button
+                onClick={() => setIsPrintModalOpen(false)}
+                className="text-slate-400 hover:text-slate-200 text-xs font-bold bg-white/5 hover:bg-white/10 px-3 py-1.5 rounded-lg transition-all"
+              >
+                إغلاق النافذة ✕
+              </button>
+            </div>
+
+            <div className="bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs p-3.5 rounded-xl leading-relaxed">
+              💡 سيقوم المتصفح تلقائياً بتهيئة الطباعة لجميع الملصقات المختارة (عدد الملصقات: {orders.filter(o => selected.has(o.tracking)).length}). يرجى التأكد من اختيار حجم الورق المناسب في معالج طباعة نظام التشغيل لديك (موصى به: 100mm × 150mm أو 4×6 بوصة).
+            </div>
+
+            {/* Print Area Preview */}
+            <div className="space-y-2">
+              <span className="text-[10px] font-black text-slate-400 block">معاينة مباشرة لشكل بوليصة الشحن الحرارية:</span>
+              <div className="border border-white/6 rounded-xl overflow-hidden bg-slate-950 p-4 max-h-[380px] overflow-y-auto space-y-6 scrollbar-thin">
+                
+                {/* Simulated/Printable Thermal Stickers Container */}
+                <div id="thermal-print-area" className="space-y-8 bg-slate-950 p-2">
+                  {orders.filter(o => selected.has(o.tracking)).map((o, idx) => (
+                    <div
+                      key={o.id || o.tracking || idx}
+                      className="print-page-break bg-white text-black p-5 border-4 border-black rounded-lg w-full max-w-[380px] mx-auto text-right font-sans space-y-4 shadow-lg select-none"
+                      style={{ direction: "rtl", minHeight: "520px" }}
+                    >
+                      {/* Logo and Brand Header */}
+                      <div className="flex items-center justify-between border-b-2 border-black pb-2">
+                        <span className="text-[13px] font-black tracking-wider text-black">ASFOOR LOGISTICS</span>
+                        <span className="text-[10px] font-black border border-black px-1.5 py-0.5 rounded">شحن سريع ⚡</span>
+                      </div>
+
+                      {/* Barcode and Tracking Number */}
+                      <div className="text-center space-y-1 py-1 border-b-2 border-dashed border-black">
+                        <div className="text-lg font-black tracking-widest font-mono select-all">{o.tracking}</div>
+                        <div className="flex justify-center py-1.5 bg-white">
+                          {/* Zero-dependency instant QR code generator URL */}
+                          <img
+                            src={`https://chart.googleapis.com/chart?chs=130x130&cht=qr&chl=${encodeURIComponent(o.tracking)}&choe=UTF-8`}
+                            alt="QR"
+                            className="w-24 h-24 border border-black/10 p-1"
+                            referrerPolicy="no-referrer"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Main COD Box */}
+                      <div className="bg-black text-white p-3 rounded-md text-center space-y-0.5">
+                        <span className="text-[9px] block uppercase font-bold text-slate-300">المبلغ المطلوب تحصيله (COD)</span>
+                        <span className="text-xl font-black tracking-tight font-sans">
+                          {(Number(o.totalCOD || o.price || 0)).toLocaleString("ar-EG")} جنيه مصري
+                        </span>
+                      </div>
+
+                      {/* Receiver and Sender Details */}
+                      <div className="grid grid-cols-1 gap-2.5 text-xs text-right leading-relaxed border-t-2 border-black pt-3">
+                        <div>
+                          <span className="font-bold underline text-[10px] text-gray-700 block">👤 المرسل إليه (المستلم):</span>
+                          <div className="font-black text-[13px] text-black mt-0.5">{o.customer || "غير مسجل"}</div>
+                          <div className="font-bold font-mono text-[12px]">{o.phone || "غير مسجل"}</div>
+                        </div>
+
+                        <div>
+                          <span className="font-bold underline text-[10px] text-gray-700 block">📍 عنوان التوصيل الفعلي:</span>
+                          <div className="font-black text-[12.5px] text-black mt-0.5">{o.gov || "القاهرة"} - {o.region || "وسط البلد"}</div>
+                          <div className="text-[11.5px] font-semibold text-gray-800">{o.address || "العنوان بالتفصيل"}</div>
+                        </div>
+
+                        <div className="border-t border-black/20 pt-2 flex items-center justify-between">
+                          <div>
+                            <span className="font-bold text-[9px] text-gray-500 block">📦 المورد (الراسل):</span>
+                            <span className="font-black text-[11px] text-black">{o.supplier || "غير مسجل"}</span>
+                          </div>
+                          <div className="text-left">
+                            <span className="font-bold text-[9px] text-gray-500 block">تاريخ الشحنة:</span>
+                            <span className="font-mono text-[10.5px] text-black">{o.orderDate || o.createdAt?.split(" ")[0] || "-"}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Shipping Instruction & Brand Footer */}
+                      <div className="border-t-2 border-black pt-2 text-center">
+                        {o.notes && (
+                          <div className="bg-gray-150 p-1.5 rounded text-[10px] font-bold text-gray-800 mb-2 leading-relaxed text-right border border-black/10">
+                            💬 ملحوظة: {o.notes}
+                          </div>
+                        )}
+                        <p className="text-[9px] font-black text-black">
+                          🚚 يرجى فحص الطرد بحضور المندوب - شكراً لتعاملكم معنا!
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+
+                </div>
+              </div>
+            </div>
+
+            {/* Custom Print Media Styles Injection */}
+            <style>{`
+              @media print {
+                body * {
+                  visibility: hidden !important;
+                }
+                #thermal-print-area, #thermal-print-area * {
+                  visibility: visible !important;
+                }
+                #thermal-print-area {
+                  position: absolute !important;
+                  left: 0 !important;
+                  top: 0 !important;
+                  width: 100% !important;
+                  background: white !important;
+                  color: black !important;
+                  margin: 0 !important;
+                  padding: 0 !important;
+                }
+                .no-print {
+                  display: none !important;
+                }
+                .print-page-break {
+                  page-break-after: always !important;
+                  break-after: page !important;
+                  border: none !important;
+                  box-shadow: none !important;
+                  margin-bottom: 0 !important;
+                  padding-bottom: 10mm !important;
+                }
+              }
+            `}</style>
+
+            {/* Modal Footer */}
+            <div className="flex gap-2.5 pt-4 border-t border-white/6 justify-end">
+              <button
+                onClick={() => window.print()}
+                className="px-6 py-3 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black rounded-xl text-xs flex items-center gap-2 transition-transform active:scale-[0.98] cursor-pointer"
+              >
+                <Printer size={14} />
+                <span>🖨️ ابدأ طباعة الملصقات الحرارية الآن</span>
+              </button>
+              <button
+                onClick={() => setIsPrintModalOpen(false)}
+                className="px-5 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl text-xs cursor-pointer"
+              >
+                رجوع
               </button>
             </div>
           </div>

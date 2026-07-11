@@ -49,6 +49,7 @@ export interface Order {
   returnShippingType?: 'paid' | 'unpaid' | '';
   returnQueueStatus?: string;
   returnQueueAgent?: string;
+  actionLogs?: { dateTime: string; user: string; text: string; }[];
 }
 
 export interface Expense {
