@@ -39,11 +39,61 @@ export default function OpsRoom({ token, role, username, orders, couriers, onRef
   const [selectedCourier, setSelectedCourier] = useState<string | null>(null);
   const [orderSearchTerm, setOrderSearchTerm] = useState<string>("");
   const [copiedTracking, setCopiedTracking] = useState<string | null>(null);
+  const [selectedMapRegion, setSelectedMapRegion] = useState<string | null>(null);
 
   // States for settle all returns feature
   const [showConfirmSettleAll, setShowConfirmSettleAll] = useState(false);
   const [isSettlingAll, setIsSettlingAll] = useState(false);
   const [settleAllFeedback, setSettleAllFeedback] = useState<string | null>(null);
+
+  // 1. Map configurations for major Egyptian delivery zones
+  const regionConfig = useMemo(() => [
+    {
+      id: "cairo",
+      name: "القاهرة والجيزة",
+      searchKeys: ["القاهرة", "الجيزة", "حلوان", "أكتوبر", "قليوبية", "شبرا", "فيصل", "هرم", "التجمع", "مدينة نصر", "عين شمس", "المرج"],
+      x: 135, y: 110,
+      color: "from-amber-400 to-amber-600",
+      accent: "amber",
+      svgPath: "M 115,95 C 130,85 155,85 170,100 C 175,115 160,135 145,130 C 130,125 110,110 115,95 Z"
+    },
+    {
+      id: "alex",
+      name: "الإسكندرية والساحل",
+      searchKeys: ["الإسكندرية", "الاسكندرية", "البحيرة", "مطروح", "الساحل", "دمنهور"],
+      x: 60, y: 55,
+      color: "from-sky-400 to-sky-600",
+      accent: "sky",
+      svgPath: "M 40,50 C 65,40 85,50 85,70 C 80,85 55,90 45,80 C 35,70 35,60 40,50 Z"
+    },
+    {
+      id: "delta",
+      name: "الدلتا والوجه البحري",
+      searchKeys: ["طنطا", "المحلة", "المنصورة", "الغربية", "الدقهلية", "الشرقية", "المنوفية", "دمياط", "كفر الشيخ", "الزقازيق", "بنها", "شبين", "كفرالشيخ"],
+      x: 110, y: 50,
+      color: "from-emerald-400 to-emerald-600",
+      accent: "emerald",
+      svgPath: "M 90,45 C 105,35 125,35 135,50 C 135,65 115,80 100,75 C 85,70 85,55 90,45 Z"
+    },
+    {
+      id: "canal",
+      name: "مدن القناة وسيناء",
+      searchKeys: ["السويس", "بورسعيد", "الإسماعيلية", "الاسماعيلية", "سيناء", "العريش", "شرم"],
+      x: 185, y: 70,
+      color: "from-purple-400 to-purple-600",
+      accent: "purple",
+      svgPath: "M 145,55 C 165,45 195,50 205,70 C 205,90 185,100 165,95 C 150,90 140,70 145,55 Z"
+    },
+    {
+      id: "south",
+      name: "الصعيد والوجه القبلي",
+      searchKeys: ["الفيوم", "بني سويف", "المنيا", "أسيوط", "سوهاج", "قنا", "الأقصر", "أسوان", "الصعيد", "قنا", "الاقصر", "اسوان"],
+      x: 125, y: 165,
+      color: "from-rose-400 to-rose-600",
+      accent: "rose",
+      svgPath: "M 110,130 C 120,125 135,130 145,145 C 145,165 130,190 115,185 C 105,180 100,150 110,130 Z"
+    }
+  ], []);
 
   // Pending returned orders of the selected courier on the selected date that are not fully settled yet
   const pendingReturns = useMemo(() => {
@@ -91,14 +141,22 @@ export default function OpsRoom({ token, role, username, orders, couriers, onRef
     }
   };
 
-  // 1. Get filtered list of couriers based on search term (name or region)
+  // 1. Get filtered list of couriers based on search term (name or region) and map selection
   const filteredCouriers = useMemo(() => {
     return couriers.filter(c => {
+      if (selectedMapRegion) {
+        const rConf = regionConfig.find(r => r.id === selectedMapRegion);
+        if (rConf) {
+          const cRegion = (c.region || "").toLowerCase();
+          const belongs = rConf.searchKeys.some(key => cRegion.includes(key.toLowerCase()));
+          if (!belongs) return false;
+        }
+      }
       const nameMatch = (c.name || "").toLowerCase().includes(searchTerm.toLowerCase());
       const regionMatch = (c.region || "").toLowerCase().includes(searchTerm.toLowerCase());
       return nameMatch || regionMatch;
     });
-  }, [couriers, searchTerm]);
+  }, [couriers, searchTerm, selectedMapRegion, regionConfig]);
 
   // 2. Map orders for active calculations of the selected date
   // "ماذا يوجد في حقيبة المندوب لليوم الحالي حصرياً"
@@ -144,6 +202,43 @@ export default function OpsRoom({ token, role, username, orders, couriers, onRef
     return { totalOrders, totalCash, totalShipFees, activeRidersCount };
   }, [couriers, orders, selectedDate]);
 
+  // Compute dynamic stats per region for the active map mockup
+  const regionalData = useMemo(() => {
+    return regionConfig.map(region => {
+      // Find couriers in this region
+      const matchingCouriers = couriers.filter(c => {
+        const cRegion = (c.region || "").toLowerCase();
+        return region.searchKeys.some(key => cRegion.includes(key.toLowerCase()));
+      });
+
+      // Find all orders for these couriers on the selected date
+      let regionOrdersCount = 0;
+      let regionActiveCount = 0;
+      let regionDeliveredCount = 0;
+      let regionCash = 0;
+
+      matchingCouriers.forEach(c => {
+        const riderOrders = getCourierDailyOrders(c.name, selectedDate);
+        regionOrdersCount += riderOrders.length;
+        regionActiveCount += riderOrders.filter(o => o.status === "خارج مع المندوب" || o.status === "تم الإسناد").length;
+        regionDeliveredCount += riderOrders.filter(o => o.status === "تم التسليم").length;
+        regionCash += riderOrders.reduce((sum, o) => {
+          const cod = Number(o.totalCOD || 0) || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
+          return sum + cod;
+        }, 0);
+      });
+
+      return {
+        ...region,
+        matchingCouriers,
+        ordersCount: regionOrdersCount,
+        activeCount: regionActiveCount,
+        deliveredCount: regionDeliveredCount,
+        cash: regionCash
+      };
+    });
+  }, [couriers, orders, selectedDate, regionConfig]);
+
   // Handle Copy function to make life super easy
   const handleCopyText = (text: string, refId: string) => {
     navigator.clipboard.writeText(text);
@@ -151,62 +246,6 @@ export default function OpsRoom({ token, role, username, orders, couriers, onRef
     setTimeout(() => {
       setCopiedTracking(null);
     }, 2000);
-  };
-
-  // Live GPS Route Tracker Handler
-  const handleTrackerRouting = (courierName: string) => {
-    const riderOrders = getCourierDailyOrders(courierName, selectedDate);
-    
-    // Gather all coordinate points from active fields and historical geoLogs
-    const points: { lat: number; lng: number; time: string }[] = [];
-    
-    riderOrders.forEach(o => {
-      if (o.lat && o.lng) {
-        points.push({
-          lat: Number(o.lat),
-          lng: Number(o.lng),
-          time: o.updatedAt || o.createdAt || ""
-        });
-      }
-      
-      if (Array.isArray(o.geoLogs)) {
-        o.geoLogs.forEach((g: any) => {
-          if (g.lat && g.lng) {
-            points.push({
-              lat: Number(g.lat),
-              lng: Number(g.lng),
-              time: g.dateTime || ""
-            });
-          }
-        });
-      }
-    });
-
-    // Sort chronologically
-    points.sort((a, b) => a.time.localeCompare(b.time));
-
-    // Dedup adjacent close coordinate points
-    const uniquePoints: { lat: number; lng: number }[] = [];
-    points.forEach(pt => {
-      if (uniquePoints.length === 0) {
-        uniquePoints.push(pt);
-      } else {
-        const last = uniquePoints[uniquePoints.length - 1];
-        if (Math.abs(last.lat - pt.lat) > 0.00001 || Math.abs(last.lng - pt.lng) > 0.00001) {
-          uniquePoints.push(pt);
-        }
-      }
-    });
-
-    if (uniquePoints.length === 0) {
-      alert(`ℹ️ لا تتوفر إحداثيات GPS مسجلة لعمليات المندوب ${courierName} في هذا اليوم بعد.\n\nتُسجل الإحداثيات تلقائياً عند تحديث المندوب لحالات الشحنات أو مسح الباركود ميدانياً.`);
-      return;
-    }
-
-    // Generate Google Maps Directions URL
-    const pathSegments = uniquePoints.map(pt => `${pt.lat},${pt.lng}`).join("/");
-    const mapsUrl = `https://www.google.com/maps/dir/${pathSegments}`;
-    window.open(mapsUrl, "_blank");
   };
 
   // Get active courier details
@@ -330,6 +369,248 @@ export default function OpsRoom({ token, role, username, orders, couriers, onRef
         </div>
       </div>
 
+      {/* 🗺️ Interactive Live Distribution Map Mockup */}
+      <div className="bg-slate-900 border border-white/6 p-5 rounded-2xl shadow-xl space-y-4 animate-fadeIn">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/5 pb-3">
+          <div className="flex items-center gap-2.5">
+            <span className="p-2.5 bg-amber-500/15 text-amber-500 rounded-xl text-xs shrink-0">🗺️</span>
+            <div>
+              <h3 className="text-xs font-black text-slate-100">بوابة الرصد الجغرافي وتوزيع المناديب</h3>
+              <p className="text-[10px] text-slate-400 font-bold mt-0.5">
+                توزيع فوري للمناديب والشحنات النشطة على مستوى أقاليم مصر التشغيلية. اضغط على أي إقليم للتصفية السريعة.
+              </p>
+            </div>
+          </div>
+
+          {selectedMapRegion && (
+            <button
+              onClick={() => setSelectedMapRegion(null)}
+              className="text-[10px] text-red-400 hover:text-red-300 transition-all font-black border border-red-900/30 bg-red-950/20 px-3 py-1.5 rounded-xl cursor-pointer self-start sm:self-auto"
+            >
+              🚫 إلغاء تصفية الخريطة
+            </button>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+          {/* Left Column: Interactive Vector Map Mockup (SVG) */}
+          <div className="lg:col-span-5 bg-slate-950 border border-white/6 rounded-2xl p-4 flex flex-col items-center justify-center relative overflow-hidden min-h-[300px]">
+            {/* Grid background for technical/high-end UI touch */}
+            <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.02)_1px,transparent_1px)] bg-[size:16px_16px] pointer-events-none" />
+
+            <div className="absolute top-3 left-3 flex flex-col gap-1 text-[9px] font-bold text-slate-400 bg-slate-900/80 backdrop-blur-sm border border-white/5 p-2 rounded-lg z-10">
+              <span className="text-slate-300 border-b border-white/5 pb-1 mb-1">دليل الخريطة:</span>
+              <div className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                <span>العاصمة والجيزة</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-sky-500"></span>
+                <span>الإسكندرية والساحل</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                <span>محافظات الدلتا</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-purple-500"></span>
+                <span>مدن القناة وسيناء</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-rose-500"></span>
+                <span>الصعيد وقبلي</span>
+              </div>
+            </div>
+
+            {/* Custom Interactive Egypt Vector Outline representation */}
+            <svg viewBox="0 0 240 220" className="w-full max-w-[280px] h-auto z-0 select-none">
+              <defs>
+                <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+                  <feGaussianBlur stdDeviation="3" result="blur" />
+                  <feComposite in="SourceGraphic" in2="blur" operator="over" />
+                </filter>
+              </defs>
+
+              {/* Background Mediterranean Sea / Red Sea abstract lines */}
+              <path d="M 10 30 Q 80 15 230 40" stroke="rgba(56, 189, 248, 0.1)" strokeWidth="2" fill="none" />
+              <path d="M 200 120 Q 220 160 210 210" stroke="rgba(244, 63, 94, 0.08)" strokeWidth="1.5" fill="none" />
+
+              {/* Map Regions */}
+              {regionalData.map((reg) => {
+                const isSelected = selectedMapRegion === reg.id;
+                const isHovered = !selectedMapRegion || isSelected;
+
+                return (
+                  <g
+                    key={reg.id}
+                    onClick={() => setSelectedMapRegion(selectedMapRegion === reg.id ? null : reg.id)}
+                    className="cursor-pointer transition-all duration-300"
+                  >
+                    {/* Outline Shape */}
+                    <motion.path
+                      d={reg.svgPath}
+                      fill={isSelected ? "rgba(245, 158, 11, 0.15)" : "rgba(30, 41, 59, 0.4)"}
+                      stroke={isSelected ? "#f59e0b" : "rgba(255,255,255,0.15)"}
+                      strokeWidth={isSelected ? "2" : "1"}
+                      whileHover={{ scale: 1.03, fill: "rgba(255,255,255,0.05)", stroke: "#64748b" }}
+                      transition={{ type: "spring", stiffness: 300, damping: 20 }}
+                    />
+
+                    {/* Interactive Pin point */}
+                    <circle
+                      cx={reg.x}
+                      cy={reg.y}
+                      r="4"
+                      className={`fill-current ${
+                        reg.id === "cairo" ? "text-amber-500" :
+                        reg.id === "alex" ? "text-sky-500" :
+                        reg.id === "delta" ? "text-emerald-500" :
+                        reg.id === "canal" ? "text-purple-500" :
+                        "text-rose-500"
+                      }`}
+                    />
+
+                    {reg.activeCount > 0 && (
+                      <circle
+                        cx={reg.x}
+                        cy={reg.y}
+                        r="10"
+                        className={`stroke-current fill-none animate-ping opacity-60 ${
+                          reg.id === "cairo" ? "text-amber-500/40" :
+                          reg.id === "alex" ? "text-sky-500/40" :
+                          reg.id === "delta" ? "text-emerald-500/40" :
+                          reg.id === "canal" ? "text-purple-500/40" :
+                          "text-rose-500/40"
+                        }`}
+                        style={{ animationDuration: "2s" }}
+                      />
+                    )}
+
+                    {/* Quick overlay counter badge next to the Pin */}
+                    <g transform={`translate(${reg.x + 8}, ${reg.y - 4})`}>
+                      <rect
+                        width="18"
+                        height="11"
+                        rx="3"
+                        fill="rgba(15, 23, 42, 0.85)"
+                        stroke="rgba(255, 255, 255, 0.1)"
+                        strokeWidth="0.5"
+                      />
+                      <text
+                        x="9"
+                        y="8"
+                        textAnchor="middle"
+                        fontSize="7"
+                        fontWeight="bold"
+                        fill="#f8fafc"
+                      >
+                        {reg.ordersCount}
+                      </text>
+                    </g>
+                  </g>
+                );
+              })}
+
+              {/* Text indicator for Nile River abstract flow */}
+              <path d="M 125 210 Q 135 150 125 110" stroke="rgba(56, 189, 248, 0.15)" strokeWidth="1.5" fill="none" />
+              <text x="110" y="200" fill="rgba(255, 255, 255, 0.15)" fontSize="6" fontWeight="bold" letterSpacing="1">
+                نهر النيل
+              </text>
+            </svg>
+
+            <span className="text-[9px] text-slate-500 font-bold mt-2 text-center">
+              💡 اضغط على المناطق جغرافياً لفرز المناديب بالأسفل على الفور
+            </span>
+          </div>
+
+          {/* Right Column: Interactive Region Cards List */}
+          <div className="lg:col-span-7 flex flex-col gap-3 justify-center">
+            {regionalData.map((reg) => {
+              const isSelected = selectedMapRegion === reg.id;
+              const hasActiveRiders = reg.matchingCouriers.length > 0;
+              const deliveryRate = reg.ordersCount > 0 ? Math.round((reg.deliveredCount / reg.ordersCount) * 100) : 0;
+
+              return (
+                <div
+                  key={reg.id}
+                  onClick={() => setSelectedMapRegion(selectedMapRegion === reg.id ? null : reg.id)}
+                  className={`p-3 rounded-xl border transition-all cursor-pointer flex flex-col gap-2 relative overflow-hidden ${
+                    isSelected
+                      ? "bg-slate-950 border-amber-500 shadow-lg shadow-amber-500/5"
+                      : "bg-slate-900/60 border-white/5 hover:border-white/10 hover:bg-slate-900"
+                  }`}
+                >
+                  {/* Decorative glowing gradient backdrop on selection */}
+                  {isSelected && (
+                    <div className="absolute top-0 right-0 w-24 h-full bg-gradient-to-l from-amber-500/5 to-transparent pointer-events-none" />
+                  )}
+
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className={`w-2.5 h-2.5 rounded-full bg-gradient-to-br ${reg.color}`} />
+                      <span className="text-xs font-black text-slate-100">{reg.name}</span>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <div className="text-right">
+                        <span className="text-[10px] text-slate-400 font-bold block leading-none">إجمالي اليوم</span>
+                        <span className="text-xs font-black font-mono text-slate-200 mt-1 block">
+                          {reg.ordersCount} شحنة
+                        </span>
+                      </div>
+                      <div className="w-px h-6 bg-white/5" />
+                      <div className="text-right">
+                        <span className="text-[10px] text-slate-400 font-bold block leading-none">المناديب</span>
+                        <span className="text-xs font-black font-mono text-indigo-400 mt-1 block">
+                          {reg.matchingCouriers.length}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Visual Progress Bar for deliverability or load */}
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-[9px] text-slate-500 font-bold">
+                      <span>نسبة الإنجاز اليومي:</span>
+                      <span className="text-emerald-400 font-mono font-black">{deliveryRate}%</span>
+                    </div>
+                    <div className="w-full bg-slate-950 h-1.5 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-emerald-500 rounded-full transition-all duration-500"
+                        style={{ width: `${deliveryRate || (reg.ordersCount > 0 ? 15 : 0)}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Nested Courier Badges */}
+                  {hasActiveRiders ? (
+                    <div className="flex flex-wrap gap-1.5 pt-1 border-t border-white/5 mt-1">
+                      <span className="text-[8px] font-black text-slate-500 self-center">المناديب بالمنطقة:</span>
+                      {reg.matchingCouriers.map((c) => (
+                        <span
+                          key={c.name}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedCourier(c.name);
+                          }}
+                          className="px-2 py-0.5 bg-slate-950/80 hover:bg-slate-950 text-[9px] font-black text-amber-400 rounded-md border border-white/5 transition-all"
+                        >
+                          👤 {c.name}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-[8px] font-bold text-slate-600 mt-1 leading-none">
+                      ⚠️ لا يوجد مناديب مسجلين ميدانياً في هذا الإقليم اليوم
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
       {/* Main Riders Listing & Search */}
       <div className="space-y-4">
         <div className="flex flex-col md:flex-row items-center justify-between gap-3">
@@ -379,27 +660,16 @@ export default function OpsRoom({ token, role, username, orders, couriers, onRef
                 >
                   <div className="space-y-4">
                     {/* Card Header */}
-                    <div className="flex flex-col border-b border-white/6 pb-3 gap-2">
-                      <div className="flex justify-between items-start">
-                        <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950/20 border border-emerald-900/30 px-2.5 py-0.5 rounded-lg">
-                          📍 {c.region || "منطقة غير محددة"}
+                    <div className="flex justify-between items-start border-b border-white/6 pb-3">
+                      <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950/20 border border-emerald-900/30 px-2.5 py-0.5 rounded-lg">
+                        📍 {c.region || "منطقة غير محددة"}
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                        <span className="text-xs font-black text-slate-100 group-hover:text-amber-500 transition-colors">
+                          {c.name}
                         </span>
-                        <div className="flex items-center gap-2">
-                          <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
-                          <span className="text-xs font-black text-slate-100 group-hover:text-amber-500 transition-colors">
-                            {c.name}
-                          </span>
-                        </div>
                       </div>
-                      
-                      {/* Live GPS Route Tracker Button */}
-                      <button
-                        onClick={() => handleTrackerRouting(c.name)}
-                        className="w-full mt-1.5 py-1.5 bg-indigo-950/40 hover:bg-indigo-900/60 text-indigo-400 hover:text-indigo-300 border border-indigo-900/50 hover:border-indigo-700/50 rounded-xl font-bold text-[10px] cursor-pointer transition-all flex items-center justify-center gap-1.5 select-none"
-                      >
-                        <MapPin className="w-3.5 h-3.5 text-indigo-400" />
-                        <span>تتبع خط سير المندوب اليومي النشط</span>
-                      </button>
                     </div>
 
                     {/* 7-Status High Density Grid */}

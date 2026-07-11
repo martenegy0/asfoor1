@@ -15,40 +15,6 @@ const OrderCard = React.memo(({ o, isSel, isExpanded, isLoadingHistory, historyL
          prev.o === next.o;
 });
 
-const getCoordsWithTimeout = () => {
-  return new Promise<{ lat: number; lng: number } | null>((resolve) => {
-    if (typeof window === "undefined" || !navigator.geolocation) {
-      resolve(null);
-      return;
-    }
-    let resolved = false;
-    const timer = setTimeout(() => {
-      if (!resolved) {
-        resolved = true;
-        resolve(null);
-      }
-    }, 1500);
-
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        if (!resolved) {
-          resolved = true;
-          clearTimeout(timer);
-          resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-        }
-      },
-      (err) => {
-        if (!resolved) {
-          resolved = true;
-          clearTimeout(timer);
-          resolve(null);
-        }
-      },
-      { enableHighAccuracy: true, timeout: 5000, maximumAge: 60000 }
-    );
-  });
-};
-
 interface OrdersProps {
   token: string;
   role: string;
@@ -652,12 +618,9 @@ export default function Orders({ token, role, username, orders, setOrders, couri
         await apiCall("assignCourier", token, { tracking: cleanId, courier: scannerSelectedCourier });
       }
       
-      const coords = await getCoordsWithTimeout();
       const res = await apiCall("updateStatus", token, {
         tracking: cleanId,
         status: scannerSelectedStatus,
-        lat: coords?.lat,
-        lng: coords?.lng,
         actionLogText: `[تحديث تلقائي بالمسح الضوئي الكاميرا] تم تغيير الحالة إلى [${scannerSelectedStatus}]` + (scannerSelectedCourier ? ` وإسنادها للمندوب: ${scannerSelectedCourier}` : "")
       });
       if (res && res.ok) {
@@ -752,27 +715,23 @@ export default function Orders({ token, role, username, orders, setOrders, couri
     setReconFeedback(`⚡ تم التحديث محلياً وجاري المزامنة في الخلفية...`);
 
     // --- BG API CALL ---
-    getCoordsWithTimeout().then(coords => {
-      apiCall("updateStatus", token, {
-        tracking: targetTracking,
-        status: reconcileStatus,
-        lat: coords?.lat,
-        lng: coords?.lng,
-        reason: `تصفية سريعة عبر بوابة الباركود بالواجهة`
-      }).then(res => {
-        if (res && res.ok) {
-          setReconFeedback(`✅ نجح تحديث الأوردر ${targetTracking} إلى [${reconcileStatus}]`);
-          onRefresh();
-        } else {
-          setReconFeedback(`⚠️ تنبيه: فشل مزامنة الخادم لـ ${targetTracking} (${res?.error})`);
-          onRefresh();
-        }
-      }).catch(err => {
-        setReconFeedback(`⚠️ خطأ بالشبكة أثناء مزامنة ${targetTracking}`);
+    apiCall("updateStatus", token, {
+      tracking: targetTracking,
+      status: reconcileStatus,
+      reason: `تصفية سريعة عبر بوابة الباركود بالواجهة`
+    }).then(res => {
+      if (res && res.ok) {
+        setReconFeedback(`✅ نجح تحديث الأوردر ${targetTracking} إلى [${reconcileStatus}]`);
         onRefresh();
-      }).finally(() => {
-        setReconLoading(false);
-      });
+      } else {
+        setReconFeedback(`⚠️ تنبيه: فشل مزامنة الخادم لـ ${targetTracking} (${res?.error})`);
+        onRefresh();
+      }
+    }).catch(err => {
+      setReconFeedback(`⚠️ خطأ بالشبكة أثناء مزامنة ${targetTracking}`);
+      onRefresh();
+    }).finally(() => {
+      setReconLoading(false);
     });
   }
 
@@ -1341,49 +1300,45 @@ export default function Orders({ token, role, username, orders, setOrders, couri
     setSelected(new Set());
 
     // --- BG API CALL ---
-    getCoordsWithTimeout().then(coords => {
-      apiCall("updateStatus", token, {
-        tracking,
-        status: updatedFields.status || status,
-        returnShippingType,
-        notes,
-        delivDate,
-        clearCourierWithSignature,
-        partialAmount,
-        lat: coords?.lat,
-        lng: coords?.lng,
-      })
-        .then((res) => {
-          if (res && res.ok) {
-            console.log(`Successfully synced status of ${tracking} to [${status}] in BG`);
-            if (!isAgent) {
-              onRefresh();
-            }
-          } else {
-            if (!isAgent) {
-              alert(`⚠️ عطل مزامنة: فشل تحديث حالة الأوردر ${tracking} على السيرفر: ${res?.error || "خطأ غير معروف"}`);
-              onRefresh();
-            } else {
-              console.error(`Courier BG sync issue for ${tracking}: ${res?.error}`);
-            }
-          }
-        })
-        .catch((err) => {
-          console.error("BG sync error", err);
+    apiCall("updateStatus", token, {
+      tracking,
+      status: updatedFields.status || status,
+      returnShippingType,
+      notes,
+      delivDate,
+      clearCourierWithSignature,
+      partialAmount,
+    })
+      .then((res) => {
+        if (res && res.ok) {
+          console.log(`Successfully synced status of ${tracking} to [${status}] in BG`);
           if (!isAgent) {
             onRefresh();
           }
-        })
-        .finally(() => {
+        } else {
           if (!isAgent) {
-            setPendingTrackings((prev) => {
-              const next = new Set(prev);
-              next.delete(tracking);
-              return next;
-            });
+            alert(`⚠️ عطل مزامنة: فشل تحديث حالة الأوردر ${tracking} على السيرفر: ${res?.error || "خطأ غير معروف"}`);
+            onRefresh();
+          } else {
+            console.error(`Courier BG sync issue for ${tracking}: ${res?.error}`);
           }
-        });
-    });
+        }
+      })
+      .catch((err) => {
+        console.error("BG sync error", err);
+        if (!isAgent) {
+          onRefresh();
+        }
+      })
+      .finally(() => {
+        if (!isAgent) {
+          setPendingTrackings((prev) => {
+            const next = new Set(prev);
+            next.delete(tracking);
+            return next;
+          });
+        }
+      });
   }
 
   async function toggleCustomerConfirmed(tracking: string) {

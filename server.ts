@@ -4208,18 +4208,6 @@ app.post("/api", async (req: Request, res: Response) => {
 
         order.updatedAt = now();
 
-        if (d.lat !== undefined && d.lng !== undefined && d.lat !== null && d.lng !== null) {
-          order.lat = Number(d.lat);
-          order.lng = Number(d.lng);
-          if (!order.geoLogs) order.geoLogs = [];
-          order.geoLogs.push({
-            dateTime: now(),
-            status: status,
-            lat: Number(d.lat),
-            lng: Number(d.lng)
-          });
-        }
-
         // منطق ترحيل البضائع الصارم والاسترجاع:
         // إذا كان الأوردر في الأرشيف وتغيرت حالته إلى حالة نشطة غير صالحة للأرشفة،
         // فيتم إرجاعه للشحنات النشطة فوراً لضمان عدم ضياع عهدة البضائع ومنع ارتداد الحالة، ثم حذفه نهائياً من شيت الأرشيف.
