@@ -158,6 +158,112 @@ function SearchableCourierSelect({ value, onChange, couriers, placeholder = "ا�
   );
 }
 
+function parseSafeNumber(val: any) {
+  if (val === undefined || val === null) return 0;
+  if (typeof val === "number") return val;
+  var s = String(val).trim();
+  if (s === "") return 0;
+  var cleaned = s.replace(/,/g, "").replace(/[^\d.-]/g, "").trim();
+  var num = Number(cleaned);
+  return isNaN(num) ? 0 : num;
+}
+
+function getOrderFinancials(o: any) {
+  if (!o) return { prodPrice: 0, shipPrice: 0, totalCOD: 0 };
+  
+  var shipPrice = 0;
+  var rawShip = o["سعر الشحن"] !== undefined ? o["سعر الشحن"] :
+                (o["الشحن"] !== undefined ? o["الشحن"] :
+                (o["تكلفة الشحن"] !== undefined ? o["تكلفة الشحن"] :
+                (o["مصاريف الشحن"] !== undefined ? o["مصاريف الشحن"] :
+                (o["shipping"] !== undefined ? o["shipping"] :
+                (o["shipPrice"] !== undefined ? o["shipPrice"] :
+                o["ship_price"])))));
+                
+  if (rawShip !== undefined && rawShip !== null && rawShip !== "") {
+    shipPrice = parseSafeNumber(rawShip);
+  }
+  if (isNaN(shipPrice)) shipPrice = 0;
+
+  var totalCOD = 0;
+  var rawTotal = o["المطلب تحصيله"] !== undefined ? o["المطلب تحصيله"] :
+                 (o["المطلوب تحصيله"] !== undefined ? o["المطلوب تحصيله"] :
+                 (o["التحصيل"] !== undefined ? o["التحصيل"] :
+                 (o["المطلوب"] !== undefined ? o["المطلوب"] :
+                 (o["إجمالي الكود"] !== undefined ? o["إجمالي الكود"] :
+                 (o["الإجمالي"] !== undefined ? o["الإجمالي"] :
+                 (o["الاجمالي"] !== undefined ? o["الاجمالي"] :
+                 (o["إجمالي الأوردر"] !== undefined ? o["إجمالي الأوردر"] :
+                 (o["total"] !== undefined ? o["total"] :
+                 (o["totalCOD"] !== undefined ? o["totalCOD"] :
+                 (o["total_cod"] !== undefined ? o["total_cod"] :
+                 (o["cash_to_be_collected"] !== undefined ? o["cash_to_be_collected"] :
+                 o["cash"])))))))))));
+                 
+  if (rawTotal !== undefined && rawTotal !== null && rawTotal !== "") {
+    totalCOD = parseSafeNumber(rawTotal);
+  }
+  if (isNaN(totalCOD)) totalCOD = 0;
+
+  var prodPrice = 0;
+  var rawProd = o["سعر المنتج"] !== undefined ? o["سعر المنتج"] :
+                (o["المنتج"] !== undefined ? o["المنتج"] :
+                (o["سعر المادة"] !== undefined ? o["سعر المادة"] :
+                (o["price"] !== undefined ? o["price"] :
+                (o["prodPrice"] !== undefined ? o["prodPrice"] :
+                o["product_price"]))));
+                
+  if (rawProd !== undefined && rawProd !== null && rawProd !== "") {
+    prodPrice = parseSafeNumber(rawProd);
+  }
+  if (isNaN(prodPrice)) prodPrice = 0;
+
+  var status = o.status || o["الحالة"] || "";
+  var isPartial = ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].includes(status) || o.isPartial === true || o.isPartial === "true" || (o.returnSubStatus && o.returnSubStatus.indexOf("تسليم جزئي") !== -1);
+
+  if (isPartial) {
+    var partialAmt = Number(o.partialAmount !== undefined && o.partialAmount !== null ? o.partialAmount : (o.actualReceivedCash !== undefined && o.actualReceivedCash !== null ? o.actualReceivedCash : (totalCOD !== undefined && totalCOD !== null ? totalCOD : 0)));
+    var originalProdPrice = o.originalProdPrice !== undefined && o.originalProdPrice !== null ? Number(o.originalProdPrice) : (o.prodPrice || prodPrice);
+    if (originalProdPrice <= partialAmt && o.prodPrice > partialAmt) {
+      originalProdPrice = Number(o.prodPrice);
+    }
+    return {
+      prodPrice: isNaN(originalProdPrice) ? partialAmt : originalProdPrice,
+      shipPrice: isNaN(shipPrice) ? 0 : shipPrice,
+      totalCOD: isNaN(totalCOD) ? 0 : totalCOD
+    };
+  }
+
+  if (totalCOD > 0) {
+    prodPrice = totalCOD - shipPrice;
+  } else if (prodPrice > 0 && shipPrice > 0 && totalCOD === 0) {
+    totalCOD = prodPrice + shipPrice;
+  }
+
+  return {
+    prodPrice: isNaN(prodPrice) ? 0 : prodPrice,
+    shipPrice: isNaN(shipPrice) ? 0 : shipPrice,
+    totalCOD: isNaN(totalCOD) ? 0 : totalCOD
+  };
+}
+
+function getKeptGoodsValue(o: any) {
+  var status = (o.status || "").toString().trim();
+  var financials = getOrderFinancials(o);
+  var isDelivered = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(status);
+  var isPartial = o.isPartial === true || o.isPartial === "true" || ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].includes(status);
+  
+  if (isDelivered) {
+    return financials.prodPrice;
+  } else if (isPartial) {
+    var shipPrice = Number(o.shipPrice || financials.shipPrice || 60);
+    var soldValue = Number(o.actualReceivedCash || o.partialAmount || o["المبلغ المحصل"] || 0);
+    if (isNaN(soldValue)) soldValue = 0;
+    return Math.max(0, soldValue - shipPrice);
+  }
+  return 0;
+}
+
 export default function Orders({ token, role, username, orders, setOrders, couriers, onRefresh }: OrdersProps) {
   const [pendingTrackings, setPendingTrackings] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
@@ -649,6 +755,44 @@ export default function Orders({ token, role, username, orders, setOrders, couri
         return timeB - timeA;
       });
   }, [roleFilteredOrders, isAgent, username, activeFilter, isSupplier, isReturnsOfficer, selectedDate, search, selectedSupplierFilter, selectedCourierFilter, showOperationalReport, selectedRegionFilter]);
+
+  // Real-time financial calculations for matching orders
+  const filteredFinancials = React.useMemo(() => {
+    if (!selectedSupplierFilter) return { keptGoodsValue: 0, settledValue: 0, netValue: 0 };
+
+    let keptGoodsValue = 0;
+    let settledValue = 0;
+
+    visibleOrders.forEach((o: any) => {
+      const financials = getOrderFinancials(o);
+      const status = (o.status || "").toString().trim();
+      const isDelivered = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(status);
+      const isPartial = o.isPartial === true || o.isPartial === "true" || ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].includes(status);
+      
+      let oKept = 0;
+      if (isDelivered) {
+        oKept = financials.prodPrice;
+      } else if (isPartial) {
+        const shipPrice = Number(o.shipPrice || financials.shipPrice || 60);
+        let soldValue = Number(o.actualReceivedCash || o.partialAmount || o["المبلغ المحصل"] || 0);
+        if (isNaN(soldValue)) soldValue = 0;
+        oKept = Math.max(0, soldValue - shipPrice);
+      }
+
+      keptGoodsValue += oKept;
+
+      const isS = o.isSettled === true || o.isSettled === "true" || o.is_settled === true || o.is_settled === "true";
+      if (isS) {
+        settledValue += oKept;
+      }
+    });
+
+    return {
+      keptGoodsValue,
+      settledValue,
+      netValue: Math.max(0, keptGoodsValue - settledValue)
+    };
+  }, [visibleOrders, selectedSupplierFilter]);
 
   const availableRegions = React.useMemo(() => {
     const regions = new Set<string>();
@@ -1528,6 +1672,11 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                 شحن مرتجع: {o.returnShippingType === "paid" ? "مدفوع بالكامل" : "غير مدفوع"}
               </span>
             )}
+            {(o.status === "مرتجع بالمستودع" || o.status === "مرتجع في المستودع" || o.status === "مرتجع جزئي بالمستودع") && (o.isPartial === true || o.isPartial === "true" || Number(o.actualReceivedCash || o.partialAmount || 0) > 0) && (
+              <span className="text-[10px] font-extrabold bg-red-950 text-amber-400 border border-red-500/40 px-2 py-0.5 rounded shadow-sm animate-pulse whitespace-nowrap">
+                ⚠️ مرتجع جزئي (المحصل: {o.actualReceivedCash || o.partialAmount || 0} ج.م)
+              </span>
+            )}
             <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full whitespace-nowrap ${getBadgeStyle(o.status)}`}>
               {o.status}
             </span>
@@ -2000,6 +2149,11 @@ export default function Orders({ token, role, username, orders, setOrders, couri
             <span className="text-xs font-black text-amber-500 font-mono">{o.tracking}</span>
           </div>
           <div className="flex items-center gap-1">
+            {(o.status === "مرتجع بالمستودع" || o.status === "مرتجع في المستودع" || o.status === "مرتجع جزئي بالمستودع") && (o.isPartial === true || o.isPartial === "true" || Number(o.actualReceivedCash || o.partialAmount || 0) > 0) && (
+              <span className="text-[9px] font-extrabold bg-red-950 text-amber-400 border border-red-500/40 px-1.5 py-0.5 rounded shadow-sm animate-pulse whitespace-nowrap">
+                ⚠️ مرتجع جزئي ({o.actualReceivedCash || o.partialAmount || 0} ج.م)
+              </span>
+            )}
             <span className={`text-[9.5px] font-bold px-2 py-0.5 rounded-full ${getBadgeStyle(o.status)}`}>
               {o.status}
             </span>
@@ -2097,7 +2251,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
           )}
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 md:grid-cols-4 gap-3.5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3.5">
           {/* 1. Date Filter Dropdown/Input */}
           <div className="space-y-1.5 text-right">
             <label className="text-[10px] font-black text-slate-400 block">📅 تاريخ الطلب</label>
@@ -2177,12 +2331,49 @@ export default function Orders({ token, role, username, orders, setOrders, couri
             </select>
           </div>
 
-          {/* 4. Instant Stats */}
-          <div className="bg-slate-950 border border-white/4 rounded-xl p-3 flex flex-col justify-between sm:col-span-3 md:col-span-1">
+          {/* 4. Advanced Admin Supplier Dropdown Filter */}
+          <div className="space-y-1.5 text-right">
+            <label className="text-[10px] font-black text-slate-400 block">👤 تصفية حسب المورد</label>
+            <select
+              value={selectedSupplierFilter}
+              onChange={(e) => {
+                setSelectedSupplierFilter(e.target.value);
+                setSelected(new Set());
+              }}
+              className="w-full bg-slate-950 border border-white/6 rounded-xl py-2 px-3 text-xs font-bold text-slate-200 outline-none text-right focus:border-amber-500 cursor-pointer text-ellipsis overflow-hidden whitespace-nowrap"
+            >
+              <option value="">👤 كل الموردين (تصفية مفتوحة)</option>
+              {Array.from(new Set(
+                (orders || [])
+                  .map((o: any) => o.supplier)
+                  .filter(Boolean)
+                  .map((s: any) => s.toString().trim())
+              ))
+              .sort((a, b) => a.localeCompare(b, "ar"))
+              .map((sup: string) => (
+                <option key={sup} value={sup}>👤 {sup}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* 5. Instant Stats */}
+          <div className="bg-slate-950 border border-white/4 rounded-xl p-3 flex flex-col justify-between sm:col-span-2 md:col-span-1">
             <div className="flex items-center justify-between text-[10px] text-slate-400 font-bold">
               <span>طرد مطابق للتصفية:</span>
               <span className="font-mono text-amber-400 font-black text-xs">{visibleOrders.length}</span>
             </div>
+            
+            {selectedSupplierFilter && (
+              <div className="mt-1.5 pt-1.5 border-t border-white/5 flex flex-col gap-1 text-right animate-fadeIn">
+                <div className="flex items-center justify-between text-[9px] font-bold text-emerald-400 bg-emerald-950/35 border border-emerald-500/15 px-1.5 py-1 rounded-lg">
+                  <span className="shrink-0">💰 صافي المطابقة:</span>
+                  <span className="font-mono font-black text-xs text-amber-400">{filteredFinancials.netValue.toLocaleString("ar")} ج.م</span>
+                </div>
+                <div className="text-[8px] text-slate-500 text-right leading-none">
+                  (بضاعة: {filteredFinancials.keptGoodsValue.toLocaleString("ar")} - مسددة: {filteredFinancials.settledValue.toLocaleString("ar")})
+                </div>
+              </div>
+            )}
             
             <div className="flex items-center gap-1.5 mt-2">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
@@ -3094,9 +3285,16 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                     </div>
                   </div>
 
-                  <span className={`px-2 py-0.5 text-[9px] font-black rounded ${getBadgeStyle(o.status)}`}>
-                    {o.status}
-                  </span>
+                  <div className="flex items-center gap-1">
+                    {(o.status === "مرتجع بالمستودع" || o.status === "مرتجع في المستودع" || o.status === "مرتجع جزئي بالمستودع") && (o.isPartial === true || o.isPartial === "true" || Number(o.actualReceivedCash || o.partialAmount || 0) > 0) && (
+                      <span className="px-1.5 py-0.5 text-[8.5px] font-black bg-red-950 text-amber-400 border border-red-500/40 rounded shadow-sm animate-pulse whitespace-nowrap">
+                        ⚠️ مرتجع جزئي ({o.actualReceivedCash || o.partialAmount || 0} ج.م)
+                      </span>
+                    )}
+                    <span className={`px-2 py-0.5 text-[9px] font-black rounded ${getBadgeStyle(o.status)}`}>
+                      {o.status}
+                    </span>
+                  </div>
                 </div>
 
                 {/* Details components (hide/show sensitive elements as per role controls) */}

@@ -922,20 +922,38 @@ function updateStatus(sheets, d) {
   }
 
   // معالجة استلام المرتجع عند المورد وحسم حسابه المالي تلقائياً
-  if (status === "التسليم للمورد" || status === "تم تسليم المرتجع للمورد") {
+  if (status === "التسليم للمورد" || status === "تم تسليم المرتجع للمورد" || status === "مرتجع تم تسليمه للمورد") {
     updateObj.retDate = now();
-    // خصم قيمة المنتج من حساب المورد لكي لا يستحق الأرباح
     const ledgerData = getTableData(sheets.supplierLedger);
     const dupLedger = ledgerData.find(l => l.tracking === tracking && (l.type === "مرتجع" || l.type === "مرتجع تم تسليمه للمورد"));
     if (!dupLedger) {
-      appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
-        supplier: order.supplier,
-        date: now(),
-        type: "مرتجع تم تسليمه للمورد",
-        tracking: tracking,
-        amount: -Number(order.prodPrice || 0),
-        desc: `خصم قيمة المنتج لمرتجع تسلمه المورد: ${tracking}`
-      });
+      const isPartial = order.isPartial === true || order.isPartial === "true" || ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(order.status || "") !== -1;
+      if (isPartial) {
+        const financials = getOrderFinancials(order);
+        const shipPrice = Number(order.shipPrice || financials.shipPrice || 60);
+        const original_prod_price = Number(order.originalProdPrice || order.prodPrice || financials.prodPrice || 0);
+        const actualReceived = Number(order.actualReceivedCash || order.partialAmount || order["المبلغ المحصل"] || 0);
+        const kept_goods_value = Math.max(0, actualReceived - shipPrice);
+        const returned_goods_value = Math.max(0, original_prod_price - kept_goods_value);
+
+        appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
+          supplier: order.supplier,
+          date: now(),
+          type: "مرتجع تم تسليمه للمورد",
+          tracking: tracking,
+          amount: returned_goods_value,
+          desc: `تسوية بضاعة مرتجع جزئي مسلمة للمورد للأوردر رقم #${tracking} (قيمة المرتجع المستلم: ${returned_goods_value} ج.م)`
+        });
+      } else {
+        appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
+          supplier: order.supplier,
+          date: now(),
+          type: "مرتجع تم تسليمه للمورد",
+          tracking: tracking,
+          amount: 0,
+          desc: `إرجاع كامل بضاعة أوردر مرتجع للمورد رقم #${tracking} (قيمة الحركة المادية: 0 ج.م)`
+        });
+      }
     }
   }
 
@@ -1505,20 +1523,38 @@ function updateOrdersStatusBulk(sheets, d) {
           }
         }
 
-        if (["مرتجع", "تم تسليم المرتجع للمورد", "التسليم للمورد"].indexOf(targetStatus) !== -1) {
+         if (["مرتجع", "تم تسليم المرتجع للمورد", "التسليم للمورد", "مرتجع تم تسليمه للمورد"].indexOf(targetStatus) !== -1) {
           updateObj.retDate = now();
-          if (targetStatus === "تم تسليم المرتجع للمورد" || targetStatus === "التسليم للمورد") {
-            const prodPrice = Number(order.prodPrice || 0);
+          if (targetStatus === "تم تسليم المرتجع للمورد" || targetStatus === "التسليم للمورد" || targetStatus === "مرتجع تم تسليمه للمورد") {
             const supplierName = order.supplier || "";
             if (supplierName) {
-              appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
-                supplier: supplierName,
-                date: now(),
-                type: "مرتجع تم تسليمه للمورد",
-                tracking: tr,
-                amount: -Number(prodPrice),
-                desc: "خصم قيمة المنتج لمرتجع تسلمه المورد جماعياً (الدفعة المجمعة): " + tr
-              });
+              const isPartial = order.isPartial === true || order.isPartial === "true" || ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(order.status || "") !== -1;
+              if (isPartial) {
+                const financials = getOrderFinancials(order);
+                const shipPrice = Number(order.shipPrice || financials.shipPrice || 60);
+                const original_prod_price = Number(order.originalProdPrice || order.prodPrice || financials.prodPrice || 0);
+                const actualReceived = Number(order.actualReceivedCash || order.partialAmount || order["المبلغ المحصل"] || 0);
+                const kept_goods_value = Math.max(0, actualReceived - shipPrice);
+                const returned_goods_value = Math.max(0, original_prod_price - kept_goods_value);
+
+                appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
+                  supplier: supplierName,
+                  date: now(),
+                  type: "مرتجع تم تسليمه للمورد",
+                  tracking: tr,
+                  amount: returned_goods_value,
+                  desc: `تسوية بضاعة مرتجع جزئي مسلمة للمورد للأوردر رقم #${tr} (قيمة المرتجع المستلم: ${returned_goods_value} ج.م)`
+                });
+              } else {
+                appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
+                  supplier: supplierName,
+                  date: now(),
+                  type: "مرتجع تم تسليمه للمورد",
+                  tracking: tr,
+                  amount: 0,
+                  desc: `إرجاع كامل بضاعة أوردر مرتجع للمورد رقم #${tr} (قيمة الحركة المادية: 0 ج.م)`
+                });
+              }
             }
           }
         }
@@ -1959,7 +1995,12 @@ function getSupplierUnifiedLedger(sheets, supplierName) {
       var keptValue = Math.max(0, actualReceived - shipPrice);
       var unsoldPortion = Math.max(0, financials.prodPrice - keptValue);
       
-      var orderDesc = "حقوق بضاعة جزئي أوردر رقم #" + tracking + " (تسليم جزئي: قيمة المستلم الصافي " + keptValue + " ج.م، قيمة المرتجع المستبعد " + unsoldPortion + " ج.م، مصاريف الشحن " + shipPrice + " ج.م)";
+      var orderDesc = "";
+      if (status === "مرتجع تم تسليمه للمورد" || status === "تم تسليم المرتجع للمورد") {
+        orderDesc = "مرتجع تم تسليمه للمورد (جزئي) أوردر رقم #" + tracking + " (تم تصفية الحركة: المحصل الفعلي الصافي " + keptValue + " ج.م، وقيمة البضاعة المرجعة " + unsoldPortion + " ج.م، مصاريف الشحن " + shipPrice + " ج.م)";
+      } else {
+        orderDesc = "حقوق بضاعة جزئي أوردر رقم #" + tracking + " (تسليم جزئي: قيمة المستلم الصافي " + keptValue + " ج.م، قيمة المرتجع المستبعد " + unsoldPortion + " ج.م، مصاريف الشحن " + shipPrice + " ج.م)";
+      }
       entries.push({
         date: o.orderDate || o.createdAt || o["تاريخ الطلب"] || "",
         type: "حقوق بضاعة جزئي",
