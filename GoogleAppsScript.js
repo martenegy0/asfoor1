@@ -236,13 +236,15 @@ function initSheets() {
       "tracking", "createdAt", "updatedAt", "orderDate", "supplier", "customer", 
       "phone", "phone2", "gov", "region", "address", "prodPrice", "shipPrice", 
       "totalCOD", "shipCost", "courier", "status", "prodType", "notes", "delivDate", "retDate", 
-      "addedBy", "commission", "returnShippingType", "returnQueueStatus", "returnQueueAgent", "isSettledMonth", "موقع العميل/الخريطة"
+      "addedBy", "commission", "returnShippingType", "returnQueueStatus", "returnQueueAgent", "isSettledMonth", "موقع العميل/الخريطة",
+      "originalProdPrice", "originalTotalCOD", "actualReceivedCash", "partialAmount", "isPartial", "returnSubStatus", "keptGoodsValue", "returnedGoodsValue"
     ],
     archivedOrders: [
       "tracking", "createdAt", "updatedAt", "orderDate", "supplier", "customer", 
       "phone", "phone2", "gov", "region", "address", "prodPrice", "shipPrice", 
       "totalCOD", "shipCost", "courier", "status", "prodType", "notes", "delivDate", "retDate", 
-      "addedBy", "commission", "returnShippingType", "returnQueueStatus", "returnQueueAgent", "isSettled", "is_settled", "isSettledMonth", "موقع العميل/الخريطة"
+      "addedBy", "commission", "returnShippingType", "returnQueueStatus", "returnQueueAgent", "isSettled", "is_settled", "isSettledMonth", "موقع العميل/الخريطة",
+      "originalProdPrice", "originalTotalCOD", "actualReceivedCash", "partialAmount", "isPartial", "returnSubStatus", "keptGoodsValue", "returnedGoodsValue"
     ],
     expenses: ["id", "date", "amount", "desc", "category", "addedBy", "isSettledMonth"],
     cashbox: ["date", "desc", "type", "amount", "ref", "addedBy", "isSettledMonth"],
@@ -983,9 +985,16 @@ function updateStatus(sheets, d) {
       updateObj.originalTotalCOD = financialsBefore.totalCOD;
     }
 
+    const shipPrice = Number(order.shipPrice || financialsBefore.shipPrice || 60);
+    const original_prod_price = Number(order.originalProdPrice || financialsBefore.prodPrice);
+    const kept_goods_value = Math.max(0, pAm - shipPrice);
+    const returned_goods_value = Math.max(0, original_prod_price - kept_goods_value);
+
     updateObj.totalCOD = pAm;
     updateObj.partialAmount = pAm;
     updateObj.actualReceivedCash = pAm;
+    updateObj.keptGoodsValue = kept_goods_value;
+    updateObj.returnedGoodsValue = returned_goods_value;
     updateObj.returnQueueStatus = "مرتجع جزئي بالمستودع";
     updateObj.isPartial = true;
 
@@ -1006,14 +1015,14 @@ function updateStatus(sheets, d) {
     const ledgerData = getTableData(sheets.supplierLedger);
     const dupLedger = ledgerData.find(l => l.tracking === tracking && (l.type === "أوردر مستلم" || l.type === "تسليم" || l.type === "أوردر مستلم جزئي"));
     if (!dupLedger) {
-      const supplierShare = pAm;
+      const supplierShare = kept_goods_value;
       appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
         supplier: order.supplier,
         date: now(),
         type: "أوردر مستلم جزئي",
         tracking: tracking,
         amount: supplierShare,
-        desc: `حقوق توريد أوردر تسليم جزئي: ${tracking} (قيمة البضاعة المباعة الصافية: ${pAm} ج.م)`
+        desc: `حقوق توريد أوردر تسليم جزئي: ${tracking} (قيمة البضاعة المستلمة فعلياً: ${kept_goods_value} ج.م، قيمة المرتجع المستبعد: ${returned_goods_value} ج.م، شحن الشركة: ${shipPrice} ج.م)`
       });
     }
   }
@@ -1811,12 +1820,33 @@ function calculateSupplierBalance(sheets, supplierName, preloadedDb) {
     var status = (o.status || "").toString().trim();
     var isPartial = o.isPartial === true || o.isPartial === "true" || ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(status) !== -1;
     if (isPartial) {
-      var soldValue = Number(o.partialAmount || o.actualReceivedCash || o["المبلغ المحصل"] || 0);
+      var shipPrice = Number(o.shipPrice || financials.shipPrice || 60);
+      var soldValue = Number(o.actualReceivedCash || o.partialAmount || o["المبلغ المحصل"] || 0);
       if (isNaN(soldValue)) soldValue = 0;
-      var unsoldPortion = financials.prodPrice - soldValue;
+      var kept_goods_value = Math.max(0, soldValue - shipPrice);
+      var unsoldPortion = financials.prodPrice - kept_goods_value;
       return sum + (unsoldPortion > 0 ? unsoldPortion : 0);
     }
     return sum + financials.prodPrice;
+  }, 0);
+
+  // 3. Kept goods value (strict rule for outstanding calculation)
+  var totalKeptGoodsValue = supplierOrders.reduce(function(sum, o) {
+    var status = (o.status || "").toString().trim();
+    var financials = getOrderFinancials(o);
+    var isDelivered = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].indexOf(status) !== -1;
+    var isPartial = o.isPartial === true || o.isPartial === "true" || ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(status) !== -1;
+    
+    if (isDelivered) {
+      return sum + financials.prodPrice;
+    } else if (isPartial) {
+      var shipPrice = Number(o.shipPrice || financials.shipPrice || 60);
+      var soldValue = Number(o.actualReceivedCash || o.partialAmount || o["المبلغ المحصل"] || 0);
+      if (isNaN(soldValue)) soldValue = 0;
+      var kept_goods_value = Math.max(0, soldValue - shipPrice);
+      return sum + kept_goods_value;
+    }
+    return sum;
   }, 0);
 
   var adjustmentsAndPayments = rawLedger.filter(isHumanPayout);
@@ -1839,19 +1869,16 @@ function calculateSupplierBalance(sheets, supplierName, preloadedDb) {
 
   var outstanding =
     openingBalance +
-    totalGoodsUploaded -
-    returnsDeliveredValue +
+    totalKeptGoodsValue +
     totalLedgerEffect;
 
   var totalOrdersCount = supplierOrders.length;
   var deliveredOrders = supplierOrders.filter(function(o) {
     var status = (o.status || "").toString().trim();
-    return ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].indexOf(status) !== -1;
+    return ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(status) !== -1;
   });
   var deliveredOrdersCount = deliveredOrders.length;
-  var deliveredOrdersValue = deliveredOrders.reduce(function(sum, o) {
-    return sum + getOrderFinancials(o).prodPrice;
-  }, 0);
+  var deliveredOrdersValue = totalKeptGoodsValue;
 
   var rate = totalOrdersCount
     ? Math.round((deliveredOrdersCount / totalOrdersCount) * 100)
@@ -1905,50 +1932,62 @@ function getSupplierUnifiedLedger(sheets, supplierName) {
     });
   }
 
-  // B. All uploaded orders count as supplier credit immediately
+  // B. Process all orders of the supplier
   for (var i = 0; i < supplierOrders.length; i++) {
     var o = supplierOrders[i];
     var financials = getOrderFinancials(o);
     var status = (o.status || o["الحالة"] || "").toString().trim();
     var tracking = o.tracking || o["رقم التتبع"] || "";
-    var prodPriceNum = financials.prodPrice;
-
-    var orderDesc = "حقوق بضاعة أوردر رقم #" + tracking + " (صافي بضاعة: " + prodPriceNum + " ج.م - حالة الأوردر: " + status + ")";
-
-    entries.push({
-      date: o.orderDate || o.createdAt || o["تاريخ الطلب"] || "",
-      type: "حقوق بضاعة أوردر",
-      tracking: tracking,
-      amount: prodPriceNum,
-      desc: orderDesc
-    });
-  }
-
-  // C. Returned orders as debit action (negative deduction since they are delivered back to supplier)
-  for (var i = 0; i < returnedOrders.length; i++) {
-    var o = returnedOrders[i];
-    var financials = getOrderFinancials(o);
-    var tracking = o.tracking || o["رقم التتبع"] || "";
-    var status = (o.status || o["الحالة"] || "").toString().trim();
-
+    
+    var isDelivered = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].indexOf(status) !== -1;
     var isPartial = o.isPartial === true || o.isPartial === "true" || ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(status) !== -1;
-    var deductAmount = financials.prodPrice;
-    if (isPartial) {
-      var soldValue = Number(o.partialAmount || o.actualReceivedCash || o["المبلغ المحصل"] || 0);
-      if (isNaN(soldValue)) soldValue = 0;
-      var unsoldPortion = financials.prodPrice - soldValue;
-      deductAmount = unsoldPortion > 0 ? unsoldPortion : 0;
+    var isReturned = isReturnedDeliveredToSupplier(status);
+
+    if (isDelivered) {
+      var prodPriceNum = financials.prodPrice;
+      var orderDesc = "حقوق بضاعة أوردر رقم #" + tracking + " (تم التسليم بنجاح - صافي بضاعة: " + prodPriceNum + " ج.م)";
+      entries.push({
+        date: o.orderDate || o.createdAt || o["تاريخ الطلب"] || "",
+        type: "حقوق بضاعة أوردر",
+        tracking: tracking,
+        amount: prodPriceNum,
+        desc: orderDesc
+      });
+    } else if (isPartial) {
+      var shipPrice = Number(o.shipPrice || financials.shipPrice || 60);
+      var actualReceived = Number(o.actualReceivedCash || o.partialAmount || o["المبلغ المحصل"] || 0);
+      var keptValue = Math.max(0, actualReceived - shipPrice);
+      var unsoldPortion = Math.max(0, financials.prodPrice - keptValue);
+      
+      var orderDesc = "حقوق بضاعة جزئي أوردر رقم #" + tracking + " (تسليم جزئي: قيمة المستلم الصافي " + keptValue + " ج.م، قيمة المرتجع المستبعد " + unsoldPortion + " ج.م، مصاريف الشحن " + shipPrice + " ج.م)";
+      entries.push({
+        date: o.orderDate || o.createdAt || o["تاريخ الطلب"] || "",
+        type: "حقوق بضاعة جزئي",
+        tracking: tracking,
+        amount: keptValue,
+        desc: orderDesc
+      });
+    } else if (isReturned) {
+      // Just log the return with 0 financial effect since it wasn't credited
+      var orderDesc = "أوردر مرتجع رقم #" + tracking + " (تم إرجاع البضاعة للمورد بالكامل - قيمة الحركة: 0 ج.م)";
+      entries.push({
+        date: o.returnDate || o.updatedAt || "",
+        type: "مرتجع مخصوم",
+        tracking: tracking,
+        amount: 0,
+        desc: orderDesc
+      });
+    } else {
+      // For in-transit/pending/postponed orders, optionally list with 0 amount
+      var orderDesc = "أوردر رقم #" + tracking + " (حالة: " + status + " - قيد المعالجة/لم يصفى بعد)";
+      entries.push({
+        date: o.orderDate || o.createdAt || "",
+        type: "أوردر معلق",
+        tracking: tracking,
+        amount: 0,
+        desc: orderDesc
+      });
     }
-
-    var returnDesc = "مرتجع مستلم للمورد أوردر رقم #" + tracking + " (قيمة المستقطع: -" + deductAmount + " ج.م - حالة: " + status + ")";
-
-    entries.push({
-      date: o.returnDate || o.updatedAt || "",
-      type: "مرتجع مخصوم",
-      tracking: tracking,
-      amount: -deductAmount,
-      desc: returnDesc
-    });
   }
 
   // D. Payouts and adjustments with corrected signs
@@ -2097,9 +2136,11 @@ function getSupplierLedgerData(sheets, d) {
         var financials = getOrderFinancials(o);
         var isPartial = o.isPartial === true || o.isPartial === "true" || ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(o.status || o["الحالة"] || "") !== -1;
         if (isPartial) {
+          var shipPrice = Number(o.shipPrice || financials.shipPrice || 60);
           var soldValue = Number(o.partialAmount || o.actualReceivedCash || o["المبلغ المحصل"] || 0);
           if (isNaN(soldValue)) soldValue = 0;
-          var unsoldPortion = financials.prodPrice - soldValue;
+          var kept_goods_value = Math.max(0, soldValue - shipPrice);
+          var unsoldPortion = financials.prodPrice - kept_goods_value;
           return sum + (unsoldPortion > 0 ? unsoldPortion : 0);
         }
         return sum + financials.prodPrice;
@@ -2134,14 +2175,15 @@ function getSupplierLedgerData(sheets, d) {
       var status = (o.status || "").toString().trim();
       var fin = getOrderFinancials(o);
       var isDelivered = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].indexOf(status) !== -1;
-      var isPartial = ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(status) !== -1;
+      var isPartial = o.isPartial === true || o.isPartial === "true" || ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(status) !== -1;
       if (isDelivered) {
         var netProduct = Number(fin.totalCOD) - Number(fin.shipPrice);
         return sum + (isNaN(netProduct) ? 0 : netProduct);
       } else if (isPartial) {
         var cash = Number(o.actualReceivedCash || o.partialAmount || o["المبلغ المحصل"] || 0);
+        var shipPrice = Number(o.shipPrice || fin.shipPrice || 60);
         if (isNaN(cash)) cash = 0;
-        return sum + cash;
+        return sum + Math.max(0, cash - shipPrice);
       }
       return sum;
     }, 0);
@@ -2185,13 +2227,14 @@ function getSupplierLedgerData(sheets, d) {
     var status = (o.status || "").toString().trim();
     var fin = getOrderFinancials(o);
     var isDelivered = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].indexOf(status) !== -1;
-    var isPartial = ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(status) !== -1;
+    var isPartial = o.isPartial === true || o.isPartial === "true" || ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(status) !== -1;
     if (isDelivered) {
       return sum + (Number(fin.totalCOD) - Number(fin.shipPrice));
     } else if (isPartial) {
       var cash = Number(o.actualReceivedCash || o.partialAmount || o["المبلغ المحصل"] || 0);
+      var shipPrice = Number(o.shipPrice || fin.shipPrice || 60);
       if (isNaN(cash)) cash = 0;
-      return sum + cash;
+      return sum + Math.max(0, cash - shipPrice);
     }
     return sum;
   }, 0);
