@@ -649,6 +649,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       .filter((o) => {
         // Strict role-based filter safety enforcement
         if (isAgent) {
+          if (o.status === "جاهز للاستلام من المورد") return false;
           if (!o.courier || o.courier.toString().trim().toLowerCase() !== username.trim().toLowerCase()) return false;
         } else if (isSupplier) {
           if (!o.supplier || o.supplier.toString().trim().toLowerCase() !== username.trim().toLowerCase()) return false;
@@ -659,8 +660,8 @@ export default function Orders({ token, role, username, orders, setOrders, couri
 
         const hasSearch = !!search.trim();
 
-        // Exclude delayed / unanswered hold-ups from the main "all" (الكل) tab list globally (do not hide from courier)
-        if (!hasSearch && !isAgent && activeFilter === "all" && ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد"].includes(o.status)) {
+        // Exclude delayed / unanswered hold-ups and pre-intake orders from the main "all" (الكل) tab list globally (do not hide from courier)
+        if (!hasSearch && !isAgent && activeFilter === "all" && ["مؤجل", "لا يوجد رد", "العميل لم يقم بالرد", "جاهز للاستلام من المورد"].includes(o.status)) {
           return false;
         }
 
@@ -696,6 +697,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
         } else if (!hasSearch && activeFilter !== "all") {
           // Logistic Status Categorization & Fallback mapping
           const status = (o.status || "").toString().trim();
+          if (activeFilter === "جاهز للاستلام من المورد" && status !== "جاهز للاستلام من المورد") return false;
           if (activeFilter === "جديد" && status !== "جديد") return false;
           if (activeFilter === "مسند" && !["تم الإسناد", "مسند", "تم الاسناد", "مُسند جديد"].includes(status)) return false;
           if (activeFilter === "خارج مع المندوب" && !["خارج مع المندوب", "خارج للتسليم", "خارج للتوصيل", "مع المندوب"].includes(status)) return false;
@@ -708,7 +710,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
           if (activeFilter === "تم تسليمه للمورد" && !["تم تسليم المرتجع للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "جاري الرجوع للمورد", "التسليم للمورد", "تم تسليمه للمورد"].includes(status)) return false;
           
           // Non-standard fallback filter matching
-          if (!["جديد", "مسند", "العميل رد وجاري التسليم", "تم التسليم", "تسليم جزئي", "مؤجل", "العميل لا يرد", "مرتجع بالمستودع", "تم تسليمه للمورد", "خارج مع المندوب"].includes(activeFilter)) {
+          if (!["جاهز للاستلام من المورد", "جديد", "مسند", "العميل رد وجاري التسليم", "تم التسليم", "تسليم جزئي", "مؤجل", "العميل لا يرد", "مرتجع بالمستودع", "تم تسليمه للمورد", "خارج مع المندوب"].includes(activeFilter)) {
             if (status !== activeFilter) return false;
           }
         }
@@ -861,6 +863,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
 
     const counts: { [key: string]: number } = {
       all: dayOrders.length,
+      "جاهز للاستلام من المورد": 0,
       "جديد": 0,
       "مسند": 0,
       "خارج مع المندوب": 0,
@@ -875,7 +878,8 @@ export default function Orders({ token, role, username, orders, setOrders, couri
 
     dayOrders.forEach((o) => {
       const status = (o.status || "").toString().trim();
-      if (status === "جديد") counts["جديد"]++;
+      if (status === "جاهز للاستلام من المورد") counts["جاهز للاستلام من المورد"]++;
+      else if (status === "جديد") counts["جديد"]++;
       else if (["تم الإسناد", "مسند", "تم الاسناد", "مُسند جديد"].includes(status)) counts["مسند"]++;
       else if (["خارج مع المندوب", "خارج للتسليم", "خارج للتوصيل", "مع المندوب"].includes(status)) counts["خارج مع المندوب"]++;
       else if (["تم رد العميل وجاري التنسيق", "العميل رد وجاري التسليم"].includes(status) || status.includes("رد وجاري")) counts["العميل رد وجاري التسليم"]++;
@@ -1500,6 +1504,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
 
   const getBadgeStyle = (status: string) => {
     switch (status) {
+      case "جاهز للاستلام من المورد": return "bg-pink-950/45 text-pink-400 border border-pink-900/30 font-extrabold";
       case "جديد": return "bg-blue-950/40 text-blue-400 border border-blue-900/30";
       case "تم الإسناد": return "bg-indigo-950/40 text-indigo-400 border border-indigo-900/30";
       case "مُسند جديد": return "bg-sky-950/40 text-sky-400 border border-sky-900/30 font-bold";
@@ -2562,9 +2567,10 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       )}
 
       {/* Category filters Grid */}
-      <div className="grid grid-cols-2 xs:grid-cols-2 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-11 gap-2 px-4 font-sans">
+      <div className="grid grid-cols-2 xs:grid-cols-2 sm:grid-cols-3 md:grid-cols-6 lg:grid-cols-12 gap-2 px-4 font-sans">
         {[
           { key: "all", label: "الكل" },
+          { key: "جاهز للاستلام من المورد", label: "⏳ جاهز للاستلام" },
           { key: "جديد", label: "🆕 جديد" },
           { key: "مسند", label: "📋 مسند" },
           { key: "خارج مع المندوب", label: "🚚 مع المندوب" },

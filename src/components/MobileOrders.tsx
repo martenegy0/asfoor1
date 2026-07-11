@@ -356,6 +356,7 @@ export default function MobileOrders({
           {(() => {
             const rawFilters = [
               { key: "all", label: "الكل" },
+              { key: "جاهز للاستلام من المورد", label: "⏳ جاهز للاستلام" },
               { key: "جديد", label: "🆕 جديد" },
               { key: "مسند", label: "📋 مسند" },
               { key: "العميل رد وجاري التسليم", label: "📞 لرد وجاري" },

@@ -82,6 +82,129 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
   const [loading, setLoading] = useState(false);
   const [feedback, setFeedback] = useState("");
 
+  // --- Withdrawal requests states ---
+  const [withdrawalRequests, setWithdrawalRequests] = useState<any[]>([]);
+  const [loadingWithdrawals, setLoadingWithdrawals] = useState(false);
+  const [withdrawalAmount, setWithdrawalAmount] = useState("");
+  const [withdrawalMethod, setWithdrawalMethod] = useState("");
+  const [showWithdrawalModal, setShowWithdrawalModal] = useState(false);
+  const [withdrawalReason, setWithdrawalReason] = useState("");
+  const [actioningWithdrawalId, setActioningWithdrawalId] = useState<string | null>(null);
+  const [isRejecting, setIsRejecting] = useState(false);
+
+  async function fetchWithdrawalRequests() {
+    setLoadingWithdrawals(true);
+    try {
+      const res = await apiCall("getWithdrawalRequests", token);
+      if (res.ok) {
+        setWithdrawalRequests(res.requests || []);
+      }
+    } catch (err) {
+      console.error("Failed to fetch withdrawal requests", err);
+    } finally {
+      setLoadingWithdrawals(false);
+    }
+  }
+
+  async function handleRequestWithdrawal(e: React.FormEvent) {
+    e.preventDefault();
+    setFeedback("");
+    const amount = Number(withdrawalAmount);
+    if (!withdrawalAmount || isNaN(amount) || amount <= 0) {
+      setFeedback("يرجى إدخال مبلغ صحيح أكبر من الصفر.");
+      return;
+    }
+
+    if (amount > liveBalance) {
+      setFeedback(`عذراً، المبلغ المطلوب (${amount} ج.م) يتجاوز رصيدك المستحق الحالي (${liveBalance} ج.م).`);
+      return;
+    }
+
+    if (!withdrawalMethod.trim()) {
+      setFeedback("يرجى إدخال وسيلة الدفع ورقم التحويل (مثال: فودافون كاش - 010xxxxxxx).");
+      return;
+    }
+
+    setSubmittingLedger(true);
+    try {
+      const res = await apiCall("requestWithdrawal", token, {
+        supplier: isSupplier ? user : selectedSupplier,
+        amount: amount,
+        paymentMethod: withdrawalMethod
+      });
+
+      if (res.ok) {
+        setFeedback("✅ تم تقديم طلب السحب بنجاح وهو قيد المراجعة حالياً.");
+        setShowWithdrawalModal(false);
+        setWithdrawalAmount("");
+        setWithdrawalMethod("");
+        // Reload
+        await loadSupplierLedger();
+        await fetchWithdrawalRequests();
+      } else {
+        setFeedback(`❌ فشل تقديم الطلب: ${res.error || "خطأ غير معروف"}`);
+      }
+    } catch (err: any) {
+      setFeedback(`❌ حدث خطأ أثناء إرسال الطلب: ${err.message || err.toString()}`);
+    } finally {
+      setSubmittingLedger(false);
+    }
+  }
+
+  async function handleApproveWithdrawal(id: string) {
+    if (!window.confirm("هل أنت متأكد من الموافقة على طلب السحب وتحويل المبلغ؟ سيتم خصم القيمة من رصيد المورد وتسجيل قيد صرف في الخزانة.")) {
+      return;
+    }
+    setFeedback("");
+    setLoadingWithdrawals(true);
+    try {
+      const res = await apiCall("approveWithdrawal", token, {
+        id: id,
+        currentUser: user
+      });
+      if (res.ok) {
+        setFeedback(`✅ ${res.msg || "تمت الموافقة وصرف الطلب بنجاح!"}`);
+        await loadSupplierLedger();
+        await fetchWithdrawalRequests();
+      } else {
+        setFeedback(`❌ فشل الموافقة على الطلب: ${res.error || "خطأ غير معروف"}`);
+      }
+    } catch (err: any) {
+      setFeedback(`❌ حدث خطأ: ${err.message || err.toString()}`);
+    } finally {
+      setLoadingWithdrawals(false);
+    }
+  }
+
+  async function handleRejectWithdrawal(id: string, reason: string) {
+    if (!reason.trim()) {
+      alert("يرجى كتابة سبب الرفض أولاً.");
+      return;
+    }
+    setFeedback("");
+    setLoadingWithdrawals(true);
+    try {
+      const res = await apiCall("rejectWithdrawal", token, {
+        id: id,
+        reason: reason,
+        currentUser: user
+      });
+      if (res.ok) {
+        setFeedback("✅ تم رفض طلب السحب وحفظ السبب بنجاح.");
+        setIsRejecting(false);
+        setWithdrawalReason("");
+        setActioningWithdrawalId(null);
+        await fetchWithdrawalRequests();
+      } else {
+        setFeedback(`❌ فشل رفض الطلب: ${res.error || "خطأ غير معروف"}`);
+      }
+    } catch (err: any) {
+      setFeedback(`❌ حدث خطأ: ${err.message || err.toString()}`);
+    } finally {
+      setLoadingWithdrawals(false);
+    }
+  }
+
   // Populate drop-downs for Admin/Accountant
   async function fetchResourceLists() {
     try {
@@ -249,6 +372,7 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
   useEffect(() => {
     if (activeLedger === "supplier") {
       loadSupplierLedger();
+      fetchWithdrawalRequests();
     } else {
       loadCourierLedger();
     }
@@ -591,6 +715,254 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
               </div>
             )}
           </div>
+
+          {/* Withdrawal Requests Section */}
+          {(isSupplier || isFinancial) && (
+            <div className="bg-slate-900 border border-white/6 rounded-2xl p-4 space-y-4 shadow-sm text-right">
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 border-b border-white/5 pb-3">
+                <div className="flex items-center gap-2">
+                  <span className="p-1 px-2 bg-pink-500/10 text-pink-400 rounded-md text-[10.5px]">💸</span>
+                  <div>
+                    <h3 className="text-xs font-black text-slate-200">بوابة طلبات سحب الرصيد للموردين</h3>
+                    <p className="text-[9px] text-slate-400 mt-0.5">طلب سحب فوري أو متابعة حالة الدفعات المحولة</p>
+                  </div>
+                </div>
+                {isSupplier && (
+                  <button
+                    onClick={() => setShowWithdrawalModal(true)}
+                    className="px-4 py-2 bg-gradient-to-l from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-slate-950 font-black text-xs rounded-xl flex items-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer"
+                  >
+                    <span>➕ طلب سحب جديد</span>
+                  </button>
+                )}
+              </div>
+
+              {/* List of Withdrawal Requests */}
+              <div className="space-y-2">
+                {loadingWithdrawals ? (
+                  <div className="flex items-center justify-center py-6 gap-2 text-slate-400 text-xs">
+                    <Loader2 size={16} className="animate-spin text-amber-500" />
+                    جاري تحميل طلبات السحب...
+                  </div>
+                ) : (
+                  (() => {
+                    // Filter requests
+                    const filteredRequests = withdrawalRequests.filter(req => {
+                      if (isSupplier) {
+                        return req.supplier && req.supplier.toString().trim().toLowerCase() === user.trim().toLowerCase();
+                      }
+                      // For admin, we can show for current selected supplier or all
+                      if (selectedSupplier) {
+                        return req.supplier && req.supplier.toString().trim().toLowerCase() === selectedSupplier.trim().toLowerCase();
+                      }
+                      return true;
+                    });
+
+                    if (filteredRequests.length === 0) {
+                      return (
+                        <p className="text-[10px] text-slate-500 text-center py-4 font-bold">
+                          لا توجد طلبات سحب مسجلة حالياً.
+                        </p>
+                      );
+                    }
+
+                    return (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-right border-collapse text-xs">
+                          <thead>
+                            <tr className="border-b border-white/5 text-[10px] text-slate-400 font-bold bg-slate-950/30">
+                              <th className="p-2">رقم الطلب</th>
+                              <th className="p-2">التاريخ</th>
+                              {!isSupplier && <th className="p-2">المورد</th>}
+                              <th className="p-2">المبلغ المطلوب</th>
+                              <th className="p-2">وسيلة ورقم الدفع</th>
+                              <th className="p-2 text-center">الحالة</th>
+                              <th className="p-2">ملاحظات التحويل / الرفض</th>
+                              {isFinancial && <th className="p-2 text-center">الإجراءات</th>}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {filteredRequests.map((req, index) => {
+                              const amt = Number(req.amount || 0);
+                              return (
+                                <tr key={req.id || index} className="border-b border-white/5 hover:bg-white/1">
+                                  <td className="p-2 font-mono text-[10.5px] text-slate-400 font-bold">#{req.id}</td>
+                                  <td className="p-2 text-slate-350">{req.date ? req.date.split("T")[0] : "—"}</td>
+                                  {!isSupplier && <td className="p-2 font-black text-amber-400">{req.supplier}</td>}
+                                  <td className="p-2 font-mono font-black text-emerald-400">
+                                    {amt.toLocaleString("ar")} ج.م
+                                  </td>
+                                  <td className="p-2 font-medium text-slate-300">{req.paymentMethod || "—"}</td>
+                                  <td className="p-2 text-center">
+                                    {req.status === "معلق" ? (
+                                      <span className="inline-block px-2 py-0.5 rounded-full text-[9px] font-black bg-yellow-500/10 text-yellow-500 border border-yellow-500/25 animate-pulse">
+                                        ⏳ معلق
+                                      </span>
+                                    ) : req.status === "مقبول" ? (
+                                      <span className="inline-block px-2 py-0.5 rounded-full text-[9px] font-black bg-emerald-500/10 text-emerald-450 border border-emerald-500/25">
+                                        ✅ مقبول
+                                      </span>
+                                    ) : (
+                                      <span className="inline-block px-2 py-0.5 rounded-full text-[9px] font-black bg-red-500/10 text-red-400 border border-red-500/25">
+                                        ❌ مرفوض
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="p-2 text-slate-405 text-[10.5px] max-w-[200px] truncate" title={req.notes}>
+                                    {req.notes || "—"}
+                                  </td>
+                                  {isFinancial && (
+                                    <td className="p-2 text-center">
+                                      {req.status === "معلق" ? (
+                                        <div className="flex items-center justify-center gap-1.5">
+                                          <button
+                                            onClick={() => handleApproveWithdrawal(req.id)}
+                                            className="px-2 py-1 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-black rounded-lg text-[10px] cursor-pointer transition-all active:scale-95"
+                                            title="الموافقة والتحويل وصرف القيمة"
+                                          >
+                                            ✔ موافقة
+                                          </button>
+                                          <button
+                                            onClick={() => {
+                                              setActioningWithdrawalId(req.id);
+                                              setIsRejecting(true);
+                                              setWithdrawalReason("");
+                                            }}
+                                            className="px-2 py-1 bg-red-500 hover:bg-red-600 text-slate-950 font-black rounded-lg text-[10px] cursor-pointer transition-all active:scale-95"
+                                            title="رفض الطلب مع توضيح السبب"
+                                          >
+                                            ❌ رفض
+                                          </button>
+                                        </div>
+                                      ) : (
+                                        <span className="text-[10px] text-slate-500">—</span>
+                                      )}
+                                    </td>
+                                  )}
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  })()
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Modal for Requesting Withdrawal */}
+          {showWithdrawalModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 backdrop-blur-sm p-4 font-sans text-right">
+              <div className="w-full max-w-md bg-slate-900 border border-white/10 rounded-2xl p-6 space-y-4 shadow-2xl relative">
+                <button
+                  type="button"
+                  onClick={() => setShowWithdrawalModal(false)}
+                  className="absolute top-4 left-4 text-slate-400 hover:text-white text-xs bg-slate-950/40 hover:bg-slate-950 px-2.5 py-1 rounded-lg border border-white/5 cursor-pointer font-sans"
+                >
+                  ✕ إغلاق
+                </button>
+                <div className="space-y-1">
+                  <h3 className="text-sm font-black text-slate-200">إنشاء طلب سحب رصيد جديد</h3>
+                  <p className="text-[10px] text-slate-400">سيتم مراجعة الطلب وتحويل المبلغ المطلوب من قبل الإدارة المالية</p>
+                </div>
+
+                <form onSubmit={handleRequestWithdrawal} className="space-y-4 pt-2">
+                  <div className="space-y-1.5">
+                    <label className="block text-[10.5px] font-bold text-slate-350">الرصيد المستحق الحالي:</label>
+                    <div className="p-3 bg-slate-950 rounded-xl font-mono text-sm font-bold text-emerald-400">
+                      {Number(liveBalance || 0).toLocaleString("ar")} ج.م
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="block text-[10.5px] font-bold text-slate-350">المبلغ المطلوب سحبه (ج.م):</label>
+                    <input
+                      type="number"
+                      required
+                      min="1"
+                      max={liveBalance}
+                      value={withdrawalAmount}
+                      onChange={(e) => setWithdrawalAmount(e.target.value)}
+                      placeholder="أدخل قيمة المبلغ..."
+                      className="w-full bg-slate-950 border border-white/10 rounded-xl px-4 py-3 text-xs font-bold text-slate-200 placeholder-slate-650 focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="block text-[10.5px] font-bold text-slate-350">وسيلة ورقم الدفع (InstaPay / فودافون كاش):</label>
+                    <input
+                      type="text"
+                      required
+                      value={withdrawalMethod}
+                      onChange={(e) => setWithdrawalMethod(e.target.value)}
+                      placeholder="مثال: InstaPay: user@instapay أو محفظة 010xxxxxxx"
+                      className="w-full bg-slate-950 border border-white/10 rounded-xl px-4 py-3 text-xs font-bold text-slate-200 placeholder-slate-650 focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={submittingLedger}
+                    className="w-full py-3 bg-gradient-to-l from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-slate-950 font-black text-xs rounded-xl cursor-pointer shadow-lg hover:shadow-emerald-500/10 flex items-center justify-center gap-2"
+                  >
+                    {submittingLedger ? (
+                      <>
+                        <Loader2 size={14} className="animate-spin text-slate-950" />
+                        جاري إرسال الطلب...
+                      </>
+                    ) : (
+                      "🚀 تقديم طلب السحب"
+                    )}
+                  </button>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* Modal for Rejection Reason */}
+          {isRejecting && actioningWithdrawalId && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 backdrop-blur-sm p-4 font-sans text-right">
+              <div className="w-full max-w-md bg-slate-900 border border-white/10 rounded-2xl p-6 space-y-4 shadow-2xl relative">
+                <div className="space-y-1">
+                  <h3 className="text-sm font-black text-red-400">تأكيد رفض طلب السحب #{actioningWithdrawalId}</h3>
+                  <p className="text-[10px] text-slate-400">يرجى كتابة سبب الرفض ليتمكن المورد من معرفة التفاصيل</p>
+                </div>
+
+                <div className="space-y-3 pt-2">
+                  <textarea
+                    required
+                    value={withdrawalReason}
+                    onChange={(e) => setWithdrawalReason(e.target.value)}
+                    placeholder="اكتب سبب الرفض هنا بالتفصيل..."
+                    className="w-full min-h-[100px] bg-slate-950 border border-white/10 rounded-xl p-3 text-xs font-bold text-slate-200 placeholder-slate-650 focus:outline-none focus:border-red-500"
+                  />
+
+                  <div className="flex items-center gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => handleRejectWithdrawal(actioningWithdrawalId, withdrawalReason)}
+                      className="flex-1 py-3 bg-red-600 hover:bg-red-700 text-white font-black text-xs rounded-xl cursor-pointer font-sans"
+                    >
+                      تأكيد الرفض ✖
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsRejecting(false);
+                        setWithdrawalReason("");
+                        setActioningWithdrawalId(null);
+                      }}
+                      className="flex-1 py-3 bg-slate-950 hover:bg-slate-900 text-slate-400 font-bold text-xs rounded-xl cursor-pointer border border-white/5 font-sans"
+                    >
+                      تراجع وإلغاء
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Days Explorer Block */}
           <div className="space-y-4">

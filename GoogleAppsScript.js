@@ -62,7 +62,8 @@ function doPost(e) {
     "bulkUpdate", "updateOrdersStatusBulk", "addSupplierPayment", 
     "addCourierAdjustment", "addCashbox", "addExpense", "addUser", 
     "registerUser", "updateUser", "updateCourier", "addDailyClosing",
-    "settleCourierOrders", "settleSupplierDay"
+    "settleCourierOrders", "settleSupplierDay", "requestWithdrawal",
+    "approveWithdrawal", "rejectWithdrawal"
   ];
   
   var isWrite = writeActions.indexOf(action) !== -1;
@@ -200,6 +201,18 @@ function doPost(e) {
       case "addDailyClosing":
         result = addDailyClosing(sheets, requestData);
         break;
+      case "getWithdrawalRequests":
+        result = getWithdrawalRequests(sheets);
+        break;
+      case "requestWithdrawal":
+        result = requestWithdrawal(sheets, requestData);
+        break;
+      case "approveWithdrawal":
+        result = approveWithdrawal(sheets, requestData);
+        break;
+      case "rejectWithdrawal":
+        result = rejectWithdrawal(sheets, requestData);
+        break;
       default:
         result = { ok: false, error: "الإجراء المطلوب غير مدعوم في السكريبت الحالي." };
     }
@@ -253,7 +266,8 @@ function initSheets() {
     supplierSettlements: ["supplier", "date", "status", "settledAt", "settledBy"],
     courierLedger: ["courier", "date", "type", "tracking", "amount", "desc", "isSettledMonth"],
     auditLog: ["user", "type", "dateTime", "oldVal", "newVal", "reason"],
-    dailyClosing: ["date", "deliveredCount", "returnedCount", "totalCOD", "shippingCost", "addedBy"]
+    dailyClosing: ["date", "deliveredCount", "returnedCount", "totalCOD", "shippingCost", "addedBy"],
+    withdrawalRequests: ["id", "date", "supplier", "amount", "paymentMethod", "status", "notes"]
   };
 
   // 🔄 قائمة مرادفات أسماء الشيتات (عربي / إنجليزي) لربط الشيتات الموجودة مسبقاً ومنع تكرارها
@@ -270,7 +284,8 @@ function initSheets() {
     supplierSettlements: ["تصفية حسابات الموردين", "تصفية الموردين", "Supplier_Settlements", "supplierSettlements"],
     courierLedger: ["كشف حساب المناديب", "حساب المناديب", "حساب المندوبين", "courierLedger"],
     auditLog: ["سجل العمليات", "سجل التدقيق", "audit.log", "auditLog"],
-    dailyClosing: ["التقفيل اليومي", "dailyClosing"]
+    dailyClosing: ["التقفيل اليومي", "dailyClosing"],
+    withdrawalRequests: ["Withdrawal_Requests", "طلبات السحب", "withdrawalRequests"]
   };
 
   const sheets = {};
@@ -281,6 +296,8 @@ function initSheets() {
       fallbackName = "التقفيل اليومي";
     } else if (key === "supplierSettlements") {
       fallbackName = "Supplier_Settlements";
+    } else if (key === "withdrawalRequests") {
+      fallbackName = "Withdrawal_Requests";
     }
 
     // البحث المتقدم بالأسماء المتوقعة
@@ -535,16 +552,17 @@ function addOrder(sheets, d) {
     }
   }
 
-  const initialCourier = matchedCourier ? matchedCourier.name : "";
-  const initialStatus = matchedCourier ? "مُسند جديد" : "جديد";
-  const initialCommission = matchedCourier ? Number(matchedCourier.commission || 25) : 0;
+  const isSupplier = d.currentRole === "مورد" || d.role === "مورد";
+  const initialCourier = isSupplier ? "" : (matchedCourier ? matchedCourier.name : "");
+  const initialStatus = isSupplier ? "جاهز للاستلام من المورد" : (matchedCourier ? "مُسند جديد" : "جديد");
+  const initialCommission = isSupplier ? 0 : (matchedCourier ? Number(matchedCourier.commission || 25) : 0);
 
   const newOrder = {
     tracking: trackingId,
     createdAt: now(),
     updatedAt: now(),
     orderDate: o.orderDate || nowDay(),
-    supplier: o.supplier || "مورد عام",
+    supplier: isSupplier ? d.currentUser : (o.supplier || "مورد عام"),
     customer: o.customer || "",
     phone: o.phone || "",
     phone2: o.phone2 || "",
@@ -722,9 +740,10 @@ function addBulk(sheets, d) {
         }
       }
 
-      const initialCourier = matchedCourier ? matchedCourier.name : "";
-      const initialStatus = matchedCourier ? "مُسند جديد" : "جديد";
-      const initialCommission = matchedCourier ? Number(matchedCourier.commission || 25) : 0;
+      const isSupplier = d.currentRole === "مورد" || d.role === "مورد";
+      const initialCourier = isSupplier ? "" : (matchedCourier ? matchedCourier.name : "");
+      const initialStatus = isSupplier ? "جاهز للاستلام من المورد" : (matchedCourier ? "مُسند جديد" : "جديد");
+      const initialCommission = isSupplier ? 0 : (matchedCourier ? Number(matchedCourier.commission || 25) : 0);
 
       const draft = {
         tracking: o.tracking,
@@ -3807,5 +3826,156 @@ function closeCourierMonth(sheets, d) {
     return { ok: false, error: err.toString() };
   } finally {
     lock.releaseLock();
+  }
+}
+
+function getWithdrawalRequests(sheets) {
+  try {
+    const data = getTableData(sheets.withdrawalRequests) || [];
+    return { ok: true, requests: data };
+  } catch (err) {
+    return { ok: false, error: err.toString() };
+  }
+}
+
+function requestWithdrawal(sheets, d) {
+  try {
+    const { supplier, amount, paymentMethod } = d;
+    if (!supplier || !amount || isNaN(Number(amount)) || Number(amount) <= 0) {
+      return { ok: false, error: "المبلغ المطلوب غير صحيح أو يجب أن يكون أكبر من الصفر." };
+    }
+    const val = Number(amount);
+
+    // Calculate current outstanding balance
+    const calc = calculateSupplierBalance(sheets, supplier);
+    const balance = calc.outstanding;
+
+    // Prevent request if amount exceeds outstanding balance
+    if (val > balance) {
+      return { ok: false, error: "المبلغ المطلوب (" + val + " ج.م) يتجاوز رصيدك المستحق الحالي (" + balance + " ج.م)" };
+    }
+
+    // Generate random unique ID
+    const reqId = "WDR-" + Math.floor(100000 + Math.random() * 900000);
+
+    appendToSheet(sheets.withdrawalRequests, ["id", "date", "supplier", "amount", "paymentMethod", "status", "notes"], {
+      id: reqId,
+      date: now(),
+      supplier: supplier,
+      amount: val,
+      paymentMethod: paymentMethod || "",
+      status: "معلق",
+      notes: ""
+    });
+
+    return { ok: true, message: "تم تقديم طلب سحب الرصيد بنجاح وهو قيد المراجعة حالياً." };
+  } catch (err) {
+    return { ok: false, error: err.toString() };
+  }
+}
+
+function approveWithdrawal(sheets, d) {
+  try {
+    const { id, currentUser } = d;
+    if (!id) return { ok: false, error: "معرف الطلب مفقود" };
+
+    const rowIndex = findRowIndex(sheets.withdrawalRequests, "id", id);
+    if (rowIndex === -1) {
+      return { ok: false, error: "لم يتم العثور على طلب السحب" };
+    }
+
+    const requests = getTableData(sheets.withdrawalRequests) || [];
+    const req = requests.find(r => r.id === id);
+    if (!req) {
+      return { ok: false, error: "لم يتم العثور على تفاصيل الطلب" };
+    }
+
+    if (req.status !== "معلق") {
+      return { ok: false, error: "هذا الطلب تم معالجته مسبقاً وحالته الحالية: " + req.status };
+    }
+
+    const supplierName = req.supplier;
+    const amount = Math.abs(Number(req.amount || 0));
+
+    // Deduct from supplier ledger
+    appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
+      supplier: supplierName,
+      date: now(),
+      type: "دفع نقدي",
+      tracking: id,
+      amount: -amount, // MUST BE NEGATIVE [-] for payout
+      desc: "سحب رصيد مقبول (معرف الطلب: #" + id + ") عبر وسيلة الدفع: " + (req.paymentMethod || "")
+    });
+
+    // Add to cashbox
+    appendToSheet(sheets.cashbox, ["date", "desc", "type", "amount", "ref", "addedBy"], {
+      date: now(),
+      desc: "سحب رصيد مقبول (معرف الطلب: #" + id + ") للمورد: " + supplierName,
+      type: "سداد مورد",
+      amount: amount,
+      ref: id,
+      addedBy: currentUser || "إدارة الحسابات"
+    });
+
+    // Change status of the request to "مقبول"
+    updateRowByObject(sheets.withdrawalRequests, rowIndex, {
+      status: "مقبول",
+      notes: "تم الموافقة والتحويل بواسطة " + (currentUser || "الأدمن") + " في " + now()
+    });
+
+    // Add audit log entry
+    appendToSheet(sheets.auditLog, ["user", "type", "dateTime", "oldVal", "newVal", "reason"], {
+      user: currentUser || "حسابات",
+      type: "قبول طلب سحب رصيد مورد",
+      dateTime: now(),
+      oldVal: "معلق",
+      newVal: "مقبول - تم التحويل بقيمة " + amount + " ج.م للمورد " + supplierName,
+      reason: "موافقة الأدمن وصرف المبلغ من الخزينة"
+    });
+
+    return { ok: true, msg: "تمت الموافقة على طلب السحب رقم " + id + " بنجاح، وتم خصم " + amount + " ج.م من كشف حساب المورد وصرفه من الخزينة." };
+  } catch (err) {
+    return { ok: false, error: err.toString() };
+  }
+}
+
+function rejectWithdrawal(sheets, d) {
+  try {
+    const { id, reason, currentUser } = d;
+    if (!id) return { ok: false, error: "معرف الطلب مفقود" };
+
+    const rowIndex = findRowIndex(sheets.withdrawalRequests, "id", id);
+    if (rowIndex === -1) {
+      return { ok: false, error: "لم يتم العثور على طلب السحب" };
+    }
+
+    const requests = getTableData(sheets.withdrawalRequests) || [];
+    const req = requests.find(r => r.id === id);
+    if (!req) {
+      return { ok: false, error: "لم يتم العثور على تفاصيل الطلب" };
+    }
+
+    if (req.status !== "معلق") {
+      return { ok: false, error: "هذا الطلب تم معالجته مسبقاً وحالته الحالية: " + req.status };
+    }
+
+    updateRowByObject(sheets.withdrawalRequests, rowIndex, {
+      status: "مرفوض",
+      notes: (reason || "تم الرفض من الإدارة") + " (بواسطة " + (currentUser || "الأدمن") + " في " + now() + ")"
+    });
+
+    // Add audit log entry
+    appendToSheet(sheets.auditLog, ["user", "type", "dateTime", "oldVal", "newVal", "reason"], {
+      user: currentUser || "حسابات",
+      type: "رفض طلب سحب رصيد مورد",
+      dateTime: now(),
+      oldVal: "معلق",
+      newVal: "مرفوض - سبب الرفض: " + (reason || "تم الرفض من الإدارة"),
+      reason: "رفض الإدارة لطلب سحب الرصيد"
+    });
+
+    return { ok: true, msg: "تم رفض طلب السحب رقم " + id + " بنجاح." };
+  } catch (err) {
+    return { ok: false, error: err.toString() };
   }
 }
