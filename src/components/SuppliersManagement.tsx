@@ -61,6 +61,7 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
   const [selectedLedgerSupplier, setSelectedLedgerSupplier] = useState("");
   const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
   const [ledgerStats, setLedgerStats] = useState<any>(null);
+  const [dailyLedgerData, setDailyLedgerData] = useState<any>(null);
   const [isLedgerLoading, setIsLedgerLoading] = useState(false);
   const [copiedTracking, setCopiedTracking] = useState<string | null>(null);
 
@@ -68,6 +69,7 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
   const [filterStartDate, setFilterStartDate] = useState("");
   const [filterEndDate, setFilterEndDate] = useState("");
   const [filterType, setFilterType] = useState("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "settled" | "pending">("all");
   const [filterSearch, setFilterSearch] = useState("");
 
   // Payment Settlement Dialog States
@@ -233,6 +235,7 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
       if (res.ok) {
         setLedgerEntries(res.entries || []);
         setLedgerStats(res.stats || null);
+        setDailyLedgerData(res.dailyLedger || null);
       } else {
         setErrorMsg(res.error || "خطأ أثناء تحميل كشف الحساب التفصيلي.");
       }
@@ -357,6 +360,21 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
       return cleanSlash.substring(0, 10);
     };
 
+    const getEntrySettleStatus = (entry: any) => {
+      const typeClean = entry.type || "";
+      const isPayoutOrAdj = ["دفع نقدي", "سداد", "سداد مورد", "دفعة", "خصم", "سحب", "تعديل", "عكسية"].some(kw => typeClean.includes(kw));
+      if (isPayoutOrAdj) return "settled";
+
+      if (dailyLedgerData && dailyLedgerData.days) {
+        const entryYMD = entry.date ? entry.date.toString().substring(0, 10) : "";
+        const matchedDay = dailyLedgerData.days.find((d: any) => d.date === entryYMD);
+        if (matchedDay) {
+          return matchedDay.isSettled ? "settled" : "pending";
+        }
+      }
+      return "pending";
+    };
+
     return ledgerEntries.filter(entry => {
       // Date constraints
       const entryYMD = normalizeEntryDate(entry.date);
@@ -372,6 +390,12 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
         if (filterType === "adjustments" && !["خصم", "سحب", "تعديل", "عكسية"].some(kw => typeClean.includes(kw))) return false;
       }
 
+      // Status Filter
+      if (statusFilter !== "all") {
+        const settleStatus = getEntrySettleStatus(entry);
+        if (settleStatus !== statusFilter) return false;
+      }
+
       // Keyword search (tracking, description, type)
       if (filterSearch.trim()) {
         const kw = filterSearch.toLowerCase().trim();
@@ -383,7 +407,7 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
 
       return true;
     });
-  }, [ledgerEntries, filterStartDate, filterEndDate, filterType, filterSearch]);
+  }, [ledgerEntries, filterStartDate, filterEndDate, filterType, statusFilter, filterSearch, dailyLedgerData]);
 
   // Overall consolidated metrics for Admin/Accountant Top Banner Card
   const totalFinancialDuesSystem = useMemo(() => {
@@ -407,6 +431,25 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
       acc.name ? acc.name.toLowerCase().includes(searchQuery.toLowerCase()) : false
     );
   }, [accounts, searchQuery]);
+
+  // Pre-calculated O(1) snapshots for ALL suppliers
+  const supplierSnapshots = useMemo(() => {
+    return accounts.map(acc => {
+      const pendingCount = (orders || []).filter(o => {
+        const oSup = (o.supplier || o["المورد"] || "").toString().trim().toLowerCase();
+        const accName = acc.name.toString().trim().toLowerCase();
+        return oSup === accName && !["تم التسليم", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تسليم المرتجع للمورد"].includes(o.status);
+      }).length;
+      
+      return {
+        name: acc.name,
+        totalCollection: acc.totalCOD || 0,
+        netDues: acc.balance || 0,
+        pendingCount,
+        phone: acc.phone || ""
+      };
+    });
+  }, [accounts, orders]);
 
   const isAdminOrAccountant = role === "مدير" || role === "محاسب";
 
@@ -745,273 +788,463 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
       {activeSubTab === "statement" && (
         <div className="space-y-6" id="statement-subtab-container">
           
-          {/* Target Supplier Select and Fast Actions Banner */}
-          <div className="bg-slate-900 border border-white/10 rounded-2xl p-5 space-y-4 print:hidden">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-              <div className="space-y-1 flex-1">
-                <label className="text-[10px] font-black text-slate-400 block pb-1">
-                  {isSupplierRole ? "اسم المورد الخاص بك" : "اختر المورد لعرض كشف حسابه التفصيلي الحالي"}
-                </label>
-                
-                {isSupplierRole ? (
-                  <div className="bg-slate-950 border border-white/8 rounded-xl px-4 py-2.5 text-xs font-black text-amber-500">
-                    👑 {selectedLedgerSupplier || "مورد مسجل"}
-                  </div>
-                ) : (
-                  <select
-                    value={selectedLedgerSupplier}
-                    onChange={(e) => setSelectedLedgerSupplier(e.target.value)}
-                    className="w-full bg-slate-950 border border-white/8 rounded-xl px-3 py-2.5 text-xs font-bold text-slate-100 outline-none focus:border-amber-500"
-                  >
-                    <option value="">-- اضغط لتحديد التاجر المراد تدقيقه --</option>
-                    {uniqueSuppliersList.map((name) => (
-                      <option key={name} value={name}>{name}</option>
-                    ))}
-                  </select>
-                )}
+          {/* Pre-Calculated Global Snapshots Banner (Zero-Lag Widgets) */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 print:hidden">
+            <div className="bg-gradient-to-br from-slate-900 to-slate-950 border border-white/6 p-5 rounded-2xl flex items-center justify-between shadow-lg">
+              <div className="space-y-1">
+                <span className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider">إجمالي تحصيل الشركاء (COD)</span>
+                <span className="text-xl font-black font-mono text-emerald-400">
+                  {supplierSnapshots.reduce((sum, s) => sum + s.totalCollection, 0).toLocaleString()} ج.م
+                </span>
               </div>
-
-              {/* Fast Printing Action */}
-              {selectedLedgerSupplier && (
-                <div className="flex items-end gap-2 shrink-0 self-end sm:self-auto">
-                  {isAdminOrAccountant && (
-                    <button
-                      onClick={() => {
-                        const targetAcc = accounts.find(a => a.name === selectedLedgerSupplier);
-                        if (targetAcc) {
-                          setActiveSettleSupplier(targetAcc);
-                          setSettleAmount(targetAcc.balance.toString());
-                          setSettleDesc(`صرف دفعة مالية للحساب من كشف الحساب المركزي`);
-                          setIsSettleModalOpen(true);
-                        }
-                      }}
-                      className="px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs rounded-xl cursor-pointer flex items-center justify-center gap-1.5 transition-colors"
-                    >
-                      <DollarSign size={13} />
-                      <span>صرف دفعة نقدية</span>
-                    </button>
-                  )}
-
-                  <button
-                    onClick={handlePrintStatement}
-                    className="px-4 py-2.5 bg-slate-950 hover:bg-slate-800 border border-white/10 text-slate-300 font-extrabold text-xs rounded-xl cursor-pointer flex items-center justify-center gap-1.5 transition-colors"
-                  >
-                    <Printer size={13} />
-                    <span>طباعة / تصدير PDF كشف حساب</span>
-                  </button>
-                </div>
-              )}
+              <div className="p-3 bg-emerald-500/10 text-emerald-400 rounded-xl">
+                <TrendingUp size={20} />
+              </div>
             </div>
 
-            {/* Print Header Section (Visible ONLY on viewport printing) */}
-            {selectedLedgerSupplier && (
-              <div className="hidden print:block text-right pb-4 border-b border-black mb-6">
-                <h1 className="text-xl font-black text-black">شركة الشحن والتوصيل المتكاملة</h1>
-                <h2 className="text-base font-bold text-gray-700">كشف حساب مالي تفصيلي للمورد الشريك: {selectedLedgerSupplier}</h2>
-                <p className="text-[10px] text-gray-500">تم الاستخراج بتاريخ: {new Date().toLocaleString("ar-EG")}</p>
+            <div className="bg-gradient-to-br from-slate-900 to-slate-950 border border-white/6 p-5 rounded-2xl flex items-center justify-between shadow-lg">
+              <div className="space-y-1">
+                <span className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider">صافي المستحقات التراكمية للحسابات</span>
+                <span className="text-xl font-black font-mono text-amber-500">
+                  {supplierSnapshots.reduce((sum, s) => sum + s.netDues, 0).toLocaleString()} ج.م
+                </span>
               </div>
-            )}
+              <div className="p-3 bg-amber-500/10 text-amber-500 rounded-xl">
+                <Wallet size={20} />
+              </div>
+            </div>
 
-            {/* Selected Supplier Metric Ribbon */}
-            {selectedLedgerSupplier && ledgerStats && (
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 bg-slate-950/60 p-4 rounded-xl border border-white/5">
-                <div className="space-y-1">
-                  <span className="text-[10px] text-slate-400 font-semibold block">إجمالي البضائع المرفوعة (صافي)</span>
-                  <span className="text-sm font-black font-mono text-blue-400">
-                    {ledgerStats.totalGoodsUploaded?.toLocaleString()} ج.م <span className="text-[9px] text-slate-500">({ledgerStats.totalOrdersCount} طلب)</span>
-                  </span>
-                </div>
+            <div className="bg-gradient-to-br from-slate-900 to-slate-950 border border-white/6 p-5 rounded-2xl flex items-center justify-between shadow-lg">
+              <div className="space-y-1">
+                <span className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider">إجمالي الشحنات المعلقة حالياً</span>
+                <span className="text-xl font-black font-mono text-blue-400">
+                  {supplierSnapshots.reduce((sum, s) => sum + s.pendingCount, 0).toLocaleString()} شحنة
+                </span>
+              </div>
+              <div className="p-3 bg-blue-500/10 text-blue-400 rounded-xl">
+                <Layers size={20} />
+              </div>
+            </div>
+          </div>
 
-                <div className="space-y-1">
-                  <span className="text-[10px] text-slate-400 font-semibold block">المرتجع المرتد المخصوم</span>
-                  <span className="text-sm font-black font-mono text-red-400">
-                    {ledgerStats.returnsDeliveredValue?.toLocaleString()} ج.م <span className="text-[9px] text-slate-500">({ledgerStats.returnsDeliveredCount} طلب مرتد)</span>
-                  </span>
-                </div>
+          {/* Pre-Calculated Supplier Snapshots Selector Grid (Click to Filter/Expand) */}
+          <div className="space-y-2 print:hidden">
+            <span className="text-[10.5px] font-black text-slate-400 block uppercase tracking-wider">
+              ⚡ المراقبة الفورية والمستحقات المباشرة لكل مورد (انقر لتصفية وفرد كشف الحساب)
+            </span>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              {supplierSnapshots
+                .filter(snap => !isSupplierRole || snap.name === user)
+                .map(snap => {
+                  const isSelected = selectedLedgerSupplier === snap.name;
+                  return (
+                    <div
+                      key={snap.name}
+                      onClick={() => {
+                        if (isSelected) {
+                          setSelectedLedgerSupplier("");
+                        } else {
+                          setSelectedLedgerSupplier(snap.name);
+                          fetchSupplierStatement(snap.name);
+                        }
+                      }}
+                      className={`relative overflow-hidden bg-slate-900 hover:bg-slate-950/80 border rounded-xl p-3.5 cursor-pointer transition-all ${
+                        isSelected 
+                          ? "border-amber-500 bg-amber-950/10 shadow-lg shadow-amber-500/5 ring-1 ring-amber-500/30" 
+                          : "border-white/6 hover:border-slate-500"
+                      }`}
+                    >
+                      <div className="flex justify-between items-start gap-1">
+                        <span className="text-xs font-black text-slate-100 truncate max-w-[130px]">{snap.name}</span>
+                        {isSelected ? (
+                          <span className="bg-amber-500 text-slate-950 text-[9px] font-black px-1.5 py-0.5 rounded-md shrink-0">نشط ✓</span>
+                        ) : snap.pendingCount > 0 ? (
+                          <span className="bg-blue-500/10 text-blue-400 text-[9px] font-bold px-1.5 py-0.5 rounded-md shrink-0">
+                            {snap.pendingCount} معلق
+                          </span>
+                        ) : (
+                          <span className="bg-emerald-500/10 text-emerald-400 text-[9px] font-bold px-1.5 py-0.5 rounded-md shrink-0">مستقر</span>
+                        )}
+                      </div>
+                      <div className="mt-2.5 grid grid-cols-2 gap-2 text-[10px] border-t border-white/4 pt-2">
+                        <div>
+                          <span className="text-slate-500 block">الصافي الدائن</span>
+                          <span className={`font-mono font-black ${snap.netDues > 0 ? "text-amber-500" : "text-slate-300"}`}>
+                            {snap.netDues?.toLocaleString()} ج.م
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-slate-500 block">إجمالي تحصيل</span>
+                          <span className="font-mono font-bold text-slate-300">
+                            {snap.totalCollection?.toLocaleString()} ج.م
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          </div>
 
-                <div className="space-y-1">
-                  <span className="text-[10px] text-slate-400 font-semibold block">الدفعات والسحوبات المصروفة</span>
-                  <span className="text-sm font-black font-mono text-emerald-400">
-                    {((ledgerStats.paymentsValue || 0) + (ledgerStats.reverseAdjustmentsValue || 0)).toLocaleString()} ج.م
-                  </span>
-                </div>
+          {/* Accordion List of Supplier Accounting Workspaces */}
+          <div className="space-y-4">
+            {supplierSnapshots
+              .filter(snap => !isSupplierRole || snap.name === user)
+              .map(snap => {
+                const isExpanded = selectedLedgerSupplier === snap.name;
+                return (
+                  <div 
+                    key={snap.name} 
+                    className={`bg-slate-900 border rounded-2xl overflow-hidden transition-all duration-300 ${
+                      isExpanded 
+                        ? "border-amber-500/40 shadow-xl shadow-amber-500/2 bg-gradient-to-b from-slate-900 to-slate-950" 
+                        : "border-white/6 hover:border-slate-700"
+                    }`}
+                  >
+                    {/* Accordion Header */}
+                    <div 
+                      onClick={() => {
+                        if (isExpanded) {
+                          setSelectedLedgerSupplier("");
+                        } else {
+                          setSelectedLedgerSupplier(snap.name);
+                          fetchSupplierStatement(snap.name);
+                        }
+                      }}
+                      className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 cursor-pointer select-none border-b border-white/4"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className={`p-2.5 rounded-xl ${isExpanded ? "bg-amber-500 text-slate-950" : "bg-slate-950 text-slate-400"}`}>
+                          <Users size={16} />
+                        </div>
+                        <div className="space-y-0.5">
+                          <h3 className="text-xs font-black text-slate-100 flex items-center gap-2">
+                            <span>{snap.name}</span>
+                            {snap.phone && <span className="text-[10px] text-slate-500 font-mono font-normal">({snap.phone})</span>}
+                          </h3>
+                          <span className="text-[10px] text-slate-400 font-semibold block">اضغط للتوسيع وعرض كشف الحساب التفصيلي المحدث</span>
+                        </div>
+                      </div>
 
-                <div className="space-y-1">
-                  <span className="text-[10px] text-amber-500 font-semibold block">الرصيد الدائن الحالي للمورد</span>
-                  <span className="text-base font-black font-mono text-amber-500">
-                    {ledgerStats.outstanding?.toLocaleString()} ج.م
-                  </span>
-                </div>
+                      <div className="flex items-center gap-4 self-end md:self-auto text-xs font-mono">
+                        <div className="hidden sm:block text-right">
+                          <span className="text-[9px] text-slate-500 block">إجمالي تحصيله</span>
+                          <span className="text-slate-300 font-bold">{snap.totalCollection?.toLocaleString()} ج.م</span>
+                        </div>
+                        <div className="text-right border-r border-white/6 pr-4">
+                          <span className="text-[9px] text-slate-500 block">الصافي المستحق للمورد</span>
+                          <span className={`font-black ${snap.netDues > 0 ? "text-amber-500" : "text-emerald-400"}`}>
+                            {snap.netDues?.toLocaleString()} ج.م
+                          </span>
+                        </div>
+                        <div className="text-right border-r border-white/6 pr-4 pl-2">
+                          <span className="text-[9px] text-slate-500 block">شحنات معلقة</span>
+                          <span className={`font-black ${snap.pendingCount > 0 ? "text-blue-400" : "text-slate-500"}`}>
+                            {snap.pendingCount}
+                          </span>
+                        </div>
+                        <div className="text-slate-400 transform transition-transform duration-300">
+                          <span className="text-lg font-black">{isExpanded ? "▲" : "▼"}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Accordion Body (Lazy Rendered Only when active) */}
+                    {isExpanded && (
+                      <div className="p-5 space-y-6">
+                        
+                        {/* Print Header (Visible ONLY on viewport printing) */}
+                        <div className="hidden print:block text-right pb-4 border-b border-black mb-6">
+                          <h1 className="text-xl font-black text-black">شركة الشحن والتوصيل المتكاملة</h1>
+                          <h2 className="text-base font-bold text-gray-700">كشف حساب مالي تفصيلي للمورد الشريك: {snap.name}</h2>
+                          <p className="text-[10px] text-gray-500">تم الاستخراج بتاريخ: {new Date().toLocaleString("ar-EG")}</p>
+                        </div>
+
+                        {/* Detailed Metrics Ribbon (from backend stats) */}
+                        {isLedgerLoading ? (
+                          <div className="text-center py-12 text-xs text-slate-500 animate-pulse bg-slate-950/20 border border-white/5 rounded-xl">
+                            🔄 جاري قراءة الدفاتر وتركيب الحركات المالية للمورد لحظياً...
+                          </div>
+                        ) : !ledgerStats ? (
+                          <div className="text-center py-8 text-xs text-slate-500 border border-white/4 rounded-xl">
+                            ⚠️ لا تتوفر إحصائيات مالية حالية لهذا المورد.
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 bg-slate-950/60 p-4 rounded-xl border border-white/5">
+                            <div className="space-y-1">
+                              <span className="text-[10px] text-slate-400 font-semibold block">إجمالي البضائع المرفوعة (صافي)</span>
+                              <span className="text-sm font-black font-mono text-blue-400">
+                                {ledgerStats.totalGoodsUploaded?.toLocaleString()} ج.م <span className="text-[9px] text-slate-500">({ledgerStats.totalOrdersCount} طلب)</span>
+                              </span>
+                            </div>
+
+                            <div className="space-y-1">
+                              <span className="text-[10px] text-slate-400 font-semibold block">المرتجع المرتد المخصوم</span>
+                              <span className="text-sm font-black font-mono text-red-400">
+                                {ledgerStats.returnsDeliveredValue?.toLocaleString()} ج.م <span className="text-[9px] text-slate-500">({ledgerStats.returnsDeliveredCount} طلب مرتد)</span>
+                              </span>
+                            </div>
+
+                            <div className="space-y-1">
+                              <span className="text-[10px] text-slate-400 font-semibold block">الدفعات والسحوبات المصروفة</span>
+                              <span className="text-sm font-black font-mono text-emerald-400">
+                                {((ledgerStats.paymentsValue || 0) + (ledgerStats.reverseAdjustmentsValue || 0)).toLocaleString()} ج.م
+                              </span>
+                            </div>
+
+                            <div className="space-y-1">
+                              <span className="text-[10px] text-amber-500 font-semibold block">الرصيد الدائن الحالي للمورد</span>
+                              <span className="text-base font-black font-mono text-amber-500">
+                                {ledgerStats.outstanding?.toLocaleString()} ج.م
+                              </span>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Fast Action Buttons Banner */}
+                        <div className="flex flex-wrap items-center gap-2 print:hidden">
+                          {isAdminOrAccountant && (
+                            <button
+                              onClick={() => {
+                                const targetAcc = accounts.find(a => a.name === snap.name);
+                                if (targetAcc) {
+                                  setActiveSettleSupplier(targetAcc);
+                                  setSettleAmount(targetAcc.balance.toString());
+                                  setSettleDesc(`صرف دفعة مالية للحساب من كشف الحساب المركزي`);
+                                  setIsSettleModalOpen(true);
+                                }
+                              }}
+                              className="px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs rounded-xl cursor-pointer flex items-center justify-center gap-1.5 transition-colors"
+                            >
+                              <DollarSign size={13} />
+                              <span>صرف دفعة نقدية</span>
+                            </button>
+                          )}
+
+                          <button
+                            onClick={handlePrintStatement}
+                            className="px-4 py-2.5 bg-slate-950 hover:bg-slate-800 border border-white/10 text-slate-300 font-extrabold text-xs rounded-xl cursor-pointer flex items-center justify-center gap-1.5 transition-colors"
+                          >
+                            <Printer size={13} />
+                            <span>طباعة / تصدير PDF كشف حساب</span>
+                          </button>
+                        </div>
+
+                        {/* Instant Status-Color Filter Bar & Custom Audit Inputs */}
+                        <div className="bg-slate-950/40 border border-white/5 rounded-2xl p-4 space-y-4 print:hidden">
+                          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-white/5 pb-3">
+                            <div className="flex items-center gap-1.5">
+                              <Filter className="text-amber-500" size={13} />
+                              <span className="text-[11px] font-black text-slate-200">فرز وتصنيف القيود المالية (فوري وبألوان متباينة)</span>
+                            </div>
+                            
+                            {/* Color Coded Status Quick Filter Toggle Buttons */}
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setStatusFilter("all")}
+                                className={`px-3 py-1.5 rounded-lg text-[10px] font-extrabold cursor-pointer border transition-all ${
+                                  statusFilter === "all"
+                                    ? "bg-slate-800 text-slate-100 border-slate-500 shadow-md"
+                                    : "bg-slate-950 text-slate-400 border-white/5 hover:text-slate-200"
+                                }`}
+                              >
+                                عرض كل الحركات ({ledgerEntries.length})
+                              </button>
+                              
+                              <button
+                                type="button"
+                                onClick={() => setStatusFilter("settled")}
+                                className={`px-3 py-1.5 rounded-lg text-[10px] font-extrabold cursor-pointer border transition-all flex items-center gap-1 ${
+                                  statusFilter === "settled"
+                                    ? "bg-emerald-950 text-emerald-400 border-emerald-500 shadow-md shadow-emerald-500/5"
+                                    : "bg-slate-950 text-emerald-500/50 border-emerald-500/10 hover:bg-emerald-950/20 hover:text-emerald-450"
+                                }`}
+                              >
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block animate-pulse"></span>
+                                مصفى ومصروف مسبقاً
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => setStatusFilter("pending")}
+                                className={`px-3 py-1.5 rounded-lg text-[10px] font-extrabold cursor-pointer border transition-all flex items-center gap-1 ${
+                                  statusFilter === "pending"
+                                    ? "bg-amber-950 text-amber-500 border-amber-500 shadow-md shadow-amber-500/5"
+                                    : "bg-slate-950 text-amber-500/50 border-amber-500/10 hover:bg-amber-950/20 hover:text-amber-450"
+                                }`}
+                              >
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 inline-block"></span>
+                                معلق جاهز للمحاسبة الفورية
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                            {/* Search query */}
+                            <div>
+                              <label className="text-[9.5px] font-black text-slate-500 block mb-1">ابحث برقم الباركود / الكود</label>
+                              <input
+                                type="text"
+                                placeholder="رقم الأوردر أو البيان..."
+                                value={filterSearch}
+                                onChange={(e) => setFilterSearch(e.target.value)}
+                                className="w-full bg-slate-950 border border-white/6 rounded-lg px-3 py-1.5 text-xs font-bold text-slate-200 outline-none text-right"
+                              />
+                            </div>
+
+                            {/* Filter Type */}
+                            <div>
+                              <label className="text-[9.5px] font-black text-slate-500 block mb-1">نوع الحركة</label>
+                              <select
+                                value={filterType}
+                                onChange={(e) => setFilterType(e.target.value)}
+                                className="w-full bg-slate-950 border border-white/6 rounded-lg px-3 py-1.5 text-xs font-bold text-slate-100 outline-none"
+                              >
+                                <option value="all">كل الحركات والقيود</option>
+                                <option value="rights">حقوق بضاعة الأوردرات</option>
+                                <option value="returns">المرتجعات المخصومة</option>
+                                <option value="payments">الدفعات النقدية والمسددات</option>
+                                <option value="adjustments">التسويات العكسية والسحوبات</option>
+                              </select>
+                            </div>
+
+                            {/* Start Date */}
+                            <div>
+                              <label className="text-[9.5px] font-black text-slate-500 block mb-1">تاريخ البداية من</label>
+                              <input
+                                type="date"
+                                value={filterStartDate}
+                                onChange={(e) => setFilterStartDate(e.target.value)}
+                                className="w-full bg-slate-950 border border-white/6 rounded-lg px-3 py-1.5 text-xs font-bold font-mono text-slate-200 outline-none text-right"
+                              />
+                            </div>
+
+                            {/* End Date */}
+                            <div>
+                              <label className="text-[9.5px] font-black text-slate-500 block mb-1">تاريخ النهاية إلى</label>
+                              <input
+                                type="date"
+                                value={filterEndDate}
+                                onChange={(e) => setFilterEndDate(e.target.value)}
+                                className="w-full bg-slate-950 border border-white/6 rounded-lg px-3 py-1.5 text-xs font-bold font-mono text-slate-200 outline-none text-right"
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Chronic Ledger Table Representation */}
+                        {isLedgerLoading ? (
+                          <div className="text-center py-16 text-xs text-slate-500 animate-pulse">
+                            جاري جلب البنود والقيود التفصيلية...
+                          </div>
+                        ) : filteredLedgerEntries.length === 0 ? (
+                          <div className="text-center py-12 text-xs text-slate-500 bg-slate-950/40 border border-dashed border-white/5 rounded-2xl">
+                            لا توجد قيود مالية مسجلة تتوافق مع محددات البحث والتاريخ وتصفية الحالة الحالية.
+                          </div>
+                        ) : (
+                          <div className="bg-slate-950 border border-white/6 rounded-2xl overflow-hidden shadow-sm">
+                            <div className="p-4 bg-slate-950 font-black text-xs text-slate-200 border-b border-white/6 flex justify-between items-center print:hidden">
+                              <span>كشف الحساب - القائمة مرتبة بالأحداث الأحدث أولاً</span>
+                              <span className="text-[10px] text-slate-500">مجموع بنود كشف الحساب: {filteredLedgerEntries.length} قيد</span>
+                            </div>
+
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-right border-collapse text-xs">
+                                <thead>
+                                  <tr className="bg-slate-950/60 border-b border-white/6 text-slate-400 font-bold">
+                                    <th className="p-3 text-right">التاريخ والمطابقة</th>
+                                    <th className="p-3 text-right">نوع المستند</th>
+                                    <th className="p-3 text-right">الباركود/المرجع</th>
+                                    <th className="p-3 text-right">البيان والتفاصيل وملاحظات المستند</th>
+                                    <th className="p-3 text-left">القيمة المتبادلة</th>
+                                    <th className="p-3 text-left">الرصيد التراكمي العالق</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {filteredLedgerEntries.map((entry, idx) => {
+                                    const isCredit = entry.amount > 0;
+                                    const isReturn = entry.type === "مرتجع مخصوم" || (entry.type || "").includes("مرتجع");
+                                    const isPayoutTrans = ["دفع نقدي", "سداد", "دفعة"].some(kw => (entry.type || "").includes(kw));
+                                    
+                                    return (
+                                      <tr key={idx} className="border-b border-white/4 hover:bg-slate-950/20 text-[11px] transition-colors">
+                                        {/* Date */}
+                                        <td className="p-3 font-mono text-slate-300">
+                                          {entry.date ? entry.date.toString().substring(0, 16) : "—"}
+                                        </td>
+
+                                        {/* Type with color coded badge */}
+                                        <td className="p-3">
+                                          <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold ${
+                                            isCredit 
+                                              ? "bg-blue-955/20 text-blue-400 border border-blue-900/40" 
+                                              : isReturn
+                                              ? "bg-red-955/20 text-red-450 border border-red-900/40"
+                                              : isPayoutTrans
+                                              ? "bg-emerald-955/20 text-emerald-450 border border-emerald-900/40"
+                                              : "bg-amber-955/20 text-amber-450 border border-amber-900/40"
+                                          }`}>
+                                            {isCredit && <TrendingUp size={11} className="shrink-0" />}
+                                            {!isCredit && isReturn && <TrendingDown size={11} className="shrink-0" />}
+                                            {!isCredit && !isReturn && <Layers size={11} className="shrink-0" />}
+                                            <span>{entry.type}</span>
+                                          </span>
+                                        </td>
+
+                                        {/* Tracking barcode with quick copy */}
+                                        <td className="p-3 font-mono text-slate-200">
+                                          {entry.tracking && entry.tracking !== "CASH-PAY" ? (
+                                            <button 
+                                              onClick={() => copyToClipboard(entry.tracking)}
+                                              className="flex items-center gap-1 hover:text-amber-450 outline-none transition-colors"
+                                            >
+                                              {copiedTracking === entry.tracking ? (
+                                                <Check className="text-emerald-500 shrink-0" size={11} />
+                                              ) : (
+                                                <Copy className="text-slate-500 shrink-0" size={11} />
+                                              )}
+                                              <span>{entry.tracking}</span>
+                                            </button>
+                                          ) : (
+                                            <span className="text-slate-500">—</span>
+                                          )}
+                                        </td>
+
+                                        {/* Human readable description */}
+                                        <td className="p-3 text-slate-300 text-right leading-relaxed max-w-sm font-semibold">
+                                          {entry.desc}
+                                        </td>
+
+                                        {/* Transaction Amount */}
+                                        <td className={`p-3 text-left font-mono font-black ${isCredit ? "text-blue-400" : isPayoutTrans ? "text-emerald-400" : "text-red-400"}`}>
+                                          {isCredit ? "+" : ""}{entry.amount?.toLocaleString()} ج.م
+                                        </td>
+
+                                        {/* Running Balance */}
+                                        <td className="p-3 text-left font-mono font-black text-amber-500">
+                                          {entry.balanceAfter?.toLocaleString()} ج.م
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+            {supplierSnapshots.filter(snap => !isSupplierRole || snap.name === user).length === 0 && (
+              <div className="text-center py-12 text-xs text-slate-500 bg-slate-900 border border-white/6 rounded-2xl">
+                لا يوجد موردين مسجلين حالياً لعرض كشف حساب مالي.
               </div>
             )}
           </div>
-
-          {/* Statement Audit Filters Box */}
-          {selectedLedgerSupplier && (
-            <div className="bg-slate-900 border border-white/6 rounded-2xl p-4 space-y-3.5 print:hidden">
-              <div className="flex items-center gap-1.5 border-b border-white/5 pb-2">
-                <Filter className="text-amber-500" size={13} />
-                <span className="text-[11px] font-black text-slate-200">تصفية وبحث كشف الحساب</span>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                {/* Search query */}
-                <div>
-                  <label className="text-[9.5px] font-black text-slate-500 block mb-1">ابحث برقم الباركود / الكود</label>
-                  <input
-                    type="text"
-                    placeholder="رقم الأوردر أو البيان..."
-                    value={filterSearch}
-                    onChange={(e) => setFilterSearch(e.target.value)}
-                    className="w-full bg-slate-950 border border-white/6 rounded-lg px-3 py-1.5 text-xs font-bold text-slate-200 outline-none text-right"
-                  />
-                </div>
-
-                {/* Filter Type */}
-                <div>
-                  <label className="text-[9.5px] font-black text-slate-500 block mb-1">نوع الحركة</label>
-                  <select
-                    value={filterType}
-                    onChange={(e) => setFilterType(e.target.value)}
-                    className="w-full bg-slate-950 border border-white/6 rounded-lg px-3 py-1.5 text-xs font-bold text-slate-100 outline-none"
-                  >
-                    <option value="all">كل الحركات والقيود</option>
-                    <option value="rights">حقوق بضاعة الأوردرات</option>
-                    <option value="returns">المرتجعات المخصومة</option>
-                    <option value="payments">الدفعات النقدية والمسددات</option>
-                    <option value="adjustments">التسويات العكسية والسحوبات</option>
-                  </select>
-                </div>
-
-                {/* Start Date */}
-                <div>
-                  <label className="text-[9.5px] font-black text-slate-500 block mb-1">تاريخ البداية من</label>
-                  <input
-                    type="date"
-                    value={filterStartDate}
-                    onChange={(e) => setFilterStartDate(e.target.value)}
-                    className="w-full bg-slate-950 border border-white/6 rounded-lg px-3 py-1.5 text-xs font-bold font-mono text-slate-200 outline-none text-right"
-                  />
-                </div>
-
-                {/* End Date */}
-                <div>
-                  <label className="text-[9.5px] font-black text-slate-500 block mb-1">تاريخ النهاية إلى</label>
-                  <input
-                    type="date"
-                    value={filterEndDate}
-                    onChange={(e) => setFilterEndDate(e.target.value)}
-                    className="w-full bg-slate-950 border border-white/6 rounded-lg px-3 py-1.5 text-xs font-bold font-mono text-slate-200 outline-none text-right"
-                  />
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Statement Chronological Ledger Table representation */}
-          {!selectedLedgerSupplier ? (
-            <div className="text-center py-12 text-xs text-slate-550 border border-dashed border-white/6 rounded-2xl bg-slate-900/30 print:hidden">
-              ⚙️ يرجى اختيار اسم المورد أو التاجر أعلاه لعرض تدقيق الحساب المالي والقيود المتبادلة
-            </div>
-          ) : isLedgerLoading ? (
-            <div className="text-center py-16 text-xs text-slate-550 animate-pulse bg-slate-900/30 border border-white/5 rounded-2xl print:hidden">
-              جاري مراجعة الدفاتر والأرشيف التاريخي وحساب الأرصدة التراكمية للمورد...
-            </div>
-          ) : filteredLedgerEntries.length === 0 ? (
-            <div className="text-center py-12 text-xs text-slate-500 bg-slate-900 border border-white/6 rounded-2xl">
-              لا توجد قيود مالية مسجلة تتوافق مع محددات البحث والتاريخ الحالية.
-            </div>
-          ) : (
-            <div className="bg-slate-900 border border-white/6 rounded-2xl overflow-hidden shadow-sm">
-              <div className="p-4 bg-slate-950 font-black text-xs text-slate-200 border-b border-white/6 flex justify-between items-center print:hidden">
-                <span>كشف الحساب - القائمة مرتبة بالأحداث الأحدث أولاً</span>
-                <span className="text-[10px] text-slate-500">مجموع بنود كشف الحساب: {filteredLedgerEntries.length} قيد</span>
-              </div>
-
-              <div className="overflow-x-auto">
-                <table className="w-full text-right border-collapse text-xs">
-                  <thead>
-                    <tr className="bg-slate-950/60 border-b border-white/6 text-slate-400 font-bold">
-                      <th className="p-3 text-right">التاريخ والمطابقة</th>
-                      <th className="p-3 text-right">نوع المستند</th>
-                      <th className="p-3 text-right">الباركود/المرجع</th>
-                      <th className="p-3 text-right">البيان والتفاصيل وملاحظات المستند</th>
-                      <th className="p-3 text-left">القيمة المتبادلة</th>
-                      <th className="p-3 text-left">الرصيد التراكمي العالق</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredLedgerEntries.map((entry, idx) => {
-                      const isCredit = entry.amount > 0;
-                      const isReturn = entry.type === "مرتجع مخصوم" || (entry.type || "").includes("مرتجع");
-                      const isPayoutTrans = ["دفع نقدي", "سداد", "دفعة"].some(kw => (entry.type || "").includes(kw));
-                      
-                      return (
-                        <tr key={idx} className="border-b border-white/4 hover:bg-slate-950/20 text-[11px] transition-colors">
-                          {/* Date */}
-                          <td className="p-3 font-mono text-slate-300">
-                            {entry.date ? entry.date.toString().substring(0, 16) : "—"}
-                          </td>
-
-                          {/* Type with color coded badge */}
-                          <td className="p-3">
-                            <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold ${
-                              isCredit 
-                                ? "bg-blue-955/20 text-blue-400 border border-blue-900/40" 
-                                : isReturn
-                                ? "bg-red-955/20 text-red-450 border border-red-900/40"
-                                : isPayoutTrans
-                                ? "bg-emerald-955/20 text-emerald-450 border border-emerald-900/40"
-                                : "bg-amber-955/20 text-amber-450 border border-amber-900/40"
-                            }`}>
-                              {isCredit && <TrendingUp size={11} className="shrink-0" />}
-                              {!isCredit && isReturn && <TrendingDown size={11} className="shrink-0" />}
-                              {!isCredit && !isReturn && <Layers size={11} className="shrink-0" />}
-                              <span>{entry.type}</span>
-                            </span>
-                          </td>
-
-                          {/* Tracking barcode with quick copy */}
-                          <td className="p-3 font-mono text-slate-200">
-                            {entry.tracking && entry.tracking !== "CASH-PAY" ? (
-                              <button 
-                                onClick={() => copyToClipboard(entry.tracking)}
-                                className="flex items-center gap-1 hover:text-amber-450 outline-none transition-colors"
-                              >
-                                {copiedTracking === entry.tracking ? (
-                                  <Check className="text-emerald-500 shrink-0" size={11} />
-                                ) : (
-                                  <Copy className="text-slate-500 shrink-0" size={11} />
-                                )}
-                                <span>{entry.tracking}</span>
-                              </button>
-                            ) : (
-                              <span className="text-slate-500">—</span>
-                            )}
-                          </td>
-
-                          {/* Human readable description */}
-                          <td className="p-3 text-slate-300 text-right leading-relaxed max-w-sm font-semibold">
-                            {entry.desc}
-                          </td>
-
-                          {/* Transaction Amount */}
-                          <td className={`p-3 text-left font-mono font-black ${isCredit ? "text-blue-400" : isPayoutTrans ? "text-emerald-400" : "text-red-400"}`}>
-                            {isCredit ? "+" : ""}{entry.amount?.toLocaleString()} ج.م
-                          </td>
-
-                          {/* Running Balance */}
-                          <td className="p-3 text-left font-mono font-black text-amber-500">
-                            {entry.balanceAfter?.toLocaleString()} ج.م
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
         </div>
       )}
 
