@@ -829,8 +829,42 @@ export default function App() {
         </div>
       )}
 
-      {/* Tabs navigation row bar */}
-      <nav className="flex bg-slate-900 border-b border-white/6 overflow-x-auto scrollbar-none scroll-smooth">
+      {/* Responsive Mobile Tab Selector & Desktop Tab Row */}
+      <div className="block md:hidden bg-slate-900 border-b border-white/6 px-4 py-3">
+        <label className="block text-[10px] font-black text-slate-400 mb-1">تصفح لوحة التحكم</label>
+        <div className="relative">
+          <select
+            value={activeTab}
+            onChange={(e) => setActiveTab(e.target.value)}
+            className="w-full bg-slate-950 border border-white/10 rounded-xl px-4 py-3 text-xs font-black text-amber-500 outline-none appearance-none"
+          >
+            <option value="orders">🚛 الشحنات</option>
+            {showDashTab && <option value="dash">📊 لوحة التحكم</option>}
+            {showOpsRoomTab && <option value="ops_room">⚡ غرفة العمليات وجدول المناديب اللحظي</option>}
+            {showAddInputTab && <option value="inputs">➕ إضافة أوردرات</option>}
+            {showSupplierLedgerTab && <option value="supplier_ledger">📖 كشف حساب الموردين</option>}
+            {showCourierLedgerTab && <option value="courier_ledger">📖 كشف حساب المناديب</option>}
+            {showFinanceTabs && (
+              <>
+                <option value="cash">💵 الخزنة</option>
+                <option value="exp">💸 المصروفات</option>
+                <option value="closing">🗓️ التقفيل اليومي</option>
+                <option value="audit">📜 سجلات التدقيق والأمان</option>
+              </>
+            )}
+            {showUsersTab && <option value="users">👥 إدارة الصلاحيات</option>}
+            {showCouriersProfileTab && <option value="couriers_profile">⚙️ ملفات المناديب المالّية</option>}
+            {showSuppliersPageTab && <option value="suppliers">👥 كشف حساب وإدارة الموردين</option>}
+            <option value="archive">🗄️ الأرشيف المركزي</option>
+          </select>
+          <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-4 text-slate-400 text-xs">
+            ▼
+          </div>
+        </div>
+      </div>
+
+      {/* Tabs navigation row bar (Desktop only) */}
+      <nav className="hidden md:flex bg-slate-900 border-b border-white/6 overflow-x-auto scrollbar-none scroll-smooth">
         <button
           onClick={() => setActiveTab("orders")}
           className={`px-5 py-4 text-xs font-black cursor-pointer transition-all border-b-2 flex items-center gap-1.5 whitespace-nowrap ${
@@ -973,7 +1007,7 @@ export default function App() {
           <button
             onClick={() => setActiveTab("suppliers")}
             className={`px-5 py-4 text-xs font-black cursor-pointer transition-all border-b-2 flex items-center gap-1.5 whitespace-nowrap ${
-              activeTab === "suppliers" ? "text-amber-500 border-amber-505 border-amber-500" : "text-slate-400 border-transparent hover:text-slate-200"
+              activeTab === "suppliers" ? "text-amber-500 border-amber-500" : "text-slate-400 border-transparent hover:text-slate-200"
             }`}
           >
             <Users size={14} />

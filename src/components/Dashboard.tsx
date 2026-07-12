@@ -535,6 +535,7 @@ export default function Dashboard({
     noAnswer: number;
     cashPending: number;
     ordersList: any[];
+    pendingDays: number;
   }} = {};
 
   allOrders.forEach(o => {
@@ -552,7 +553,8 @@ export default function Dashboard({
         delayed: 0,
         noAnswer: 0,
         cashPending: 0,
-        ordersList: []
+        ordersList: [],
+        pendingDays: 0
       };
     }
 
@@ -576,6 +578,27 @@ export default function Dashboard({
     } else if (isNoAnswer) {
       streetCustodyCouriers[cName].noAnswer++;
     }
+  });
+
+  // Calculate pending days for each courier (duration since the oldest active order in custody)
+  Object.values(streetCustodyCouriers).forEach(c => {
+    let minDateMs = Date.now();
+    let hasValidDate = false;
+    c.ordersList.forEach(o => {
+      const dStr = o.updatedAt || o.date || o.createdAt || o.created;
+      if (dStr) {
+        const ms = Date.parse(dStr);
+        if (!isNaN(ms)) {
+          if (ms < minDateMs) {
+            minDateMs = ms;
+          }
+          hasValidDate = true;
+        }
+      }
+    });
+    const diffMs = Date.now() - minDateMs;
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    c.pendingDays = hasValidDate ? (diffDays < 0 ? 0 : diffDays) : 0;
   });
 
   const liveCouriersList = Object.values(streetCustodyCouriers).sort((a, b) => b.cashPending - a.cashPending);
@@ -1305,6 +1328,7 @@ export default function Dashboard({
                       <th className="p-3 text-center text-red-400">مرتجعات معلقة</th>
                       <th className="p-3 text-center text-amber-400 font-extrabold">مؤجل ميداني</th>
                       <th className="p-3 text-center text-red-300">أطقم لا يرد</th>
+                      <th className="p-3 text-center text-rose-400">أيام التعليق (Pending Days)</th>
                       <th className="p-3 text-left text-emerald-400">الكاش بعهدته (Unsettled Cash)</th>
                       <th className="p-3 text-center">أدوات</th>
                     </tr>
@@ -1324,6 +1348,9 @@ export default function Dashboard({
                           <td className="p-3 text-center font-mono font-bold text-red-400">{c.returned}</td>
                           <td className="p-3 text-center font-mono font-bold text-amber-500">{c.delayed}</td>
                           <td className="p-3 text-center font-mono font-bold text-red-300">{c.noAnswer}</td>
+                          <td className="p-3 text-center font-mono font-bold text-rose-400 bg-rose-950/10">
+                            ⏳ {c.pendingDays} {c.pendingDays === 1 ? "يوم" : "أيام"}
+                          </td>
                           <td className="p-3 text-left font-mono font-black text-emerald-400 bg-emerald-950/20">
                             💰 {(c.cashPending || 0).toLocaleString("ar")} <span className="text-[9.5px]">ج.م</span>
                           </td>

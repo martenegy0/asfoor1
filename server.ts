@@ -1,6 +1,24 @@
 import express, { Request, Response } from "express";
 import path from "path";
 import fs from "fs";
+import crypto from "crypto";
+
+function hashPassword(password: string): string {
+  if (!password) return "";
+  return crypto.createHash("sha256").update(password).digest("hex");
+}
+
+function verifyPassword(inputPass: string, storedPass: string): boolean {
+  if (!storedPass) return false;
+  const cleanedStored = storedPass.trim();
+  const cleanedInput = inputPass.trim();
+  // If stored is 64-character hex, it is a SHA-256 hash
+  if (cleanedStored.length === 64 && /^[0-9a-fA-F]+$/.test(cleanedStored)) {
+    return hashPassword(cleanedInput) === cleanedStored;
+  }
+  // Otherwise it's plaintext
+  return cleanedInput === cleanedStored;
+}
 
 const app = express();
 const PORT = 3000;
@@ -661,6 +679,15 @@ const getOrderCustomer = (o: any): string => {
 const sameSup = (na: string, nb: string): boolean => {
   if (!na || !nb) return false;
   return normalizeArabic(na) === normalizeArabic(nb);
+};
+
+const sameCourier = (na: string, nb: string): boolean => {
+  if (!na || !nb) return false;
+  let cleanA = normalizeArabic(na);
+  let cleanB = normalizeArabic(nb);
+  if (cleanA === normalizeArabic("مندوب عصفور") || cleanA === normalizeArabic("مندوب_عصفور")) cleanA = normalizeArabic("عصفور");
+  if (cleanB === normalizeArabic("مندوب عصفور") || cleanB === normalizeArabic("مندوب_عصفور")) cleanB = normalizeArabic("عصفور");
+  return cleanA === cleanB;
 };
 
 const isSupplierRole = (r: string): boolean => {
@@ -1711,6 +1738,11 @@ async function executeProxyRequest(
     "updateCourier",
     "archiveOrder",
     "settleCourierOrders",
+    "approveWithdrawal",
+    "rejectWithdrawal",
+    "requestWithdrawal",
+    "settleSupplierDay",
+    "addSupplierSettlement",
   ].includes(payload.action);
 
   if (isWrite) {
@@ -1853,7 +1885,7 @@ app.post("/api", async (req: Request, res: Response) => {
               let user = resData.users.find(
                 (u: any) =>
                   u.name?.toString().trim() === name.trim() &&
-                  u.pass?.toString().trim() === pass.trim(),
+                  verifyPassword(pass, u.pass?.toString() || ""),
               );
 
               // Allow any name (e.g. ahmed) in preview to automatically log in as 'مدير' with 'كاملة' perms if not found in sheets
@@ -2328,6 +2360,173 @@ app.post("/api", async (req: Request, res: Response) => {
           return ok(res, { msg: "تم تسجيل التسوية المالية للمندوب بنجاح ✓" });
         }
 
+        if (d.action === "requestWithdrawal") {
+          const { supplier, amount, paymentMethod, notes } = d;
+          if (!supplier || !amount) return err(res, "المعلومات المطلوبة غير كاملة لطلب السحب");
+
+          const db = readDB();
+          if (!db.withdrawalRequests) db.withdrawalRequests = [];
+          
+          const newReq = {
+            id: "W-" + Date.now(),
+            supplier,
+            amount: Number(amount),
+            paymentMethod: paymentMethod || "غير محدد",
+            status: "معلق",
+            createdAt: now(),
+            notes: notes || ""
+          };
+          db.withdrawalRequests.push(newReq);
+          writeDB(db);
+
+          executeProxyRequest(gscriptUrl, payloadToSheet).catch((syncErr) => {
+            console.error("Async Google Sheets synchronization for requestWithdrawal failed:", syncErr);
+          });
+
+          return ok(res, { ok: true, msg: "تم إرسال طلب السحب بنجاح ✓ وجاري المزامنة", request: newReq });
+        }
+
+        if (d.action === "approveWithdrawal") {
+          if (!["مدير", "محاسب"].includes(currentRole)) {
+            return err(res, "فقط المدير والمحاسب يمتلك صلاحية الموافقة على طلبات السحب");
+          }
+          const { id } = d;
+          if (!id) return err(res, "معرف الطلب مفقود");
+
+          const db = readDB();
+          if (!db.withdrawalRequests) db.withdrawalRequests = [];
+          const reqIdx = db.withdrawalRequests.findIndex((r: any) => r.id === id);
+          if (reqIdx === -1) return err(res, "لم يتم العثور على طلب السحب محلياً");
+
+          const req = db.withdrawalRequests[reqIdx];
+          if (req.status !== "معلق") return err(res, "هذا الطلب تم معالجته مسبقاً");
+
+          const amt = Math.abs(Number(req.amount || 0));
+
+          // Deduct from supplier ledger
+          if (!db.supplierLedger) db.supplierLedger = [];
+          db.supplierLedger.push({
+            supplier: req.supplier,
+            date: now(),
+            type: "دفع نقدي",
+            tracking: id,
+            amount: -amt,
+            desc: "سحب رصيد مقبول (معرف الطلب: #" + id + ") عبر وسيلة الدفع: " + (req.paymentMethod || "")
+          });
+
+          // Add to cashbox
+          if (!db.cashbox) db.cashbox = [];
+          db.cashbox.push({
+            date: now(),
+            desc: "سحب رصيد مقبول (معرف الطلب: #" + id + ") للمورد: " + req.supplier,
+            type: "سداد مورد",
+            amount: amt,
+            ref: id,
+            addedBy: currentUser || "إدارة الحسابات"
+          });
+
+          // Update request status
+          req.status = "مقبول";
+          req.notes = "تم الموافقة والتحويل بواسطة " + (currentUser || "الأدمن") + " في " + now();
+
+          // Add audit log
+          if (!db.auditLog) db.auditLog = [];
+          db.auditLog.push({
+            user: currentUser || "حسابات",
+            type: "قبول طلب سحب رصيد مورد",
+            dateTime: now(),
+            oldVal: "معلق",
+            newVal: "مقبول - تم التحويل بقيمة " + amt + " ج.م للمورد " + req.supplier,
+            reason: "موافقة وصرف من الخزينة"
+          });
+
+          writeDB(db);
+
+          executeProxyRequest(gscriptUrl, payloadToSheet).catch((syncErr) => {
+            console.error("Async Google Sheets synchronization for approveWithdrawal failed:", syncErr);
+          });
+
+          return ok(res, { ok: true, msg: "تم قبول طلب السحب وجاري المزامنة في الخلفية ✓" });
+        }
+
+        if (d.action === "rejectWithdrawal") {
+          if (!["مدير", "محاسب"].includes(currentRole)) {
+            return err(res, "فقط المدير والمحاسب يمتلك صلاحية رفض طلبات السحب");
+          }
+          const { id, reason } = d;
+          if (!id) return err(res, "معرف الطلب مفقود");
+
+          const db = readDB();
+          if (!db.withdrawalRequests) db.withdrawalRequests = [];
+          const reqIdx = db.withdrawalRequests.findIndex((r: any) => r.id === id);
+          if (reqIdx === -1) return err(res, "لم يتم العثور على طلب السحب محلياً");
+
+          const req = db.withdrawalRequests[reqIdx];
+          if (req.status !== "معلق") return err(res, "هذا الطلب تم معالجته مسبقاً");
+
+          req.status = "مرفوض";
+          req.notes = "تم الرفض بسبب: " + (reason || "غير محدد") + " بواسطة " + (currentUser || "الأدمن") + " في " + now();
+
+          if (!db.auditLog) db.auditLog = [];
+          db.auditLog.push({
+            user: currentUser || "حسابات",
+            type: "رفض طلب سحب رصيد مورد",
+            dateTime: now(),
+            oldVal: "معلق",
+            newVal: "مرفوض بسبب: " + (reason || "غير محدد"),
+            reason: "رفض بواسطة الإدارة"
+          });
+
+          writeDB(db);
+
+          executeProxyRequest(gscriptUrl, payloadToSheet).catch((syncErr) => {
+            console.error("Async Google Sheets synchronization for rejectWithdrawal failed:", syncErr);
+          });
+
+          return ok(res, { ok: true, msg: "تم رفض طلب السحب وجاري المزامنة في الخلفية ✓" });
+        }
+
+        if (d.action === "settleSupplierDay") {
+          const { supplier, dateStr } = d;
+          if (!supplier || !dateStr) return err(res, "معلومات تصفية اليوم ناقصة");
+
+          const db = readDB();
+          if (!db.supplierSettlements) db.supplierSettlements = [];
+          
+          const alreadySettled = db.supplierSettlements.some(
+            (s: any) => s.supplier === supplier && s.date === dateStr
+          );
+          if (alreadySettled) {
+            return ok(res, { ok: true, msg: "هذا اليوم مصفى بالفعل محلياً" });
+          }
+
+          db.supplierSettlements.push({
+            supplier,
+            date: dateStr,
+            status: "مصفى ماليّاً",
+            settledAt: now(),
+            settledBy: currentUser || "إدارة الحسابات"
+          });
+
+          if (!db.supplierLedger) db.supplierLedger = [];
+          db.supplierLedger.push({
+            supplier,
+            date: dateStr,
+            type: "تصفية يومية",
+            tracking: "SETTLE-" + dateStr,
+            amount: 0,
+            desc: "🔐 [💵 تقفيل وتسليم كاش اليوم للمورد] - تم تصفية وقفل حساب اليوم تاريخ: " + dateStr + " بنجاح تصفية تامة✓"
+          });
+
+          writeDB(db);
+
+          executeProxyRequest(gscriptUrl, payloadToSheet).catch((syncErr) => {
+            console.error("Async Google Sheets synchronization for settleSupplierDay failed:", syncErr);
+          });
+
+          return ok(res, { ok: true, msg: "تم تسجيل تصفية اليوم للمورد بنجاح ✓ وجاري المزامنة" });
+        }
+
         if (d.action === "addDailyClosing") {
           const {
             date,
@@ -2546,8 +2745,7 @@ app.post("/api", async (req: Request, res: Response) => {
           const courierProfile = db.couriers.find(
             (c: any) =>
               c.name &&
-              c.name.toString().trim().toLowerCase() ===
-                courier.toString().trim().toLowerCase()
+              sameCourier(c.name, courier)
           );
           if (!courierProfile) return err(res, "المندوب غير مسجل");
 
@@ -2563,8 +2761,7 @@ app.post("/api", async (req: Request, res: Response) => {
           db.orders.forEach((order: any) => {
             if (
               order.courier &&
-              order.courier.toString().trim().toLowerCase() ===
-                courier.toString().trim().toLowerCase()
+              sameCourier(order.courier, courier)
             ) {
               order.isSettledMonth = true;
               order.isSettled = true;
@@ -2583,8 +2780,7 @@ app.post("/api", async (req: Request, res: Response) => {
           db.archivedOrders.forEach((order: any) => {
             if (
               order.courier &&
-              order.courier.toString().trim().toLowerCase() ===
-                courier.toString().trim().toLowerCase()
+              sameCourier(order.courier, courier)
             ) {
               order.isSettledMonth = true;
               order.isSettled = true;
@@ -2597,8 +2793,7 @@ app.post("/api", async (req: Request, res: Response) => {
             if (
               item.type === "استلام عهدة مندوب" &&
               item.ref &&
-              item.ref.toString().trim().toLowerCase() ===
-                courier.toString().trim().toLowerCase()
+              sameCourier(item.ref, courier)
             ) {
               item.isSettledMonth = true;
             }
@@ -2609,8 +2804,7 @@ app.post("/api", async (req: Request, res: Response) => {
             db.expenses.forEach((item: any) => {
               if (
                 item.by &&
-                item.by.toString().trim().toLowerCase() ===
-                  courier.toString().trim().toLowerCase()
+                sameCourier(item.by, courier)
               ) {
                 item.isSettledMonth = true;
               }
@@ -2622,8 +2816,7 @@ app.post("/api", async (req: Request, res: Response) => {
             db.courierLedger.forEach((item: any) => {
               if (
                 item.courier &&
-                item.courier.toString().trim().toLowerCase() ===
-                  courier.toString().trim().toLowerCase()
+                sameCourier(item.courier, courier)
               ) {
                 item.isSettledMonth = true;
               }
@@ -3213,6 +3406,20 @@ app.post("/api", async (req: Request, res: Response) => {
                 return lSup && sameSup(lSup, targetSupplier);
               });
             }
+
+            if (
+              d.action === "getWithdrawalRequests" &&
+              Array.isArray(resData.requests)
+            ) {
+              const isSupplier =
+                (currentRole || "").toString().trim() === "مورد" ||
+                (currentRole || "").toString().trim().includes("مورد");
+              if (isSupplier) {
+                resData.requests = resData.requests.filter((r: any) =>
+                  sameSup(r.supplier, currentUser)
+                );
+              }
+            }
           }
 
           return res.json(resData);
@@ -3239,7 +3446,7 @@ app.post("/api", async (req: Request, res: Response) => {
       if (!name || !pass) return err(res, "اكتب الاسم وكلمة المرور");
       let user = db.users.find(
         (u: any) =>
-          u.name.trim() === name.trim() && u.pass.trim() === pass.trim(),
+          u.name.trim() === name.trim() && verifyPassword(pass, u.pass),
       );
 
       // Allow name in preview bypass
@@ -5250,6 +5457,15 @@ app.post("/api", async (req: Request, res: Response) => {
         return ok(res, { logs: (db.auditLog || []).reverse() });
       }
 
+      case "getWithdrawalRequests": {
+        const isSupplier = isSupplierRole(currentRole);
+        let list = db.withdrawalRequests || [];
+        if (isSupplier) {
+          list = list.filter((r: any) => sameSup(r.supplier, currentUser));
+        }
+        return ok(res, { requests: list });
+      }
+
       // ─────────────────────────────────────────────────────────────
       // SUPPLIER LEDGER SYSTEM (COD calculations)
       // ─────────────────────────────────────────────────────────────
@@ -6811,7 +7027,7 @@ app.post("/api", async (req: Request, res: Response) => {
         const newUserObj = {
           name: name.trim(),
           role: role,
-          pass: pass.trim(),
+          pass: hashPassword(pass.trim()),
           active: "نعم",
           email: email || "",
           perms: getPermissionsForRole(role),
@@ -6919,7 +7135,7 @@ app.post("/api", async (req: Request, res: Response) => {
         const userObj = {
           name: staff.name.trim(),
           role: staff.role,
-          pass: d.pass || "123456",
+          pass: hashPassword(d.pass || "123456"),
           active: "نعم",
           email: staff.name.trim() + "@friendplus.com",
           perms: getPermissionsStringForStaff(staff)
@@ -6930,6 +7146,9 @@ app.post("/api", async (req: Request, res: Response) => {
         } else {
           db.users[uIdx].role = staff.role;
           db.users[uIdx].perms = getPermissionsStringForStaff(staff);
+          if (d.pass) {
+            db.users[uIdx].pass = hashPassword(d.pass);
+          }
         }
         
         // Also update or create courier profile if the role is "مندوب"
@@ -7059,8 +7278,7 @@ app.post("/api", async (req: Request, res: Response) => {
         let courier = db.couriers.find(
           (c: any) =>
             c.name &&
-            c.name.toString().trim().toLowerCase() ===
-              trimmedName.toLowerCase(),
+            sameCourier(c.name, trimmedName),
         );
 
         if (!courier) {

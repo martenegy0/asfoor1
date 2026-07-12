@@ -15,6 +15,34 @@
 // 🔑 توكن الحماية المركزي (يجب أن يطابق المرسل من التطبيق لضمان الأمان والخصوصية)
 const ACCESS_TOKEN = "14014"; 
 
+function hashPassword(password) {
+  if (!password) return "";
+  var rawHash = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, password, Utilities.Charset.UTF_8);
+  var hexString = "";
+  for (var i = 0; i < rawHash.length; i++) {
+    var byteValue = rawHash[i];
+    if (byteValue < 0) {
+      byteValue += 256;
+    }
+    var byteString = byteValue.toString(16);
+    if (byteString.length == 1) {
+      byteString = "0" + byteString;
+    }
+    hexString += byteString;
+  }
+  return hexString;
+}
+
+function verifyPassword(inputPass, storedPass) {
+  if (!storedPass) return false;
+  var cleanedStored = String(storedPass).trim();
+  var cleanedInput = String(inputPass).trim();
+  if (cleanedStored.length === 64 && /^[0-9a-fA-F]+$/.test(cleanedStored)) {
+    return hashPassword(cleanedInput) === cleanedStored;
+  }
+  return cleanedInput === cleanedStored;
+}
+
 /**
  * 🚀 دالة التهيئة المباشرة (تشغيل يدوي)
  * اختر هذه الدالة (setup) من القائمة المنسدلة في الأعلى واضغط على "Run" أو "تشغيل"
@@ -3266,7 +3294,7 @@ function registerUser(sheets, d) {
   appendToSheet(usersSheet, ["name", "role", "pass", "active", "email", "perms"], {
     name: name,
     role: role,
-    pass: pass,
+    pass: hashPassword(pass),
     active: active,
     email: email || "—",
     perms: assignedPerms
@@ -4290,7 +4318,7 @@ function saveStaffPermissions(sheets, d) {
     name: staff.name,
     role: staff.role,
     active: "نعم",
-    pass: d.pass || "123456", // default password if brand new
+    pass: hashPassword(d.pass || "123456"), // default password if brand new
     email: staff.name + "@friendplus.com",
     perms: getPermissionsStringForStaff(staff)
   };
@@ -4298,10 +4326,14 @@ function saveStaffPermissions(sheets, d) {
   if (userIdx === -1) {
     appendToSheet(sheets.users, ["name", "role", "pass", "active", "email", "perms"], userObj);
   } else {
-    updateRowByObject(sheets.users, userIdx, {
+    var updateObj = {
       role: staff.role,
       perms: getPermissionsStringForStaff(staff)
-    });
+    };
+    if (d.pass) {
+      updateObj.pass = hashPassword(d.pass);
+    }
+    updateRowByObject(sheets.users, userIdx, updateObj);
   }
 
   // Also update or create courier profile if the role is "مندوب"
