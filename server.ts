@@ -967,25 +967,6 @@ function calculateSupplierBalance(db: any, supplierName: string) {
     return sum + financials.prodPrice;
   }, 0);
 
-  // 3. Kept goods value (strict rule for outstanding calculation)
-  const totalKeptGoodsValue = supplierOrders.reduce((sum: number, o: any) => {
-    const status = getOrderStatus(o);
-    const financials = getOrderFinancials(o);
-    const isDelivered = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(status);
-    const isPartial = o.isPartial === true || o.isPartial === "true" || ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].includes(status);
-    
-    if (isDelivered) {
-      return sum + financials.prodPrice;
-    } else if (isPartial) {
-      const shipPrice = Number(o.shipPrice || financials.shipPrice || 60);
-      let soldValue = Number(o.actualReceivedCash ?? o.partialAmount ?? o["المبلغ المحصل"] ?? 0);
-      if (isNaN(soldValue)) soldValue = 0;
-      const kept_goods_value = Math.max(0, soldValue - shipPrice);
-      return sum + kept_goods_value;
-    }
-    return sum;
-  }, 0);
-
   const adjustmentsAndPayments = rawLedger.filter(isHumanLedgedPayout);
 
   // Calculate net cash paid (all entries that are negative signed amounts)
@@ -1006,16 +987,19 @@ function calculateSupplierBalance(db: any, supplierName: string) {
 
   const outstanding =
     openingBalance +
-    totalKeptGoodsValue +
+    totalGoodsUploaded -
+    returnsDeliveredValue +
     totalLedgerEffect;
 
   const totalOrdersCount = supplierOrders.length;
-  const deliveredOrders = supplierOrders.filter((o: any) => {
-    const status = getOrderStatus(o);
-    return ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].includes(status);
-  });
+  const deliveredOrders = supplierOrders.filter(
+    (o: any) => getOrderStatus(o) === "تم التسليم",
+  );
   const deliveredOrdersCount = deliveredOrders.length;
-  const deliveredOrdersValue = totalKeptGoodsValue;
+  const deliveredOrdersValue = deliveredOrders.reduce((sum: number, o: any) => {
+    const financials = getOrderFinancials(o);
+    return sum + financials.prodPrice;
+  }, 0);
 
   const returnsDeliveredCount = returnedOrders.length;
   const rate = totalOrdersCount
