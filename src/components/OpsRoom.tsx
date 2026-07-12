@@ -45,6 +45,27 @@ export default function OpsRoom({ token, role, username, orders, couriers, onRef
   const [isSettlingAll, setIsSettlingAll] = useState(false);
   const [settleAllFeedback, setSettleAllFeedback] = useState<string | null>(null);
 
+  // 2. Map orders for active calculations of the selected date
+  // "ماذا يوجد في حقيبة المندوب لليوم الحالي حصرياً"
+  // For safety and comprehensive tracking, we filter orders where the order was assigned to the courier
+  // and either its main date or any processing dates map to the selectedDate.
+  const getCourierDailyOrders = (courierName: string, dateStr: string) => {
+    return orders.filter(o => {
+      if (o.courier !== courierName) return false;
+      const orderDateStr = normalizeDateToYMD(o.orderDate || o.createdAt);
+      const delivDateStr = o.delivDate ? normalizeDateToYMD(o.delivDate) : "";
+      const retDateStr = o.retDate ? normalizeDateToYMD(o.retDate) : "";
+      const updateDateStr = o.updatedAt ? normalizeDateToYMD(o.updatedAt) : "";
+
+      return (
+        orderDateStr === dateStr ||
+        delivDateStr === dateStr ||
+        retDateStr === dateStr ||
+        (o.status === "خارج مع المندوب" && updateDateStr === dateStr)
+      );
+    });
+  };
+
   // Pending returned orders of the selected courier on the selected date that are not fully settled yet
   const pendingReturns = useMemo(() => {
     if (!selectedCourier) return [];
@@ -100,27 +121,6 @@ export default function OpsRoom({ token, role, username, orders, couriers, onRef
     });
   }, [couriers, searchTerm]);
 
-  // 2. Map orders for active calculations of the selected date
-  // "ماذا يوجد في حقيبة المندوب لليوم الحالي حصرياً"
-  // For safety and comprehensive tracking, we filter orders where the order was assigned to the courier
-  // and either its main date or any processing dates map to the selectedDate.
-  const getCourierDailyOrders = (courierName: string, dateStr: string) => {
-    return orders.filter(o => {
-      if (o.courier !== courierName) return false;
-      const orderDateStr = normalizeDateToYMD(o.orderDate || o.createdAt);
-      const delivDateStr = o.delivDate ? normalizeDateToYMD(o.delivDate) : "";
-      const retDateStr = o.retDate ? normalizeDateToYMD(o.retDate) : "";
-      const updateDateStr = o.updatedAt ? normalizeDateToYMD(o.updatedAt) : "";
-
-      return (
-        orderDateStr === dateStr ||
-        delivDateStr === dateStr ||
-        retDateStr === dateStr ||
-        (o.status === "خارج مع المندوب" && updateDateStr === dateStr)
-      );
-    });
-  };
-
   // 3. Compute overall operational statistics for the selected date
   const overallStats = useMemo(() => {
     let totalOrders = 0;
@@ -169,8 +169,16 @@ export default function OpsRoom({ token, role, username, orders, couriers, onRef
         });
       }
       
-      if (Array.isArray(o.geoLogs)) {
-        o.geoLogs.forEach((g: any) => {
+      let parsedGeoLogs = o.geoLogs;
+      if (typeof o.geoLogs === "string") {
+        try {
+          parsedGeoLogs = JSON.parse(o.geoLogs);
+        } catch (e) {
+          parsedGeoLogs = [];
+        }
+      }
+      if (Array.isArray(parsedGeoLogs)) {
+        parsedGeoLogs.forEach((g: any) => {
           if (g.lat && g.lng) {
             points.push({
               lat: Number(g.lat),

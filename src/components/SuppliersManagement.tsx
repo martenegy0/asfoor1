@@ -64,6 +64,8 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
   const [dailyLedgerData, setDailyLedgerData] = useState<any>(null);
   const [isLedgerLoading, setIsLedgerLoading] = useState(false);
   const [copiedTracking, setCopiedTracking] = useState<string | null>(null);
+  const [visibleEntriesLimit, setVisibleEntriesLimit] = useState<number>(50);
+  const [expandedEntryIdx, setExpandedEntryIdx] = useState<number | null>(null);
 
   // Statement Filters
   const [filterStartDate, setFilterStartDate] = useState("");
@@ -194,6 +196,8 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
 
   // Load detailed account statement when selected supplier shifts
   useEffect(() => {
+    setVisibleEntriesLimit(50);
+    setExpandedEntryIdx(null);
     if (selectedLedgerSupplier) {
       fetchSupplierStatement(selectedLedgerSupplier);
     } else if (isSupplierRole && user) {
@@ -434,12 +438,21 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
 
   // Pre-calculated O(1) snapshots for ALL suppliers
   const supplierSnapshots = useMemo(() => {
+    // 1. Build a fast Map of pending counts per supplier in O(Orders)
+    const pendingCountsMap = new Map<string, number>();
+    (orders || []).forEach(o => {
+      const oSup = (o.supplier || o["المورد"] || "").toString().trim().toLowerCase();
+      if (!oSup) return;
+      const isPending = !["تم التسليم", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تسليم المرتجع للمورد"].includes(o.status);
+      if (isPending) {
+        pendingCountsMap.set(oSup, (pendingCountsMap.get(oSup) || 0) + 1);
+      }
+    });
+
+    // 2. Map accounts in O(Accounts)
     return accounts.map(acc => {
-      const pendingCount = (orders || []).filter(o => {
-        const oSup = (o.supplier || o["المورد"] || "").toString().trim().toLowerCase();
-        const accName = acc.name.toString().trim().toLowerCase();
-        return oSup === accName && !["تم التسليم", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تسليم المرتجع للمورد"].includes(o.status);
-      }).length;
+      const accNameClean = acc.name.toString().trim().toLowerCase();
+      const pendingCount = pendingCountsMap.get(accNameClean) || 0;
       
       return {
         name: acc.name,
@@ -953,6 +966,43 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
                     {isExpanded && (
                       <div className="p-5 space-y-6">
                         
+                        {/* Instant Fast-Loading Summary Widgets (Using Snap Cache) */}
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 print:hidden">
+                          <div className="bg-slate-950 border border-white/6 p-4 rounded-2xl flex items-center justify-between">
+                            <div className="space-y-1">
+                              <span className="text-[10px] text-slate-400 font-extrabold block">👤 المورد الشريك</span>
+                              <span className="text-sm font-black text-white">{snap.name}</span>
+                            </div>
+                            <div className="p-2 bg-amber-500/10 text-amber-500 rounded-xl">
+                              <Users size={16} />
+                            </div>
+                          </div>
+
+                          <div className="bg-slate-950 border border-white/6 p-4 rounded-2xl flex items-center justify-between">
+                            <div className="space-y-1">
+                              <span className="text-[10px] text-slate-400 font-extrabold block">💰 إجمالي المبالغ المحصلة</span>
+                              <span className="text-sm font-black text-slate-100 font-mono">
+                                {snap.totalCollection?.toLocaleString()} ج.م
+                              </span>
+                            </div>
+                            <div className="p-2 bg-emerald-500/10 text-emerald-400 rounded-xl">
+                              <Wallet size={16} />
+                            </div>
+                          </div>
+
+                          <div className="bg-slate-950 border border-white/6 p-4 rounded-2xl flex items-center justify-between">
+                            <div className="space-y-1">
+                              <span className="text-[10px] text-amber-500 font-extrabold block">⚖️ الصافي الدائن المستحق للتصفية</span>
+                              <span className="text-sm font-black text-amber-500 font-mono">
+                                {snap.netDues?.toLocaleString()} ج.م
+                              </span>
+                            </div>
+                            <div className="p-2 bg-amber-500/10 text-amber-500 rounded-xl">
+                              <DollarSign size={16} />
+                            </div>
+                          </div>
+                        </div>
+
                         {/* Print Header (Visible ONLY on viewport printing) */}
                         <div className="hidden print:block text-right pb-4 border-b border-black mb-6">
                           <h1 className="text-xl font-black text-black">شركة الشحن والتوصيل المتكاملة</h1>
@@ -1143,46 +1193,53 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
                             لا توجد قيود مالية مسجلة تتوافق مع محددات البحث والتاريخ وتصفية الحالة الحالية.
                           </div>
                         ) : (
-                          <div className="bg-slate-950 border border-white/6 rounded-2xl overflow-hidden shadow-sm">
-                            <div className="p-4 bg-slate-950 font-black text-xs text-slate-200 border-b border-white/6 flex justify-between items-center print:hidden">
-                              <span>كشف الحساب - القائمة مرتبة بالأحداث الأحدث أولاً</span>
-                              <span className="text-[10px] text-slate-500">مجموع بنود كشف الحساب: {filteredLedgerEntries.length} قيد</span>
-                            </div>
+                          <div className="space-y-4">
+                            <div className="bg-slate-950 border border-white/6 rounded-2xl overflow-hidden shadow-sm">
+                              <div className="p-4 bg-slate-950 font-black text-xs text-slate-200 border-b border-white/6 flex justify-between items-center print:hidden">
+                                <span>كشف الحساب - القائمة مرتبة بالأحداث الأحدث أولاً (انقر لتوسيع التفاصيل والخيارات ⚡)</span>
+                                <span className="text-[10px] text-slate-400">حركات مفرودة: {filteredLedgerEntries.slice(0, visibleEntriesLimit).length} من أصل {filteredLedgerEntries.length}</span>
+                              </div>
 
-                            <div className="overflow-x-auto">
-                              <table className="w-full text-right border-collapse text-xs">
-                                <thead>
-                                  <tr className="bg-slate-950/60 border-b border-white/6 text-slate-400 font-bold">
-                                    <th className="p-3 text-right">التاريخ والمطابقة</th>
-                                    <th className="p-3 text-right">نوع المستند</th>
-                                    <th className="p-3 text-right">الباركود/المرجع</th>
-                                    <th className="p-3 text-right">البيان والتفاصيل وملاحظات المستند</th>
-                                    <th className="p-3 text-left">القيمة المتبادلة</th>
-                                    <th className="p-3 text-left">الرصيد التراكمي العالق</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {filteredLedgerEntries.map((entry, idx) => {
-                                    const isCredit = entry.amount > 0;
-                                    const isReturn = entry.type === "مرتجع مخصوم" || (entry.type || "").includes("مرتجع");
-                                    const isPayoutTrans = ["دفع نقدي", "سداد", "دفعة"].some(kw => (entry.type || "").includes(kw));
-                                    
-                                    return (
-                                      <tr key={idx} className="border-b border-white/4 hover:bg-slate-950/20 text-[11px] transition-colors">
-                                        {/* Date */}
-                                        <td className="p-3 font-mono text-slate-300">
-                                          {entry.date ? entry.date.toString().substring(0, 16) : "—"}
-                                        </td>
+                              <div className="divide-y divide-white/5">
+                                {/* Accordion Table Header Row (Hidden on mobile, helpful for large displays) */}
+                                <div className="hidden sm:grid sm:grid-cols-12 gap-3 p-3.5 bg-slate-900/60 font-extrabold text-[10px] text-slate-400 border-b border-white/6 text-right">
+                                  <div className="sm:col-span-3">التاريخ والمطابقة</div>
+                                  <div className="sm:col-span-3">نوع الحركة ومستندها</div>
+                                  <div className="sm:col-span-2">الكود/المرجع</div>
+                                  <div className="sm:col-span-2 text-left">قيمة الحركة</div>
+                                  <div className="sm:col-span-2 text-left">الرصيد التراكمي</div>
+                                </div>
 
-                                        {/* Type with color coded badge */}
-                                        <td className="p-3">
+                                {filteredLedgerEntries.slice(0, visibleEntriesLimit).map((entry, idx) => {
+                                  const isExpanded = expandedEntryIdx === idx;
+                                  const isCredit = entry.amount > 0;
+                                  const isReturn = entry.type === "مرتجع مخصوم" || (entry.type || "").includes("مرتجع");
+                                  const isPayoutTrans = ["دفع نقدي", "سداد", "دفعة"].some(kw => (entry.type || "").includes(kw));
+                                  
+                                  return (
+                                    <div key={idx} className="border-b border-white/4 last:border-0 hover:bg-white/[0.01] transition-colors">
+                                      {/* Entry Header Accordion Tab */}
+                                      <div 
+                                        onClick={() => setExpandedEntryIdx(isExpanded ? null : idx)}
+                                        className="p-3.5 flex flex-col sm:grid sm:grid-cols-12 gap-3 items-start sm:items-center cursor-pointer select-none text-[11px] text-right"
+                                      >
+                                        {/* Chevron + Date */}
+                                        <div className="sm:col-span-3 flex items-center gap-2">
+                                          <ChevronRight size={13} className={`text-slate-500 shrink-0 transform transition-transform duration-200 print:hidden ${isExpanded ? "rotate-90 text-amber-500" : ""}`} />
+                                          <span className="font-mono text-slate-300 font-bold">
+                                            {entry.date ? entry.date.toString().substring(0, 16) : "—"}
+                                          </span>
+                                        </div>
+
+                                        {/* Type Badge */}
+                                        <div className="sm:col-span-3">
                                           <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold ${
                                             isCredit 
                                               ? "bg-blue-955/20 text-blue-400 border border-blue-900/40" 
                                               : isReturn
-                                              ? "bg-red-955/20 text-red-450 border border-red-900/40"
+                                              ? "bg-red-955/20 text-red-400 border border-red-900/40"
                                               : isPayoutTrans
-                                              ? "bg-emerald-955/20 text-emerald-450 border border-emerald-900/40"
+                                              ? "bg-emerald-955/20 text-emerald-400 border border-emerald-900/40"
                                               : "bg-amber-955/20 text-amber-450 border border-amber-900/40"
                                           }`}>
                                             {isCredit && <TrendingUp size={11} className="shrink-0" />}
@@ -1190,47 +1247,85 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
                                             {!isCredit && !isReturn && <Layers size={11} className="shrink-0" />}
                                             <span>{entry.type}</span>
                                           </span>
-                                        </td>
+                                        </div>
 
-                                        {/* Tracking barcode with quick copy */}
-                                        <td className="p-3 font-mono text-slate-200">
+                                        {/* Barcode/Reference */}
+                                        <div className="sm:col-span-2 font-mono text-slate-300">
                                           {entry.tracking && entry.tracking !== "CASH-PAY" ? (
-                                            <button 
-                                              onClick={() => copyToClipboard(entry.tracking)}
-                                              className="flex items-center gap-1 hover:text-amber-450 outline-none transition-colors"
-                                            >
-                                              {copiedTracking === entry.tracking ? (
-                                                <Check className="text-emerald-500 shrink-0" size={11} />
-                                              ) : (
-                                                <Copy className="text-slate-500 shrink-0" size={11} />
-                                              )}
-                                              <span>{entry.tracking}</span>
-                                            </button>
+                                            <span className="bg-slate-950 px-2 py-0.5 rounded border border-white/5 text-[10px]">{entry.tracking}</span>
                                           ) : (
                                             <span className="text-slate-500">—</span>
                                           )}
-                                        </td>
+                                        </div>
 
-                                        {/* Human readable description */}
-                                        <td className="p-3 text-slate-300 text-right leading-relaxed max-w-sm font-semibold">
-                                          {entry.desc}
-                                        </td>
+                                        {/* Amount */}
+                                        <div className="sm:col-span-2 text-left w-full sm:w-auto font-mono font-black">
+                                          <span className={isCredit ? "text-blue-400" : isPayoutTrans ? "text-emerald-400" : "text-red-400"}>
+                                            {isCredit ? "+" : ""}{entry.amount?.toLocaleString()} ج.م
+                                          </span>
+                                        </div>
 
-                                        {/* Transaction Amount */}
-                                        <td className={`p-3 text-left font-mono font-black ${isCredit ? "text-blue-400" : isPayoutTrans ? "text-emerald-400" : "text-red-400"}`}>
-                                          {isCredit ? "+" : ""}{entry.amount?.toLocaleString()} ج.م
-                                        </td>
+                                        {/* Balance after */}
+                                        <div className="sm:col-span-2 text-left w-full sm:w-auto font-mono font-black text-amber-500">
+                                          <span>{entry.balanceAfter?.toLocaleString()} ج.م</span>
+                                        </div>
+                                      </div>
 
-                                        {/* Running Balance */}
-                                        <td className="p-3 text-left font-mono font-black text-amber-500">
-                                          {entry.balanceAfter?.toLocaleString()} ج.م
-                                        </td>
-                                      </tr>
-                                    );
-                                  })}
-                                </tbody>
-                              </table>
+                                      {/* Collapsible Panel Body */}
+                                      <div className={`${isExpanded ? "block" : "hidden print:block"} p-4 bg-slate-950/45 border-t border-white/5 space-y-3 text-xs leading-relaxed text-right`}>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                          <div className="space-y-1.5 bg-slate-950 p-3 rounded-xl border border-white/4">
+                                            <span className="text-[10px] text-slate-400 font-extrabold block">📝 تفاصيل الحركة والبيان:</span>
+                                            <p className="text-slate-200 font-bold leading-relaxed">{entry.desc}</p>
+                                          </div>
+
+                                          <div className="space-y-1.5 bg-slate-950 p-3 rounded-xl border border-white/4">
+                                            <span className="text-[10px] text-slate-400 font-extrabold block">⚙️ الإجراءات السريعة والمستند:</span>
+                                            <div className="flex flex-wrap items-center gap-2 pt-1">
+                                              {entry.tracking && entry.tracking !== "CASH-PAY" && (
+                                                <button
+                                                  onClick={() => copyToClipboard(entry.tracking)}
+                                                  className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-white/6 text-slate-300 font-extrabold rounded-lg flex items-center gap-1 cursor-pointer transition-colors"
+                                                >
+                                                  {copiedTracking === entry.tracking ? (
+                                                    <>
+                                                      <Check size={11} className="text-emerald-500" />
+                                                      <span>تم النسخ ✓</span>
+                                                    </>
+                                                  ) : (
+                                                    <>
+                                                      <Copy size={11} />
+                                                      <span>نسخ كود الشحنة ({entry.tracking})</span>
+                                                    </>
+                                                  )}
+                                                </button>
+                                              )}
+                                              <div className="text-[11px] text-slate-400 flex items-center gap-1">
+                                                <span>الرصيد بعد الحركة:</span>
+                                                <span className="text-amber-500 font-bold">{entry.balanceAfter?.toLocaleString()} ج.م</span>
+                                              </div>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
                             </div>
+
+                            {/* Pagination/Load More Button for massive ledger lists */}
+                            {filteredLedgerEntries.length > visibleEntriesLimit && (
+                              <div className="flex justify-center pt-2 print:hidden">
+                                <button
+                                  type="button"
+                                  onClick={() => setVisibleEntriesLimit(prev => prev + 50)}
+                                  className="px-6 py-2.5 bg-slate-900 hover:bg-slate-800 border border-white/8 text-amber-500 font-black text-xs rounded-xl cursor-pointer flex items-center gap-1.5 transition-colors"
+                                >
+                                  <span>➕ عرض المزيد من القيود والعمليات التراكمية (+50 حركة متبقية)</span>
+                                </button>
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>
