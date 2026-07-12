@@ -4255,6 +4255,24 @@ app.post("/api", async (req: Request, res: Response) => {
           if (status === "تم تسليم المرتجع للمورد") {
             order.status = "تم تسليم المرتجع للمورد";
             order.retDate = now();
+
+            // Deduct the net price (product price without shipping) from the supplier ledger
+            const dupLedger = db.supplierLedger.find(
+              (l: any) =>
+                l.tracking === order.tracking &&
+                (l.type === "مرتجع" || l.type === "مرتجع تم تسليمه للمورد"),
+            );
+            if (!dupLedger) {
+              const financials = getOrderFinancials(order);
+              db.supplierLedger.push({
+                supplier: order.supplier,
+                date: now(),
+                type: "مرتجع تم تسليمه للمورد",
+                tracking: order.tracking,
+                amount: -Math.abs(Number(financials.prodPrice || 0)),
+                desc: `خصم قيمة المنتج لمرتجع تسلمه المورد: ${order.tracking} (بضاعة مرتجعة بدون شحن: -${financials.prodPrice} ج.م)`,
+              });
+            }
           } else {
             order.status = status;
           }
@@ -4335,7 +4353,25 @@ app.post("/api", async (req: Request, res: Response) => {
               desc: `عمولة تسليم جزئي للأوردر: ${order.tracking} (المبلغ الفعلي المستلم: ${pAm} ج.م)`,
             });
 
-            // Stopped automatic supplier ledger credit as supplier account relies strictly on dynamic formula calculation
+            // Credit the Supplier Ledger based on updated sold product price (WITHOUT subtracting shipping fees)
+            const dupLedger = db.supplierLedger.find(
+              (l: any) =>
+                l.tracking === order.tracking &&
+                (l.type === "أوردر مستلم" ||
+                  l.type === "تسليم" ||
+                  l.type === "أوردر مستلم جزئي"),
+            );
+            if (!dupLedger) {
+              const supplierShare = pAm;
+              db.supplierLedger.push({
+                supplier: order.supplier,
+                date: now(),
+                type: "أوردر مستلم جزئي",
+                tracking: order.tracking,
+                amount: supplierShare,
+                desc: `حقوق توريد أوردر تسليم جزئي: ${order.tracking} (قيمة البضاعة المباعة الصافية: ${pAm} ج.م)`,
+              });
+            }
           }
 
           if (status === "العميل رد وجاري التسليم") {
@@ -4877,6 +4913,24 @@ app.post("/api", async (req: Request, res: Response) => {
 
               // Held under Courier Custody (العهدة المعلقة مع المندوب) - No automatic central cashbox entry on bulk delivery.
 
+              // Credit Supplier Ledger if not already done
+              const dupLedger = db.supplierLedger.find(
+                (l: any) =>
+                  l.tracking === order.tracking &&
+                  (l.type === "أوردر مستلم" || l.type === "تسليم"),
+              );
+              if (!dupLedger) {
+                const supplierShare =
+                  Number(order.prodPrice || 0) - Number(order.shipPrice || 0);
+                db.supplierLedger.push({
+                  supplier: order.supplier,
+                  date: now(),
+                  type: "أوردر مستلم",
+                  tracking: order.tracking,
+                  amount: supplierShare,
+                  desc: `حقوق أوردر تم تسليمه جماعياً: ${order.tracking} (سعر المنتج ${order.prodPrice} - شحن الشركة ${order.shipPrice})`,
+                });
+              }
             }
 
             if (
@@ -4890,6 +4944,21 @@ app.post("/api", async (req: Request, res: Response) => {
                 status === "التسليم للمورد"
               ) {
                 order.returnQueueStatus = "تم تسليم المرتجع للمورد";
+                const dupLedger = db.supplierLedger.find(
+                  (l: any) =>
+                    l.tracking === order.tracking &&
+                    (l.type === "مرتجع" || l.type === "مرتجع تم تسليمه للمورد"),
+                );
+                if (!dupLedger) {
+                  db.supplierLedger.push({
+                    supplier: order.supplier,
+                    date: now(),
+                    type: "مرتجع تم تسليمه للمورد",
+                    tracking: order.tracking,
+                    amount: -Number(order.prodPrice || 0),
+                    desc: `خصم قيمة المنتج لمرتجع تسلمه المورد جماعياً: ${order.tracking}`,
+                  });
+                }
               }
             }
 
@@ -5086,6 +5155,24 @@ app.post("/api", async (req: Request, res: Response) => {
 
               // Held under Courier Custody (العهدة المعلقة مع المندوب) - No automatic central cashbox entry on bulk delivery.
 
+              // Credit Supplier Ledger if not already done
+              const dupLedger = db.supplierLedger.find(
+                (l: any) =>
+                  l.tracking === order.tracking &&
+                  (l.type === "أوردر مستلم" || l.type === "تسليم"),
+              );
+              if (!dupLedger) {
+                const supplierShare =
+                  Number(order.prodPrice || 0) - Number(order.shipPrice || 0);
+                db.supplierLedger.push({
+                  supplier: order.supplier,
+                  date: now(),
+                  type: "أوردر مستلم",
+                  tracking: order.tracking,
+                  amount: supplierShare,
+                  desc: `حقوق أوردر تم تسليمه جماعياً (الدفعة المجمعة): ${order.tracking} (صافي بضاعة ${supplierShare})`,
+                });
+              }
             }
 
             if (
@@ -5099,6 +5186,21 @@ app.post("/api", async (req: Request, res: Response) => {
                 status === "التسليم للمورد"
               ) {
                 order.returnQueueStatus = "تم تسليم المرتجع للمورد";
+                const dupLedger = db.supplierLedger.find(
+                  (l: any) =>
+                    l.tracking === order.tracking &&
+                    (l.type === "مرتجع" || l.type === "مرتجع تم تسليمه للمورد"),
+                );
+                if (!dupLedger) {
+                  db.supplierLedger.push({
+                    supplier: order.supplier,
+                    date: now(),
+                    type: "مرتجع تم تسليمه للمورد",
+                    tracking: order.tracking,
+                    amount: -Number(order.prodPrice || 0),
+                    desc: `خصم قيمة المنتج لمرتجع تسلمه المورد جماعياً (الدفعة المجمعة): ${order.tracking}`,
+                  });
+                }
               }
             }
 
