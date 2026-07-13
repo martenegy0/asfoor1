@@ -1001,37 +1001,6 @@ function updateStatus(sheets, d) {
   // معالجة استلام المرتجع عند المورد وحسم حسابه المالي تلقائياً
   if (status === "التسليم للمورد" || status === "تم تسليم المرتجع للمورد" || status === "مرتجع تم تسليمه للمورد") {
     updateObj.retDate = now();
-    const ledgerData = getTableData(sheets.supplierLedger);
-    const dupLedger = ledgerData.find(l => l.tracking === tracking && (l.type === "مرتجع" || l.type === "مرتجع تم تسليمه للمورد"));
-    if (!dupLedger) {
-      const isPartial = order.isPartial === true || order.isPartial === "true" || ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(order.status || "") !== -1;
-      if (isPartial) {
-        const financials = getOrderFinancials(order);
-        const shipPrice = Number(order.shipPrice || financials.shipPrice || 60);
-        const original_prod_price = Number(order.originalProdPrice || order.prodPrice || financials.prodPrice || 0);
-        const actualReceived = Number(order.actualReceivedCash || order.partialAmount || order["المبلغ المحصل"] || 0);
-        const kept_goods_value = Math.max(0, actualReceived - shipPrice);
-        const returned_goods_value = Math.max(0, original_prod_price - kept_goods_value);
-
-        appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
-          supplier: order.supplier,
-          date: now(),
-          type: "مرتجع تم تسليمه للمورد",
-          tracking: tracking,
-          amount: returned_goods_value,
-          desc: `تسوية بضاعة مرتجع جزئي مسلمة للمورد للأوردر رقم #${tracking} (قيمة المرتجع المستلم: ${returned_goods_value} ج.م)`
-        });
-      } else {
-        appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
-          supplier: order.supplier,
-          date: now(),
-          type: "مرتجع تم تسليمه للمورد",
-          tracking: tracking,
-          amount: 0,
-          desc: `إرجاع كامل بضاعة أوردر مرتجع للمورد رقم #${tracking} (قيمة الحركة المادية: 0 ج.م)`
-        });
-      }
-    }
   }
 
   // معالجة الأوردرات المسلّمة (تم التسليم) وحركتها المالية بالخزنة المركزية لتجنب العجز
@@ -1052,19 +1021,6 @@ function updateStatus(sheets, d) {
       desc: `عمولة تسليم الأوردر والتحصيل للأوردر: ${tracking}`
     });
 
-    const ledgerData = getTableData(sheets.supplierLedger);
-    const dupLedger = ledgerData.find(l => l.tracking === tracking && (l.type === "أوردر مستلم" || l.type === "تسليم"));
-    if (!dupLedger) {
-      const supplierShare = Number(order.prodPrice || 0) - Number(order.shipPrice || 0);
-      appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
-        supplier: order.supplier,
-        date: now(),
-        type: "أوردر مستلم",
-        tracking: tracking,
-        amount: supplierShare,
-        desc: `حقوق أوردر تم تسليمه: ${tracking} (سعر المنتج ${order.prodPrice} - شحن الشركة ${order.shipPrice})`
-      });
-    }
   }
 
   if (status === "تسليم جزئي" || status === "تسليم جزئي - معلق للجرد") {
@@ -1107,19 +1063,6 @@ function updateStatus(sheets, d) {
       desc: `عمولة تسليم جزئي للأوردر: ${tracking} (المبلغ الفعلي المستلم: ${pAm} ج.م)`
     });
 
-    const ledgerData = getTableData(sheets.supplierLedger);
-    const dupLedger = ledgerData.find(l => l.tracking === tracking && (l.type === "أوردر مستلم" || l.type === "تسليم" || l.type === "أوردر مستلم جزئي"));
-    if (!dupLedger) {
-      const supplierShare = kept_goods_value;
-      appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
-        supplier: order.supplier,
-        date: now(),
-        type: "أوردر مستلم جزئي",
-        tracking: tracking,
-        amount: supplierShare,
-        desc: `حقوق توريد أوردر تسليم جزئي: ${tracking} (قيمة البضاعة المستلمة فعلياً: ${kept_goods_value} ج.م، قيمة المرتجع المستبعد: ${returned_goods_value} ج.م، شحن الشركة: ${shipPrice} ج.م)`
-      });
-    }
   }
 
   if (status === "العميل رد وجاري التسليم") {
@@ -1582,58 +1525,10 @@ function updateOrdersStatusBulk(sheets, d) {
             desc: "عمولة تسليم الأوردر جماعياً (الدفعة المجمعة): " + tr
           });
 
-          const totalCOD = Number(order.totalCOD || 0);
-          const prodPrice = Number(order.prodPrice || 0);
-          const shipPrice = Number(order.shipPrice || 0);
-          const supplierPrice = prodPrice !== 0 ? prodPrice : (totalCOD - shipPrice);
-          const supplierName = order.supplier || "";
-          
-          if (supplierName) {
-            appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
-              supplier: supplierName,
-              date: now(),
-              type: "أوردر مستلم",
-              tracking: tr,
-              amount: supplierPrice,
-              desc: "حقوق توريد أوردر تم تسليمه جماعياً (الدفعة المجمعة): " + tr + " (بضاعة " + supplierPrice + ")"
-            });
-          }
         }
 
          if (["مرتجع", "تم تسليم المرتجع للمورد", "التسليم للمورد", "مرتجع تم تسليمه للمورد"].indexOf(targetStatus) !== -1) {
           updateObj.retDate = now();
-          if (targetStatus === "تم تسليم المرتجع للمورد" || targetStatus === "التسليم للمورد" || targetStatus === "مرتجع تم تسليمه للمورد") {
-            const supplierName = order.supplier || "";
-            if (supplierName) {
-              const isPartial = order.isPartial === true || order.isPartial === "true" || ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(order.status || "") !== -1;
-              if (isPartial) {
-                const financials = getOrderFinancials(order);
-                const shipPrice = Number(order.shipPrice || financials.shipPrice || 60);
-                const original_prod_price = Number(order.originalProdPrice || order.prodPrice || financials.prodPrice || 0);
-                const actualReceived = Number(order.actualReceivedCash || order.partialAmount || order["المبلغ المحصل"] || 0);
-                const kept_goods_value = Math.max(0, actualReceived - shipPrice);
-                const returned_goods_value = Math.max(0, original_prod_price - kept_goods_value);
-
-                appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
-                  supplier: supplierName,
-                  date: now(),
-                  type: "مرتجع تم تسليمه للمورد",
-                  tracking: tr,
-                  amount: returned_goods_value,
-                  desc: `تسوية بضاعة مرتجع جزئي مسلمة للمورد للأوردر رقم #${tr} (قيمة المرتجع المستلم: ${returned_goods_value} ج.م)`
-                });
-              } else {
-                appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
-                  supplier: supplierName,
-                  date: now(),
-                  type: "مرتجع تم تسليمه للمورد",
-                  tracking: tr,
-                  amount: 0,
-                  desc: `إرجاع كامل بضاعة أوردر مرتجع للمورد رقم #${tr} (قيمة الحركة المادية: 0 ج.م)`
-                });
-              }
-            }
-          }
         }
 
         appendToSheet(sheets.statusHistory, ["tracking", "oldStatus", "newStatus", "updatedBy", "dateTime"], {
@@ -1982,7 +1877,8 @@ function calculateSupplierBalance(sheets, supplierName, preloadedDb) {
 
   var outstanding =
     openingBalance +
-    totalKeptGoodsValue +
+    totalGoodsUploaded -
+    returnsDeliveredValue +
     totalLedgerEffect;
 
   var totalOrdersCount = supplierOrders.length;
