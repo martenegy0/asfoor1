@@ -1434,7 +1434,8 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
 
         // Filter active orders assigned to this courier:
         const activeCourierOrders = (orders || []).filter(o => 
-          o && o.courier && o.courier.toString().trim().toLowerCase() === courierName.toString().trim().toLowerCase()
+          o && o.courier && o.courier.toString().trim().toLowerCase() === courierName.toString().trim().toLowerCase() &&
+          o.isSettled !== true && o.isSettled !== "true" && o.is_settled !== "true"
         );
 
         // Status-based categories:

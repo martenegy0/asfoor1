@@ -4096,10 +4096,15 @@ function instantCourierSettlement(sheets, d) {
 
             rowDataMap["status"] = nextStatus;
             var isSuccessfullyClosed = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي"].indexOf(oldStatus) !== -1;
-            
+            var shouldArchive = (nextStatus === "تم التسليم" || nextStatus === "تم التسليم بنجاح" || nextStatus === "تم التسليم (ناجح كاش)" || nextStatus === "التسليم للمورد" || nextStatus === "تم تسليم المرتجع للمورد");
+
             if (isSuccessfullyClosed) {
               rowDataMap["isSettled"] = "true";
               rowDataMap["is_settled"] = "true";
+              if (!shouldArchive) {
+                rowDataMap["courier"] = "";
+                rowDataMap["commission"] = 0;
+              }
             } else {
               rowDataMap["courier"] = "";
               rowDataMap["commission"] = 0;
@@ -4116,11 +4121,6 @@ function instantCourierSettlement(sheets, d) {
               updatedBy: currentUser || "إدارة",
               dateTime: nowCairoStr
             });
-
-            var shouldArchive = false;
-            if (nextStatus === "تم التسليم" || nextStatus === "تم التسليم بنجاح" || nextStatus === "تم التسليم (ناجح كاش)" || nextStatus === "التسليم للمورد" || nextStatus === "تم تسليم المرتجع للمورد") {
-              shouldArchive = true;
-            }
 
             if (shouldArchive) {
               var archiveRowValues = [];

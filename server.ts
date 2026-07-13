@@ -5720,6 +5720,237 @@ app.post("/api", async (req: Request, res: Response) => {
         return ok(res, { msg: successMsg });
       }
 
+      // Instant courier daily settlement and wallet closing
+      case "instantCourierSettlement": {
+        const {
+          courier,
+          cashAmount,
+          commissionAmount,
+          adjustmentType,
+          adjustmentAmount,
+          adjustmentDesc,
+        } = d;
+
+        if (!courier) return err(res, "المندوب غير محدد");
+
+        const nowCairoStr = now();
+
+        // 1. If cashAmount > 0, record deposit in cashbox (Main Treasury)
+        const cashVal = Number(cashAmount || 0);
+        if (cashVal > 0) {
+          if (!db.cashbox) db.cashbox = [];
+          db.cashbox.push({
+            date: nowCairoStr,
+            desc: "تصفية كاش وإغلاق العهدة اليومية للمندوب: " + courier,
+            type: "استلام عهدة مندوب",
+            amount: cashVal,
+            ref: courier,
+            addedBy: currentUser || "إدارة الحسابات",
+          });
+        }
+
+        // 2. Record commissions earned in courierLedger as a positive entry
+        const commVal = Number(commissionAmount || 0);
+        if (commVal > 0) {
+          if (!db.courierLedger) db.courierLedger = [];
+          db.courierLedger.push({
+            courier: courier,
+            date: nowCairoStr,
+            type: "عمولة توصيل",
+            tracking: "—",
+            amount: commVal,
+            desc: "إجمالي العمولات المستحقة لليوم المصفى",
+          });
+        }
+
+        // 3. Record adjustment if adjustmentAmount > 0
+        const adjVal = Number(adjustmentAmount || 0);
+        if (adjVal > 0 && adjustmentType) {
+          if (!db.courierLedger) db.courierLedger = [];
+          db.courierLedger.push({
+            courier: courier,
+            date: nowCairoStr,
+            type: adjustmentType,
+            tracking: "—",
+            amount: adjustmentType === "جزاء" ? -adjVal : adjVal,
+            desc: adjustmentDesc || ("تسوية يدوية مصاحبة للتصفية اليومية - " + adjustmentType),
+          });
+
+          if (adjustmentType === "مكافأة") {
+            if (!db.cashbox) db.cashbox = [];
+            db.cashbox.push({
+              date: nowCairoStr,
+              desc: "مكافأة منصرفة للمندوب مصاحبة للتصفية اليومية: " + courier + " - " + (adjustmentDesc || ""),
+              type: "صرف",
+              amount: adjVal,
+              ref: "BONUS",
+              addedBy: currentUser || "إدارة الحسابات",
+            });
+          } else if (adjustmentType === "جزاء") {
+            if (!db.cashbox) db.cashbox = [];
+            db.cashbox.push({
+              date: nowCairoStr,
+              desc: "تسوية خصم/جزاء مستقطع مصاحب للتصفية اليومية للمندوب: " + courier + " - " + (adjustmentDesc || ""),
+              type: "استلام عهدة مندوب",
+              amount: adjVal,
+              ref: "PENALTY",
+              addedBy: currentUser || "إدارة الحسابات",
+            });
+          }
+        }
+
+        // 4. Now perform logical status settlement and archiving of active orders
+        let settledCount = 0;
+        const settledOrders: any[] = [];
+        const activeOrders: any[] = [];
+        if (!db.archivedOrders) db.archivedOrders = [];
+
+        db.orders.forEach((order: any) => {
+          if (
+            order.courier &&
+            order.courier.toString().trim().toLowerCase() ===
+              courier.toString().trim().toLowerCase()
+          ) {
+            const oldStatus = order.status;
+            order.lastCourier = order.courier;
+            order.lastCommission = order.commission;
+
+            let nextStatus = oldStatus;
+            if (oldStatus === "مرتجع" || oldStatus === "مرتجع جديد") {
+              nextStatus = "مرتجع بالمستودع";
+              order.courierSignature = `${order.courier} (توقيع تصفية المرتجع الميداني ✍️)`;
+            } else if (
+              oldStatus === "تسليم جزئي" ||
+              oldStatus === "مرتجع جزئي" ||
+              oldStatus === "تسليم جزئي - معلق للجرد"
+            ) {
+              nextStatus = "مرتجع جزئي بالمستودع";
+              order.returnReason = "مرتجع جزئي متبقي";
+              order.returnSubStatus = "بضاعة متبقية من تسليم جزئي";
+              order.courierSignature = `${order.courier} (توقيع تصفية المرتجع الجزئي ✍️)`;
+            } else if (
+              oldStatus === "مؤجل" ||
+              oldStatus === "Delayed" ||
+              oldStatus === "مؤجل من المندوب" ||
+              oldStatus === "مؤجل بناءً على طلب العميل"
+            ) {
+              nextStatus = "مؤجل بالمستودع";
+              order.courierSignature = `${order.courier} (توقيع تصفية المؤجل ✍️)`;
+            } else if (
+              oldStatus === "لا يوجد رد" ||
+              oldStatus === "العميل لا يرد" ||
+              oldStatus === "No Answer" ||
+              oldStatus === "العميل لم يقم بالرد"
+            ) {
+              nextStatus = "لا يوجد رد بالمستودع";
+              order.courierSignature = `${order.courier} (توقيع تصفية عدم الرد ✍️)`;
+            }
+
+            order.status = nextStatus;
+
+            const isSuccessfullyClosed = [
+              "تم التسليم",
+              "تم التسليم بنجاح",
+              "تم التسليم (ناجح كاش)",
+              "تسليم جزئي",
+              "تسليم جزئي - معلق للجرد",
+              "مرتجع جزئي"
+            ].includes(oldStatus);
+
+            const shouldArchive = [
+              "تم التسليم",
+              "تم التسليم بنجاح",
+              "تم التسليم (ناجح كاش)",
+              "التسليم للمورد",
+              "تم تسليم المرتجع للمورد"
+            ].includes(nextStatus);
+
+            if (isSuccessfullyClosed) {
+              order.isSettled = true;
+              order.is_settled = "true";
+              if (!shouldArchive) {
+                order.courier = "";
+                order.commission = 0;
+              }
+            } else {
+              order.courier = "";
+              order.commission = 0;
+              order.isSettled = false;
+              order.is_settled = "false";
+            }
+
+            order.updatedAt = nowCairoStr;
+
+            if (!db.statusHistory) db.statusHistory = [];
+            db.statusHistory.push({
+              tracking: order.tracking,
+              oldStatus: oldStatus,
+              newStatus: order.status,
+              updatedBy: currentUser || "إدارة",
+              dateTime: nowCairoStr,
+            });
+
+            if (shouldArchive) {
+              settledOrders.push(order);
+            } else {
+              activeOrders.push(order);
+            }
+            settledCount++;
+          } else {
+            activeOrders.push(order);
+          }
+        });
+
+        db.archivedOrders.push(...settledOrders);
+        db.orders = activeOrders;
+
+        // Write audit log entry
+        if (!db.auditLog) db.auditLog = [];
+        db.auditLog.push({
+          user: currentUser || "إدارة الحسابات",
+          type: "تصفية عهدة يومية فورية",
+          dateTime: nowCairoStr,
+          oldVal: "عامل: " + courier,
+          newVal: "كاش: " + cashVal + " | عمولة: " + commVal,
+          reason: "اعتماد تصفية الحساب وإغلاق العهدة اليومية"
+        });
+
+        writeDB(db);
+
+        // 🌐 Modern Google Sheets Integration Proxy Gateway
+        let scriptUrl = (process.env.GOOGLE_SCRIPT_URL || "").trim();
+        if (scriptUrl.startsWith('"') && scriptUrl.endsWith('"')) {
+          scriptUrl = scriptUrl.substring(1, scriptUrl.length - 1).trim();
+        } else if (scriptUrl.startsWith("'") && scriptUrl.endsWith("'")) {
+          scriptUrl = scriptUrl.substring(1, scriptUrl.length - 1).trim();
+        }
+
+        if (
+          isGoogleScriptHealthy &&
+          scriptUrl &&
+          scriptUrl.startsWith("http")
+        ) {
+          executeProxyRequest(scriptUrl, {
+            action: "instantCourierSettlement",
+            token: "14014",
+            courier,
+            cashAmount: cashVal,
+            commissionAmount: commVal,
+            adjustmentType,
+            adjustmentAmount,
+            adjustmentDesc,
+            currentUser,
+          }).catch((err) => {
+            console.error("Async sheets write failure for instantCourierSettlement:", err);
+          });
+        }
+
+        return ok(res, {
+          settled: settledCount,
+          msg: "✅ تم اعتماد تصفية الحساب وإغلاق العهدة اليومية للمندوب بنجاح! تم إيداع مبلغ " + cashVal + " ج.م بالخزنة كأثر فوري، وتصفير العداد لليوم الجديد."
+        });
+      }
+
       // Overnight face-to-face settlement action
       case "settleCourierOrders": {
         const { courier } = d;
