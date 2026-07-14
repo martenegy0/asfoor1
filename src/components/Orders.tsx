@@ -2541,7 +2541,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
   return (
     <div className="font-sans text-right select-none space-y-4">
       {/* 🔍 Advanced Filter Bar / شريط التصفية المتقدم */}
-      <div className="mx-4 p-4 bg-slate-900 border border-white/6 rounded-2xl space-y-4 text-right animate-fadeIn">
+      <div className="mx-4 p-4 bg-slate-900 border border-white/6 rounded-2xl space-y-4 text-right animate-fadeIn lg:hidden">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/5 pb-3">
           <div className="flex items-center gap-2.5">
             <span className="p-2 bg-amber-500/15 text-amber-500 rounded-xl text-xs shrink-0">🎛️</span>
@@ -2743,580 +2743,373 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       />
 
       {/* 🖥️ Desktop Interface (visible on hidden lg:block) */}
-      <div className="hidden lg:block space-y-4">
-        {/* Search and select buttons */}
-        <div className="flex bg-[#070d1a] px-4 py-3 border-b border-white/6 items-center flex-wrap gap-3">
-        <div className="relative flex-1 min-w-[200px]">
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="🔍 ابحث برقم الأوردر، تليفون، عميل أو مورد..."
-            className="w-full bg-slate-900 border border-white/6 rounded-xl py-2.5 pr-10 pl-4 text-xs font-bold text-slate-200 placeholder-slate-500 text-right outline-none focus:border-amber-500/20"
-          />
-        </div>
-
-        {/* Quick Supplier Filter Dropdown */}
-        <div className="relative min-w-[170px] max-w-full">
-          <select
-            value={selectedSupplierFilter}
-            onChange={(e) => {
-              setSelectedSupplierFilter(e.target.value);
-              setSelected(new Set());
-            }}
-            className="bg-slate-900 border border-white/6 rounded-xl py-2.5 px-3 text-xs font-black text-amber-400 outline-none text-right focus:border-amber-500 hover:bg-slate-850 cursor-pointer w-full"
-          >
-            <option value="">👤 كافة الشحنات (كل الموردين)</option>
-            {Array.from(new Set(
-              (roleFilteredOrders || [])
-                .map((o: any) => o.supplier)
-                .filter(Boolean)
-                .map((s: any) => s.toString().trim())
-            ))
-            .sort()
-            .map((sup: string) => (
-              <option key={sup} value={sup}>{sup}</option>
-            ))}
-          </select>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {(isAdmin || isSuper || isOps) && (
-            <button
-              onClick={() => setShowOperationalReport(!showOperationalReport)}
-              className={`px-4 py-2 text-[10px] rounded-xl font-black flex items-center gap-1.5 cursor-pointer transition-all whitespace-nowrap ${
-                showOperationalReport
-                  ? "bg-amber-500 text-slate-950 font-black shadow-lg shadow-amber-500/10"
-                  : "bg-slate-900 border border-white/8 text-amber-500 font-extrabold hover:text-amber-400"
-              }`}
-              title="عرض الطلبات العملياتية المتبقية والنشطة لليوم مجمعة"
-            >
-              <span>📋 التقرير العملياتي اليومي</span>
-              <span className={`text-[9.5px] px-1.5 py-0.5 rounded font-bold ${
-                showOperationalReport ? "bg-amber-950/30 text-amber-950" : "bg-slate-950 text-amber-500"
-              }`}>
-                {showOperationalReport ? "نشط" : "مغلق"}
-              </span>
-            </button>
-          )}
-          {canReconcile && (
-            <button
-              onClick={() => setShowReconPortal(!showReconPortal)}
-              className="px-4 py-2 bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-605 text-slate-950 font-black text-[10px] rounded-xl flex items-center gap-1 cursor-pointer transition-all whitespace-nowrap"
-            >
-              <span>⚡ تصفية بالباركود والإكسيل</span>
-            </button>
-          )}
-          {canSelectBulk && (
-            <button
-               onClick={toggleSelectAll}
-               className="px-4 py-2 bg-slate-900 border border-white/8 rounded-xl text-[10px] text-slate-300 font-extrabold cursor-pointer transition-colors whitespace-nowrap"
-            >
-              {selected.size === visibleOrders.length ? "إلغاء التحديد" : "تحديد الكل"}
-            </button>
-          )}
-          {(isAdmin || isSuper || isOps || (role || "").toString().toLowerCase().includes("محاسب")) && (
-            <button
-               onClick={exportToCSV}
-               className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-slate-950 font-black text-[10px] rounded-xl flex items-center gap-1.5 cursor-pointer transition-all whitespace-nowrap"
-               title="تصدير النتائج الحليّة بصيغة CSV"
-            >
-              <Download size={13} />
-              تصدير كـ CSV
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Supplier dashboard stats card for specified date */}
-      {selectedSupplierStats && (
-        <div className="mx-4 p-4 bg-gradient-to-br from-amber-600/10 via-[#0a1122] to-[#070d1a] border border-amber-500/20 rounded-2xl animate-fadeIn text-right space-y-3.5 shadow-xl">
-          <div className="flex items-center justify-between border-b border-white/5 pb-2.5">
-            <div className="flex items-center gap-2">
-              <span className="p-1 px-2 bg-amber-550/10 text-amber-400 rounded-md text-[10px] shrink-0 font-sans">📊</span>
-              <span className="text-xs font-black text-slate-200">
-                إحصائيات المورد <span className="text-amber-400 underline decoration-amber-500/40 decoration-2 underline-offset-4 font-black">{selectedSupplierFilter}</span> لليوم المحدد ({selectedDate === "all" ? "جميع الأيام المتاحة" : selectedDate})
-              </span>
-            </div>
-            <button
-              onClick={() => setSelectedSupplierFilter("")}
-              className="text-[10px] font-bold text-red-400 hover:text-red-300 cursor-pointer transition-colors bg-red-950/20 hover:bg-red-950/45 px-2.5 py-1 rounded-lg border border-red-900/30 font-sans"
-            >
-              ✕ إلغاء الفلترة السريعة
-            </button>
-          </div>
-          
-          <div className="grid grid-cols-2 sm:grid-cols-7 gap-2">
-            <div className="p-2 bg-slate-950/60 border border-white/6 rounded-xl text-center">
-              <div className="text-[9px] text-slate-400 font-bold mb-0.5">إجمالي الأوردرات</div>
-              <div className="font-mono text-base font-black text-slate-200">{selectedSupplierStats.total}</div>
-            </div>
-            <div className="p-2 bg-slate-950/60 border border-blue-900/30 rounded-xl text-center">
-              <div className="text-[9px] text-blue-400 font-bold mb-0.5">جديد</div>
-              <div className="font-mono text-base font-black text-blue-400">{selectedSupplierStats.newCount}</div>
-            </div>
-            <div className="p-2 bg-slate-950/60 border border-yellow-905 rounded-xl text-center">
-              <div className="text-[9px] text-yellow-500 font-bold mb-0.5">خارج شحن</div>
-              <div className="font-mono text-base font-black text-yellow-500">{selectedSupplierStats.outForDelivery}</div>
-            </div>
-            <div className="p-2 bg-slate-950/60 border border-emerald-915 rounded-xl text-center">
-              <div className="text-[9px] text-emerald-400 font-bold mb-0.5">تم التسليم</div>
-              <div className="font-mono text-base font-black text-emerald-400">{selectedSupplierStats.delivered}</div>
-            </div>
-            <div className="p-2 bg-slate-950/60 border border-amber-900/40 rounded-xl text-center">
-              <div className="text-[9px] text-amber-500 font-bold mb-0.5">مرتجع مستودع (بايت)</div>
-              <div className="font-mono text-base font-black text-amber-500">{selectedSupplierStats.returnedInWarehouse}</div>
-            </div>
-            <div className="p-2 bg-slate-950/60 border border-rose-950/30 rounded-xl text-center">
-              <div className="text-[9px] text-red-400 font-bold mb-0.5">تسليم للمورد</div>
-              <div className="font-mono text-base font-black text-red-400">{selectedSupplierStats.returnedDelivered}</div>
-            </div>
-            <div className="p-2 bg-slate-950/60 border border-purple-900/30 rounded-xl text-center">
-              <div className="text-[9px] text-purple-400 font-bold mb-0.5">معلق ومؤجل</div>
-              <div className="font-mono text-base font-black text-purple-400">{selectedSupplierStats.pending}</div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Category filters Grid */}
-      <div className="grid grid-cols-2 xs:grid-cols-2 sm:grid-cols-3 md:grid-cols-6 lg:grid-cols-12 gap-2 px-4 font-sans">
-        {[
-          { key: "all", label: "الكل" },
-          { key: "جاهز للاستلام من المورد", label: "⏳ جاهز للاستلام" },
-          { key: "جديد", label: "🆕 جديد" },
-          { key: "مسند", label: "📋 مسند" },
-          { key: "خارج مع المندوب", label: "🚚 مع المندوب" },
-          { key: "العميل رد وجاري التسليم", label: "📞 لرد وجاري" },
-          { key: "تم التسليم", label: "✅ تم التسليم" },
-          { key: "تسليم جزئي", label: "📦 تسليم جزئي" },
-          { key: "مؤجل", label: "⏳ مؤجل" },
-          { key: "العميل لا يرد", label: "📵 العميل لا يرد" },
-          { key: "مرتجع بالمستودع", label: "📦 بالمنشأ/المكتب" },
-          { key: "تم تسليمه للمورد", label: "↩️ تسليم للمورد" }
-        ].map((f) => (
-          <button
-            key={f.key}
-            onClick={() => {
-              setActiveFilter(f.key);
-              setSelected(new Set());
-            }}
-            className={`flex flex-col items-center justify-center p-2.5 rounded-2xl border cursor-pointer transition-all min-h-[66px] select-none text-right ${
-              activeFilter === f.key
-                ? "bg-amber-500 text-slate-950 border-amber-500 font-black shadow-lg shadow-amber-550/10 scale-98"
-                : "bg-slate-900/50 hover:bg-slate-900 border-white/6 text-slate-350 hover:text-white"
-            }`}
-          >
-            <span className="text-[10px] font-black tracking-wide block text-center mb-1">
-              {f.label}
-            </span>
-            <span className={`text-xs font-mono font-black border-t w-full text-center block pt-1 ${
-              activeFilter === f.key ? "border-slate-950/20 text-slate-950" : "border-white/5 text-amber-500"
-            }`}>
-              {statusCounts[f.key] || 0}
-            </span>
-          </button>
-        ))}
-      </div>
-
-      {/* 📅 Dynamic Date Filter Bar */}
-      <div className="mx-4 p-4 bg-slate-900 border border-white/6 rounded-2xl space-y-3.5 text-right animate-fadeIn">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-          <div className="flex items-center gap-2">
-            <span className="p-1 px-1.5 bg-amber-500/10 text-amber-500 rounded-md text-[10px] shrink-0">📅</span>
-            <span className="text-xs font-black text-slate-100 font-sans">فلاتر الأيام الذكية للفرز السريع والمسلمات</span>
-          </div>
-          <div className="text-xs font-black text-amber-505 bg-amber-950/20 px-3 py-1 border border-amber-900/40 rounded-lg">
-            إجمالي أوردرات اليوم المحدد: <span className="font-mono text-sm underline text-amber-400">{
-              selectedDate === "all"
-                ? roleFilteredOrders.filter(o => !o.isArchived && o.status !== "مؤرشف").length
-                : roleFilteredOrders.filter(o => normalizeDateToYMD(o.orderDate || o.createdAt) === selectedDate).length
-            }</span> أوردر
-          </div>
-        </div>
-
-        <div className="overflow-x-auto flex items-center gap-3 pb-2 scrollbar-none" style={{ WebkitOverflowScrolling: 'touch' }}>
-          {/* All button */}
-          <button
-            onClick={() => setSelectedDate("all")}
-            className={`px-4 py-2 rounded-xl text-xs font-bold cursor-pointer transition-all border whitespace-nowrap flex flex-col items-center justify-center min-w-[70px] ${
-              selectedDate === "all"
-                ? "bg-amber-500 text-slate-950 border-amber-500"
-                : "bg-slate-950 text-slate-400 border-white/6 hover:text-slate-200"
-            }`}
-          >
-            <span>الكل</span>
-            <span className="text-[10px] opacity-75 mt-0.5">({roleFilteredOrders.filter(o => !o.isArchived && o.status !== "مؤرشف").length})</span>
-          </button>
-
-          {/* Map of last days */}
-          {lastDays.map((day) => {
-            const dayOrders = roleFilteredOrders.filter((o: any) => normalizeDateToYMD(o.orderDate || o.createdAt) === day.ymd);
-            const totalCount = dayOrders.length;
-            const delivCount = dayOrders.filter((o: any) => o.status === "تم التسليم").length;
-            const delivRate = totalCount > 0 ? Math.round((delivCount / totalCount) * 100) : 0;
-            
-            const unresolvedCount = dayOrders.filter((o: any) => {
-              return !["تم التسليم", "مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "مرتجع والعميل دفع الشحن", "مؤرشف"].includes(o.status);
-            }).length;
-            const unresolvedRate = totalCount > 0 ? Math.round((unresolvedCount / totalCount) * 100) : 0;
-
-            return (
-              <button
-                key={day.ymd}
-                onClick={() => setSelectedDate(day.ymd)}
-                className={`px-4 py-2 rounded-xl text-xs cursor-pointer transition-all border flex flex-col items-center gap-1 min-w-[120px] shrink-0 text-right ${
-                  selectedDate === day.ymd
-                    ? "bg-amber-500 text-slate-950 border-amber-500 font-extrabold"
-                    : "bg-slate-950 text-slate-350 border-white/6 hover:text-white"
-                }`}
-              >
-                <div className="font-bold">{day.label}</div>
-                <div className="flex items-center gap-1.5 mt-0.5 text-[9px] font-mono">
-                  <span className="opacity-80">({totalCount}) أوردر</span>
-                  {totalCount > 0 && (
-                    <>
-                      <span className={`px-1 rounded-sm ${selectedDate === day.ymd ? "bg-slate-950 text-emerald-400" : "bg-emerald-950/40 text-emerald-400"}`} title="نسبة تسليم فوري">
-                        🟢{delivRate}%
-                      </span>
-                      <span className={`px-1 rounded-sm ${selectedDate === day.ymd ? "bg-slate-950 text-amber-500" : "bg-amber-950/40 text-amber-500"}`} title="نسبة معلق/بايت">
-                        🟡{unresolvedRate}%
-                      </span>
-                    </>
-                  )}
-                </div>
-              </button>
-            );
-          })}
-
-          {/* Custom Date Picker */}
-          <div className="flex flex-col justify-center bg-slate-950 px-4 py-2 rounded-xl border border-white/6 shrink-0 min-w-[140px]">
-            <span className="text-[9px] text-slate-400 font-bold block text-center mb-0.5">تقويم مخصص 📅</span>
+      <div className="hidden lg:flex lg:flex-col lg:h-[calc(100vh-130px)] lg:max-h-[calc(100vh-130px)] lg:overflow-hidden space-y-3 pb-3" id="desktop-portal-main">
+        {/* Top Control Bar / شريط التحكم العلوي */}
+        <div className="flex bg-[#070d1a] px-4 py-2 border border-white/6 rounded-2xl items-center flex-wrap gap-2.5 shrink-0" dir="rtl">
+          <div className="relative flex-1 min-w-[200px]">
             <input
-              type="date"
-              value={selectedDate !== "all" && !lastDays.some(d => d.ymd === selectedDate) ? selectedDate : ""}
-              onChange={(e) => {
-                if (e.target.value) {
-                  setSelectedDate(e.target.value);
-                } else {
-                  setSelectedDate("all");
-                }
-              }}
-              className="bg-transparent border-none text-[11px] font-mono text-amber-500 font-black outline-none cursor-pointer text-center w-full"
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="🔍 ابحث برقم الأوردر، تليفون، عميل أو مورد..."
+              className="w-full bg-slate-900 border border-white/6 rounded-xl py-2 pr-10 pl-4 text-xs font-bold text-slate-200 placeholder-slate-500 text-right outline-none focus:border-amber-500/20"
             />
           </div>
-        </div>
-      </div>
 
-      {/* ⚡ Quick Reconciliation and Returns Portal */}
-      {showReconPortal && canReconcile && (
-        <div className="mx-4 p-5 bg-[#070d1a] border-2 border-amber-500/40 rounded-2xl space-y-4 shadow-xl">
-          <div className="flex items-center justify-between border-b border-white/6 pb-3">
-            <div className="flex items-center gap-1.5 text-amber-500">
-              <span className="text-sm font-black">⚡ بوابــة التصفية وتقفيــل الشحنـات السريعة (التحكم السريع)</span>
-            </div>
-            <button
-              onClick={() => setShowReconPortal(false)}
-              className="text-slate-400 hover:text-slate-200 text-xs"
+          <div className="relative min-w-[170px]">
+            <select
+              value={selectedSupplierFilter}
+              onChange={(e) => {
+                setSelectedSupplierFilter(e.target.value);
+                setSelected(new Set());
+              }}
+              className="bg-slate-900 border border-white/6 rounded-xl py-2 px-3 text-xs font-black text-amber-400 outline-none text-right focus:border-amber-500 hover:bg-slate-850 cursor-pointer w-full"
             >
-              ✕ إغلاق
-            </button>
+              <option value="">👤 كافة الشحنات (كل الموردين)</option>
+              {Array.from(new Set(
+                (roleFilteredOrders || [])
+                  .map((o: any) => o.supplier)
+                  .filter(Boolean)
+                  .map((s: any) => s.toString().trim())
+              ))
+              .sort()
+              .map((sup: string) => (
+                <option key={sup} value={sup}>{sup}</option>
+              ))}
+            </select>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {/* Column 1: Quick Single Scan / Paste */}
-            <div className="bg-slate-950 p-4 rounded-xl border border-white/4 space-y-3 text-right flex flex-col justify-between">
-              <div>
-                <div className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest text-right">
-                  🔍 إدخال يدوي سريع للباركود / رقم التتبع
-                </div>
-                
-                <div className="space-y-2 mt-2">
-                  <label className="block text-[10px] text-slate-400 text-right">رقم التتبع (مثال: FP-1002-26)</label>
-                  <input
-                    type="text"
-                    value={reconcileBarcode}
-                    onChange={(e) => setReconcileBarcode(e.target.value)}
-                    placeholder="اكتب رقم التتبع أو الباركود هنا..."
-                    className="w-full bg-slate-900 border border-white/8 rounded-lg px-3 py-2 text-xs font-black text-slate-200 outline-none text-right focus:border-amber-500/30"
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") handleSingleReconciliation();
-                    }}
-                  />
-                </div>
-
-                <div className="space-y-2 mt-2">
-                  <label className="block text-[10px] text-slate-400 text-right">الحالة المستهدفة المعمدة الشحن</label>
-                  <select
-                    value={reconcileStatus}
-                    onChange={(e) => setReconcileStatus(e.target.value)}
-                    className="w-full bg-slate-900 border border-white/8 rounded-lg px-3 py-2 text-xs font-bold text-slate-200 outline-none text-right focus:border-amber-500/30"
-                  >
-                    <option value="تم التسليم">✅ تم التسليم</option>
-                    <option value="مرتجع">↩️ مرتجع (تجهيز تصفية)</option>
-                    <option value="تم تسليم المرتجع للمورد">📦 تم تسليم المرتجع للمورد (استرداد المرتجعات)</option>
-                    <option value="خارج مع المندوب">🚚 خارج للتوصيل مع المندوب</option>
-                  </select>
-                </div>
-              </div>
-
-              <button
-                onClick={handleSingleReconciliation}
-                disabled={reconLoading}
-                className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 font-black text-xs rounded-lg cursor-pointer transition-colors flex items-center justify-center gap-1 mt-3"
+          {/* Active Representatives Dropdown Filter / فلتر المندوبين البديل للشريط الجانبي */}
+          {(isAdmin || isSuper || isOps) && (
+            <div className="relative min-w-[170px]">
+              <select
+                value={selectedCourierFilter}
+                onChange={(e) => {
+                  setSelectedCourierFilter(e.target.value);
+                  setSelected(new Set());
+                }}
+                className="bg-slate-900 border border-white/6 rounded-xl py-2 px-3 text-xs font-black text-amber-400 outline-none text-right focus:border-amber-500 hover:bg-slate-850 cursor-pointer w-full text-ellipsis overflow-hidden"
               >
-                {reconLoading && <Loader2 size={13} className="animate-spin" />}
-                <span>تثبيت وتحديث حالة الشحنة آلياً</span>
-              </button>
-            </div>
-
-            {/* Column 2: Live Barcode Camera Scanner */}
-            <div className="bg-slate-950 p-4 rounded-xl border border-amber-500/30 space-y-3 text-right flex flex-col justify-between">
-              <div>
-                <div className="text-[10px] font-extrabold text-amber-400 uppercase tracking-widest text-right flex items-center gap-1.5 justify-end">
-                  <span>📷 مسح الباركود بالكاميرا المباشرة</span>
-                  {isScanning && <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />}
-                </div>
-
-                <div className="grid grid-cols-2 gap-2 mt-2">
-                  <div className="space-y-1">
-                    <label className="block text-[9px] text-slate-400 text-right">حالة المسح آلياً</label>
-                    <select
-                      value={scannerSelectedStatus}
-                      onChange={(e) => setScannerSelectedStatus(e.target.value)}
-                      className="w-full bg-slate-900 border border-white/8 rounded-lg px-2 py-1.5 text-[10px] font-bold text-slate-200 outline-none text-right"
-                    >
-                      <option value="تم التسليم">✅ تم التسليم</option>
-                      <option value="خارج مع المندوب">🚚 خارج للتوصيل</option>
-                      <option value="مرتجع">↩️ مرتجع</option>
-                      <option value="تم تسليم المرتجع للمورد">📦 تصفية للمورد</option>
-                    </select>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="block text-[9px] text-slate-400 text-right">المندوب المصاحب</label>
-                    <select
-                      value={scannerSelectedCourier}
-                      onChange={(e) => setScannerSelectedCourier(e.target.value)}
-                      className="w-full bg-slate-900 border border-white/8 rounded-lg px-2 py-1.5 text-[10px] font-bold text-slate-200 outline-none text-right"
-                    >
-                      <option value="">-- بدون تعديل مندوب --</option>
-                      {couriers.map((c, idx) => (
-                        <option key={idx} value={c.name}>{c.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                {isScanning && (
-                  <div className="mt-2 border border-white/10 rounded-xl overflow-hidden relative bg-black aspect-video max-h-[140px]">
-                    <div id="camera-scanner-view" className="w-full h-full" />
-                    <div className="absolute inset-0 border-2 border-amber-500/30 pointer-events-none rounded-xl animate-pulse flex items-center justify-center">
-                      <div className="w-3/4 h-0.5 bg-red-500 absolute animate-bounce" />
-                    </div>
-                  </div>
-                )}
-
-                <div className="text-[9.5px] font-medium text-slate-400 mt-2 bg-slate-900/60 p-2 rounded-lg text-center leading-relaxed">
-                  {scannerStatus}
-                </div>
-              </div>
-
-              <button
-                onClick={toggleCameraScan}
-                className={`w-full py-2.5 rounded-lg font-black text-xs cursor-pointer flex items-center justify-center gap-1.5 transition-colors mt-2 ${
-                  isScanning ? "bg-red-600 hover:bg-red-700 text-white" : "bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg shadow-indigo-600/10"
-                }`}
-              >
-                <Camera size={14} />
-                <span>{isScanning ? "إيقاف كاميرا الباركود ✕" : "تشغيل كاميرا المسح الضوئي المباشر"}</span>
-              </button>
-            </div>
-
-            {/* Column 3: Quick Bulk CSV / Excel File */}
-            <div className="bg-slate-950 p-4 rounded-xl border border-white/4 flex flex-col justify-between space-y-3 text-right">
-              <div>
-                <div className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest text-right">
-                  📄 رفــع وتصفية ملف إكسيل / CSV دفعة واحدة
-                </div>
-                <p className="text-[9px] text-slate-400 leading-relaxed text-right font-medium mt-1">
-                  ارفع شيت CSV يتضمن قائمة أرقام التتبع في العمود الأول فقط. سيقوم النظام فوراً بتمرير وتحديث حالتها إلى [{reconcileStatus}] دفعة واحدة وبسرعة فائقة.
-                </p>
-              </div>
-
-              {reconExcelMsg && (
-                <div className="bg-emerald-950/20 text-emerald-400 border border-emerald-900/30 p-2.5 rounded-lg text-[10.5px]">
-                  {reconExcelMsg}
-                </div>
-              )}
-
-              <div className="space-y-2 pt-1 border-t border-white/4">
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={reconLoading}
-                  className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-slate-300 border border-white/8 rounded-lg text-xs font-bold flex items-center justify-center gap-2 cursor-pointer transition-all"
-                >
-                  <Upload size={14} />
-                  <span>اختار شيت للتصفية (Excel/CSV)</span>
-                </button>
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  accept=".csv"
-                  onChange={handleReconExcelUpload}
-                  className="hidden"
-                />
-              </div>
-            </div>
-          </div>
-
-          {reconFeedback && (
-            <div className="bg-slate-950 p-3 rounded-lg text-center font-bold text-xs border border-white/6 text-amber-400">
-              {reconFeedback}
+                <option value="">👤 كل مناديب التوصيل</option>
+                {Array.from(new Set(roleFilteredOrders.map(o => o.courier).filter(Boolean)))
+                .map((courierName: any, idx: number) => (
+                  <option key={idx} value={courierName}>👤 {courierName}</option>
+                ))}
+              </select>
             </div>
           )}
+
+          <div className="flex items-center gap-2">
+            {(isAdmin || isSuper || isOps) && (
+              <button
+                onClick={() => setShowOperationalReport(!showOperationalReport)}
+                className={`px-3 py-1.5 text-[10px] rounded-xl font-black flex items-center gap-1 cursor-pointer transition-all ${
+                  showOperationalReport ? "bg-amber-500 text-slate-950" : "bg-slate-900 border border-white/8 text-amber-500"
+                }`}
+              >
+                <span>📋 التقرير العملياتي</span>
+              </button>
+            )}
+            {canReconcile && (
+              <button
+                onClick={() => setShowReconPortal(!showReconPortal)}
+                className={`px-3 py-1.5 text-[10px] rounded-xl font-black flex items-center gap-1 cursor-pointer transition-all ${
+                  showReconPortal ? "bg-amber-500 text-slate-950" : "bg-slate-900 border border-white/8 text-amber-500"
+                }`}
+              >
+                <span>⚡ الباركود والإكسيل</span>
+              </button>
+            )}
+            {canSelectBulk && (
+              <button
+                onClick={toggleSelectAll}
+                className="px-3 py-1.5 bg-slate-900 border border-white/8 rounded-xl text-[10px] text-slate-300 font-extrabold cursor-pointer transition-colors"
+              >
+                {selected.size === visibleOrders.length ? "إلغاء التحديد" : "تحديد الكل"}
+              </button>
+            )}
+            {(isAdmin || isSuper || isOps || (role || "").toString().toLowerCase().includes("محاسب")) && (
+              <button
+                onClick={exportToCSV}
+                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-slate-950 font-black text-[10px] rounded-xl flex items-center gap-1 cursor-pointer transition-all"
+              >
+                <Download size={11} />
+                <span>تصدير CSV</span>
+              </button>
+            )}
+          </div>
         </div>
-      )}
 
-      {/* 📊 Courier Dashboard Operational Counters */}
-      {isAgent && (() => {
-        const targetDateStr = selectedDate === "all" ? getTodayDateStr() : selectedDate;
-
-        const myTotal = backgroundCourierKPIs.myTotal;
-        const myDelivered = backgroundCourierKPIs.myDelivered;
-        const myPartialDelivered = backgroundCourierKPIs.myPartialDelivered;
-        const myReturned = backgroundCourierKPIs.myReturned;
-        const mySuspended = backgroundCourierKPIs.mySuspended;
-        const myRemaining = backgroundCourierKPIs.myRemaining;
-
-        const totalCODDelivered = backgroundCourierKPIs.totalCODDelivered;
-        const totalCODPartial = backgroundCourierKPIs.totalCODPartial;
-        const totalShipReturnsPaidByCust = backgroundCourierKPIs.totalShipReturnsPaidByCust;
-
-        const totalReceivedCashInHand = backgroundCourierKPIs.totalReceivedCashInHand;
-        const totalCommissionsEarned = backgroundCourierKPIs.totalCommissionsEarned;
-        const netRequiredHandover = backgroundCourierKPIs.netRequiredHandover;
-
-        const agentDeliveredCount = backgroundCourierKPIs.agentDeliveredCount;
-        const agentPartialCount = backgroundCourierKPIs.agentPartialCount;
-        const agentPaidReturnsCount = backgroundCourierKPIs.agentPaidReturnsCount;
-
-        return (
-          <>
-            <div className="mx-4 grid grid-cols-2 md:grid-cols-6 gap-3 animate-fadeIn">
-              {/* Total Orders Today */}
-              <div className="bg-slate-900 border border-white/6 p-3.5 rounded-2xl flex flex-col justify-between space-y-1">
-                <span className="text-[10px] text-slate-400 font-bold font-sans">📦 إجمالي طلبات اليوم</span>
-                <span className="text-xl font-black text-slate-100 font-mono">
-                  {myTotal} <span className="text-[10px] font-medium text-slate-400 font-sans">شحنة</span>
-                </span>
-              </div>
-
-              {/* Delivered 🟢 */}
-              <div className="bg-emerald-950/20 border border-emerald-950/30 p-3.5 rounded-2xl flex flex-col justify-between space-y-1">
-                <span className="text-[10px] text-emerald-400 font-bold font-sans">🟢 تم التسليم كلياً</span>
-                <span className="text-xl font-black text-emerald-400 font-mono">
-                  {myDelivered} <span className="text-[10px] font-medium text-emerald-555 font-sans">شحنة</span>
-                </span>
-              </div>
-
-              {/* Partial Delivered 🔹 */}
-              <div className="bg-cyan-950/20 border border-cyan-950/30 p-3.5 rounded-2xl flex flex-col justify-between space-y-1">
-                <span className="text-[10px] text-cyan-400 font-bold font-sans">🔹 تسليم جزئي اليوم</span>
-                <span className="text-xl font-black text-cyan-400 font-mono">
-                  {myPartialDelivered} <span className="text-[10px] font-medium text-cyan-555 font-sans">شحنة</span>
-                </span>
-              </div>
-
-              {/* Returned 🔴 */}
-              <div className="bg-red-950/20 border border-red-900/30 p-3.5 rounded-2xl flex flex-col justify-between space-y-1">
-                <span className="text-[10px] text-red-400 font-bold font-sans">🔴 مرتجع ميداني اليوم</span>
-                <span className="text-xl font-black text-red-400 font-mono">
-                  {myReturned} <span className="text-[10px] font-medium text-red-505 font-sans">شحنة</span>
-                </span>
-              </div>
-
-              {/* Delayed / No Response 🟡 */}
-              <div className="bg-amber-950/20 border border-amber-900/30 p-3.5 rounded-2xl flex flex-col justify-between space-y-1">
-                <span className="text-[10px] text-amber-400 font-bold font-sans">🟡 معلّق / لا يرد</span>
-                <span className="text-xl font-black text-amber-400 font-mono">
-                  {mySuspended} <span className="text-[10px] font-medium text-amber-505 font-sans">شحنة</span>
-                </span>
-              </div>
-
-              {/* Remaining in Bag 🔵 */}
-              <div className="bg-blue-950/30 border border-blue-900/40 p-3.5 rounded-2xl flex flex-col justify-between space-y-1 relative overflow-hidden">
-                <div className="absolute top-0 right-0 w-8 h-8 bg-blue-500/10 rounded-full blur-xl animate-pulse"></div>
-                <span className="text-[10px] text-blue-400 font-extrabold flex items-center gap-1.5 font-sans">
-                  <span>🔵 المتبقي بالحقيبة</span>
-                </span>
-                <span className="text-xl font-black text-blue-400 font-mono">
-                  {myRemaining} <span className="text-[10px] font-medium text-blue-400 font-sans">شحنة</span>
-                </span>
-              </div>
+        {/* Main Work Space splits / تقسيمات بيئة العمل الرئيسية */}
+        <div id="desktop-portal-main" className="hidden lg:flex flex-1 min-h-0 gap-4 overflow-hidden" dir="rtl">
+          {/* Right Panel: Master List (35% Width) / الجانب الأيمن: قائمة الشحنات المكثفة */}
+          <div className="w-[35%] h-full flex flex-col bg-[#070d1a]/85 border border-white/6 rounded-2xl p-3 overflow-hidden select-none">
+            {/* Horizontal Scrollable Category Ribbon */}
+            <div className="flex gap-1 overflow-x-auto pb-1.5 mb-1.5 border-b border-white/5 scrollbar-none shrink-0" dir="rtl">
+              {[
+                { key: "all", label: "الكل" },
+                { key: "جاهز للاستلام من المورد", label: "⏳ جاهز" },
+                { key: "جديد", label: "🆕 جديد" },
+                { key: "مسند", label: "📋 مسند" },
+                { key: "خارج مع المندوب", label: "🚚 مع المندوب" },
+                { key: "العميل رد وجاري التسليم", label: "📞 لرد وجاري" },
+                { key: "تم التسليم", label: "✅ تم التسليم" },
+                { key: "تسليم جزئي", label: "📦 جزئي" },
+                { key: "مؤجل", label: "⏳ مؤجل" },
+                { key: "العميل لا يرد", label: "📵 لا يرد" },
+                { key: "مرتجع بالمستودع", label: "📦 بالمستودع" },
+                { key: "تم تسليمه للمورد", label: "↩️ للمورد" }
+              ].map((f) => {
+                const isSel = activeFilter === f.key;
+                const count = statusCounts[f.key] || 0;
+                return (
+                  <button
+                    key={f.key}
+                    onClick={() => {
+                      setActiveFilter(f.key);
+                      setSelected(new Set());
+                    }}
+                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[10.5px] font-bold cursor-pointer transition-all whitespace-nowrap shrink-0 ${
+                      isSel ? "bg-amber-500 text-slate-950 border-amber-500 font-black shadow-md" : "bg-slate-900 border-white/6 text-slate-300 hover:bg-slate-850"
+                    }`}
+                  >
+                    <span>{f.label}</span>
+                    <span className={`text-[10px] font-mono font-black rounded px-1 ${isSel ? "bg-slate-950/20 text-slate-950" : "bg-slate-950 text-amber-500"}`}>
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
 
-            {/* Beautiful Courier Financial & Performance Quick Summary Card */}
-            <div className="mx-4 p-5 bg-gradient-to-br from-slate-900 to-slate-950 border border-white/6 rounded-2xl space-y-5 shadow-xl animate-fadeIn">
-              <div className="flex items-center justify-between border-b border-white/6 pb-2.5">
-                <div className="flex items-center gap-2">
-                  <span className="p-1 px-1.5 bg-indigo-500/10 text-indigo-400 rounded-md text-xs">💸</span>
-                  <h3 className="text-xs font-black text-slate-100 font-sans">معادلة التصفية المالية المقفلة للمندوب</h3>
-                </div>
-                <span className="text-[9px] font-bold bg-indigo-950/20 text-indigo-400 border border-indigo-900/40 px-2 py-0.5 rounded font-sans">
-                  محدث فظيًا ⚡
-                </span>
-              </div>
+            {/* Compact Dynamic Date Ribbon */}
+            <div className="flex gap-1 overflow-x-auto pb-1.5 mb-1.5 border-b border-white/5 scrollbar-none shrink-0" dir="rtl">
+              <button
+                onClick={() => setSelectedDate("all")}
+                className={`px-2.5 py-1 rounded-lg border text-[10.5px] font-bold cursor-pointer transition-all whitespace-nowrap shrink-0 ${
+                  selectedDate === "all" ? "bg-amber-500 text-slate-950 border-amber-500 font-black" : "bg-slate-900 border-white/6 text-slate-300 hover:bg-slate-850"
+                }`}
+              >
+                <span>الكل ({roleFilteredOrders.filter(o => !o.isArchived && o.status !== "مؤرشف").length})</span>
+              </button>
+              {lastDays.map((day) => {
+                const dayOrders = roleFilteredOrders.filter((o: any) => normalizeDateToYMD(o.orderDate || o.createdAt) === day.ymd);
+                const count = dayOrders.length;
+                const isSel = selectedDate === day.ymd;
+                if (count === 0 && !isSel) return null;
+                return (
+                  <button
+                    key={day.ymd}
+                    onClick={() => setSelectedDate(day.ymd)}
+                    className={`px-2.5 py-1 rounded-lg border text-[10.5px] font-bold cursor-pointer transition-all whitespace-nowrap shrink-0 ${
+                      isSel ? "bg-amber-500 text-slate-950 border-amber-500 font-black" : "bg-slate-900 border-white/6 text-slate-300 hover:bg-slate-850"
+                    }`}
+                  >
+                    <span>{day.label}</span>
+                    <span className="text-[10px] font-mono opacity-80 ml-1">({count})</span>
+                  </button>
+                );
+              })}
+            </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {/* 1. Cash In Hand */}
-                <div className="bg-slate-950 border border-white/4 p-4 rounded-xl space-y-1 text-right">
-                  <span className="text-[10px] text-slate-400 font-bold block font-sans">💵 إجمالي الكاش المستلم ميدانياً</span>
-                  <div className="text-lg font-black text-emerald-400 font-mono">{totalReceivedCashInHand.toLocaleString("ar")} ج.م</div>
-                  <p className="text-[9px] text-slate-500 leading-relaxed font-sans">
-                    تحصيل مسلّم كلياً ({totalCODDelivered.toLocaleString("ar")} ج.م) + تحصيل مسلّم جزئياً ({totalCODPartial.toLocaleString("ar")} ج.م) + شحن المرتجعات ({totalShipReturnsPaidByCust.toLocaleString("ar")} ج.م)
-                  </p>
-                </div>
+            {/* List Header */}
+            <div className="flex items-center justify-between pb-1.5 mb-1.5 text-[10.5px] text-slate-400 font-bold px-1 shrink-0">
+              <span>القائمة الفورية لطلبات الفرز ({visibleOrders.length})</span>
+              <span className="text-[9.5px] text-amber-500">اضغط للشحن والإجراء سريعاً</span>
+            </div>
 
-                {/* 2. Commissions today */}
-                <div className="bg-slate-950 border border-white/4 p-4 rounded-xl space-y-1 text-right">
-                  <span className="text-[10px] text-slate-400 font-bold block font-sans">🎖️ عمولات التسليم المكتسبة اليوم</span>
-                  <div className="text-lg font-black text-indigo-400 font-mono">-{totalCommissionsEarned.toLocaleString("ar")} ج.م</div>
-                  <p className="text-[9px] text-slate-500 leading-relaxed font-sans">
-                    إجمالي عمولة {agentDeliveredCount} أوردر ناجح (عمولة الطلب: {rawCommission} ج.م)
-                  </p>
-                </div>
+            {/* High-Density Orders List (56px Rows) */}
+            <div className="flex-1 overflow-hidden">
+              <HighPerformanceVirtualList
+                items={visibleOrders}
+                itemHeight={56}
+                containerHeight="100%"
+                renderItem={(o: any) => {
+                  const isSelected = desktopSelectedTracking === o.tracking;
+                  const totalCODValue = o.totalCOD !== undefined ? o.totalCOD : (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
+                  return (
+                    <div
+                      key={o.tracking}
+                      onClick={() => setDesktopSelectedTracking(o.tracking)}
+                      className={`h-[56px] max-h-[56px] flex items-center justify-between px-3 py-1.5 border-b border-white/5 transition-all cursor-pointer select-none text-right ${
+                        isSelected
+                          ? "bg-amber-500/10 border-r-4 border-r-amber-500 font-black"
+                          : "hover:bg-slate-900/50"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 truncate">
+                        {canSelectBulk && (
+                          <input
+                            type="checkbox"
+                            checked={selected.has(o.tracking)}
+                            onChange={(e) => {
+                              e.stopPropagation();
+                              toggleSelect(o.tracking);
+                            }}
+                            className="w-3.5 h-3.5 rounded border-white/10 bg-slate-950 text-amber-500 accent-amber-500 cursor-pointer shrink-0"
+                          />
+                        )}
+                        <div className="flex flex-col text-right truncate">
+                          <span className="font-mono text-xs font-black text-amber-500">{o.tracking}</span>
+                          <span className="text-[10.5px] text-slate-200 font-bold truncate max-w-[120px]" title={o.customer}>
+                            {o.customer || "مجهول"}
+                          </span>
+                        </div>
+                      </div>
 
-                {/* 3. Daily Expenses */}
-                <div className="bg-slate-950 border border-white/4 p-4 rounded-xl space-y-1 text-right">
-                  <span className="text-[10px] text-slate-400 font-bold block font-sans">⛽ المصروفات الميدانية اليومية</span>
-                  <div className="text-lg font-black text-amber-500 font-mono">-{courierExpenses.toLocaleString("ar")} ج.م</div>
-                  <p className="text-[9px] text-slate-500 leading-relaxed font-sans">
-                    مجموع البنود والعهد والوقود المسجلة باسمك لليوم الحالي
-                  </p>
-                </div>
-              </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <div className="flex flex-col items-end text-left shrink-0">
+                          <span className="text-[11px] font-black text-emerald-400 font-mono">
+                            {totalCODValue.toLocaleString("ar")} ج.م
+                          </span>
+                          <span className="text-[9px] text-slate-400 font-bold">📍 {o.gov}</span>
+                        </div>
+                        <span className={`text-[8.5px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${getBadgeStyle(o.status)}`}>
+                          {o.status}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                }}
+              />
+            </div>
+          </div>
 
-              {/* Final Settle Value */}
-              <div className="bg-indigo-950/20 border border-indigo-500/25 p-4 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-3 text-right">
-                <div>
-                  <div className="text-xs font-black text-indigo-400 flex items-center gap-1.5 font-sans">
-                    <span>🔒 الصافي المالي المطلوب توريده رسمياً للخزنة</span>
+          {/* Left Panel: Details & Action Console (65% Width) / الجانب الأيسر: لوحة تفاصيل العمليات */}
+          <div className="w-[65%] h-full flex flex-col bg-[#0a101f]/60 rounded-2xl border border-white/6 p-5 overflow-y-auto scrollbar-thin space-y-4">
+            {/* 1. Barcode Reconciliation Panel (Collapsible Card) */}
+            {showReconPortal && canReconcile && (
+              <div className="p-4 bg-slate-950 border border-amber-500/30 rounded-xl space-y-3 text-right">
+                <div className="flex items-center justify-between border-b border-white/6 pb-2">
+                  <span className="text-xs font-black text-amber-400">⚡ بوابة التصفية السريعة والتحكم في الشحنات</span>
+                  <button onClick={() => setShowReconPortal(false)} className="text-slate-400 text-[10px] hover:text-white">إغلاق ×</button>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="space-y-2">
+                    <label className="block text-[10px] text-slate-400">رقم التتبع (FP-XXXX-XX)</label>
+                    <input
+                      type="text"
+                      value={reconcileBarcode}
+                      onChange={(e) => setReconcileBarcode(e.target.value)}
+                      placeholder="اكتب رقم التتبع واضغط Enter..."
+                      className="w-full bg-slate-900 border border-white/10 rounded-lg px-2.5 py-1.5 text-xs font-black text-slate-200 outline-none text-right"
+                      onKeyDown={(e) => { if (e.key === "Enter") handleSingleReconciliation(); }}
+                    />
+                    <select
+                      value={reconcileStatus}
+                      onChange={(e) => setReconcileStatus(e.target.value)}
+                      className="w-full bg-slate-900 border border-white/10 rounded-lg px-2 py-1 text-[11px] text-slate-200"
+                    >
+                      <option value="تم التسليم">✅ تم التسليم</option>
+                      <option value="مرتجع">↩️ مرتجع (تجهيز تصفية)</option>
+                      <option value="تم تسليم المرتجع للمورد">📦 تصفية المرتجع للمورد</option>
+                      <option value="خارج مع المندوب">🚚 خارج مع المندوب</option>
+                    </select>
+                    <button onClick={handleSingleReconciliation} disabled={reconLoading} className="w-full py-1.5 bg-amber-500 text-slate-950 font-black text-[10px] rounded-lg">تحديث الحالة</button>
                   </div>
-                  <p className="text-[9.5px] text-slate-400 mt-1 leading-relaxed max-w-xl font-medium font-sans">
-                    الصافي مقفل ومحتسب إلكترونياً لإنهاء الأخطاء اليدوية: [الكاش الكلي المستلم {totalReceivedCashInHand}] - [عمولاتك {totalCommissionsEarned}] - [مصروفاتك المعتمدة {courierExpenses}].
-                  </p>
+                  <div className="space-y-2 border-r border-white/5 pr-3">
+                    <span className="text-[10px] font-bold text-slate-400 block">📄 رفع ملف تصفية سريع (CSV)</span>
+                    <button onClick={() => fileInputRef.current?.click()} className="w-full py-2 bg-slate-900 text-slate-300 border border-white/8 rounded-lg text-[10.5px]">رفع شيت للتصفية</button>
+                    <input type="file" ref={fileInputRef} accept=".csv" onChange={handleReconExcelUpload} className="hidden" />
+                    {reconExcelMsg && <div className="text-[9.5px] text-emerald-400 mt-1 bg-emerald-950/20 p-1.5 rounded">{reconExcelMsg}</div>}
+                  </div>
                 </div>
-                <div className="bg-indigo-950 border border-indigo-500/40 p-3 px-6 rounded-xl text-center shrink-0">
-                  <span className="text-[9px] text-indigo-400 font-extrabold block mb-0.5 font-sans">العهد المطلوب تسليمها</span>
-                  <span className="text-xl font-black text-indigo-300 font-mono">
-                    {netRequiredHandover.toLocaleString("ar")} ج.م
-                  </span>
+                {reconFeedback && <div className="text-[10px] text-amber-400 text-center font-bold bg-slate-900 p-1.5 rounded">{reconFeedback}</div>}
+              </div>
+            )}
+
+            {/* 2. Supplier Dashboard Stats (Collapsible Card) */}
+            {selectedSupplierStats && (
+              <div className="p-3.5 bg-gradient-to-br from-amber-600/10 to-[#070d1a] border border-amber-500/20 rounded-xl space-y-2">
+                <div className="flex items-center justify-between border-b border-white/5 pb-1.5">
+                  <span className="text-xs font-black text-slate-200">📊 إحصائيات المورد <span className="text-amber-400">{selectedSupplierFilter}</span></span>
+                  <button onClick={() => setSelectedSupplierFilter("")} className="text-[10px] text-red-400 hover:text-red-300">✕ إلغاء الفلترة</button>
+                </div>
+                <div className="grid grid-cols-4 sm:grid-cols-7 gap-1.5 text-center">
+                  <div className="p-1 bg-slate-950/50 rounded-lg"><div className="text-[8px] text-slate-400">إجمالي</div><div className="font-mono text-xs font-black">{selectedSupplierStats.total}</div></div>
+                  <div className="p-1 bg-slate-950/50 rounded-lg text-blue-400"><div className="text-[8px]">جديد</div><div className="font-mono text-xs font-black">{selectedSupplierStats.newCount}</div></div>
+                  <div className="p-1 bg-slate-950/50 rounded-lg text-yellow-500"><div className="text-[8px]">خارج</div><div className="font-mono text-xs font-black">{selectedSupplierStats.outForDelivery}</div></div>
+                  <div className="p-1 bg-slate-950/50 rounded-lg text-emerald-400"><div className="text-[8px]">تم تسليم</div><div className="font-mono text-xs font-black">{selectedSupplierStats.delivered}</div></div>
+                  <div className="p-1 bg-slate-950/50 rounded-lg text-amber-500"><div className="text-[8px]">مرتجع</div><div className="font-mono text-xs font-black">{selectedSupplierStats.returnedInWarehouse}</div></div>
+                  <div className="p-1 bg-slate-950/50 rounded-lg text-red-400"><div className="text-[8px]">للمورد</div><div className="font-mono text-xs font-black">{selectedSupplierStats.returnedDelivered}</div></div>
+                  <div className="p-1 bg-slate-950/50 rounded-lg text-purple-400"><div className="text-[8px]">مؤجل</div><div className="font-mono text-xs font-black">{selectedSupplierStats.pending}</div></div>
                 </div>
               </div>
-            </div>
-          </>
-        );
-      })()}
+            )}
+
+            {/* 3. Courier Operational counters (Collapsible Card) */}
+            {isAgent && (() => {
+              const myTotal = backgroundCourierKPIs.myTotal;
+              const myDelivered = backgroundCourierKPIs.myDelivered;
+              const myPartialDelivered = backgroundCourierKPIs.myPartialDelivered;
+              const myReturned = backgroundCourierKPIs.myReturned;
+              const mySuspended = backgroundCourierKPIs.mySuspended;
+              const myRemaining = backgroundCourierKPIs.myRemaining;
+              const totalReceivedCashInHand = backgroundCourierKPIs.totalReceivedCashInHand;
+              const totalCommissionsEarned = backgroundCourierKPIs.totalCommissionsEarned;
+              const netRequiredHandover = backgroundCourierKPIs.netRequiredHandover;
+              return (
+                <div className="p-4 bg-gradient-to-br from-indigo-950/10 to-slate-950 border border-white/6 rounded-xl space-y-3 text-right">
+                  <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                    <span className="text-xs font-black text-slate-200">💸 لوحة تسوية المندوب المالية والعهد</span>
+                    <span className="text-[8.5px] font-bold text-indigo-400">حسابات التوريد الآلية</span>
+                  </div>
+                  <div className="grid grid-cols-6 gap-2 text-center text-[10.5px]">
+                    <div className="p-1.5 bg-slate-900 rounded-lg"><div>إجمالي</div><div className="font-mono font-black text-slate-200">{myTotal}</div></div>
+                    <div className="p-1.5 bg-emerald-950/15 rounded-lg text-emerald-400"><div>تسليم</div><div className="font-mono font-black">{myDelivered}</div></div>
+                    <div className="p-1.5 bg-cyan-950/15 rounded-lg text-cyan-400"><div>جزئي</div><div className="font-mono font-black">{myPartialDelivered}</div></div>
+                    <div className="p-1.5 bg-red-950/15 rounded-lg text-red-400"><div>مرتجع</div><div className="font-mono font-black">{myReturned}</div></div>
+                    <div className="p-1.5 bg-amber-950/15 rounded-lg text-amber-500"><div>معلق</div><div className="font-mono font-black">{mySuspended}</div></div>
+                    <div className="p-1.5 bg-blue-950/15 rounded-lg text-blue-400"><div>الحقيبة</div><div className="font-mono font-black">{myRemaining}</div></div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2.5 pt-1.5 border-t border-white/5 text-[10.5px]">
+                    <div><span className="text-slate-400 block text-[9px]">💵 كاش مستلم:</span><span className="font-mono font-black text-emerald-400">{totalReceivedCashInHand.toLocaleString("ar")} ج.م</span></div>
+                    <div><span className="text-slate-400 block text-[9px]">🎖️ عمولاتك:</span><span className="font-mono font-black text-indigo-400">-{totalCommissionsEarned.toLocaleString("ar")} ج.م</span></div>
+                    <div><span className="text-slate-400 block text-[9px]">⛽ عهد وتوريدات:</span><span className="font-mono font-black text-indigo-300">{netRequiredHandover.toLocaleString("ar")} ج.م</span></div>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Core Order Card display or placeholder / عرض بيانات الأوردر الفردي */}
+            {(() => {
+              const activeOrder = desktopSelectedTracking 
+                ? visibleOrders.find((o: any) => o.tracking === desktopSelectedTracking) 
+                : null;
+              
+              if (!activeOrder) {
+                return (
+                  <div className="flex flex-col items-center justify-center flex-1 text-center p-8 space-y-3 text-slate-400 select-none">
+                    <div className="w-14 h-14 rounded-2xl bg-slate-950/50 border border-white/6 flex items-center justify-center text-2xl animate-pulse">
+                      📦
+                    </div>
+                    <div className="space-y-1">
+                      <h4 className="text-xs font-black text-slate-200">يرجى تحديد شحنة من القائمة اليمنى لعرض تفاصيلها واتخاذ الإجراءات</h4>
+                      <p className="text-[10px] text-slate-500 max-w-sm leading-relaxed mx-auto">
+                        تسمح اللوحة المقسومة باستعراض الشحنات بسرعة فائقة، وتعديل الحالات، والتواصل مع المندوب أو المورد والعملاء في ثوانٍ.
+                      </p>
+                    </div>
+                  </div>
+                );
+              }
+
+              return (
+                <div className="animate-in fade-in duration-200">
+                  <OrderCard
+                    key={activeOrder.tracking}
+                    o={activeOrder}
+                    isSel={selected.has(activeOrder.tracking)}
+                    isExpanded={!!expandedHistories[activeOrder.tracking]}
+                    isLoadingHistory={!!loadingHistories[activeOrder.tracking]}
+                    historyList={histories[activeOrder.tracking]}
+                    render={renderOrderCard}
+                  />
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+      </div>
 
       {/* Floating Smart Action Bar (Bulk Action with Role-Based Permissions) */}
       {selected.size > 0 && canSelectBulk && (
@@ -3448,7 +3241,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       )}
 
       {/* Orders List Workspace with Quick Representative Selection Sidebar */}
-      <div className="px-4">
+      <div className="px-4 lg:hidden">
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 items-start">
           
           {/* Active Representatives Sidebar Selector (Show for Admins, Supervisors and Operations) */}
@@ -4243,10 +4036,9 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                 })()}
               </div>
             );
-          })}
+          })}`
         </div>
       )}
-      </div>
 
       {/* --- MODAL 1: RETURN SHIPPING SELECTION POPUP (Third Point Fix!) --- */}
       {returnedSelectOpen && selectedReturnOrder && !isSupplier && (

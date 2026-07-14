@@ -1027,7 +1027,7 @@ export default function App() {
       </nav>
 
       {/* Main Pages router contents switcher */}
-      <main className="flex-1 pb-12 overflow-y-auto">
+      <main className={`flex-1 pb-12 overflow-y-auto ${activeTab === "orders" ? "lg:overflow-hidden lg:pb-0" : ""}`}>
         {activeTab === "orders" && (
           <Orders
             token={token}
