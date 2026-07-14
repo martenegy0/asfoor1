@@ -730,6 +730,8 @@ export default function Orders({ token, role, username, orders, setOrders, couri
   const [floatingDate, setFloatingDate] = useState("");
   const [floatingCourier, setFloatingCourier] = useState("");
   const [floatingSubmitting, setFloatingSubmitting] = useState(false);
+  const [showAssignPopover, setShowAssignPopover] = useState(false);
+  const [showStatusPopover, setShowStatusPopover] = useState(false);
 
   // --- Quick Reconciliation Portal States ---
   const [showReconPortal, setShowReconPortal] = useState(false);
@@ -1690,6 +1692,8 @@ export default function Orders({ token, role, username, orders, setOrders, couri
     setFloatingNotes("");
     setFloatingDate("");
     setSelected(new Set());
+    setShowAssignPopover(false);
+    setShowStatusPopover(false);
 
     alert(`⚡ جاري إرسال ومزامنة التعديل الجماعي لـ ${trackingsToUpdate.length} شحنات...`);
 
@@ -3113,129 +3117,256 @@ export default function Orders({ token, role, username, orders, setOrders, couri
 
       {/* Floating Smart Action Bar (Bulk Action with Role-Based Permissions) */}
       {selected.size > 0 && canSelectBulk && (
-        <div className="fixed bottom-6 right-4 left-4 md:right-8 md:left-auto md:w-[480px] bg-slate-950/95 backdrop-blur-lg border border-amber-500/40 rounded-2xl p-4 shadow-2xl z-50 text-right space-y-3 animate-in fade-in slide-in-from-bottom-4 duration-300">
-          <div className="flex items-center justify-between border-b border-white/6 pb-2">
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 w-[95%] lg:w-[70%] xl:w-[60%] max-w-5xl bg-slate-950/95 backdrop-blur-lg border border-amber-500/40 rounded-2xl md:rounded-full p-3 px-5 shadow-[0_-10px_40px_rgba(0,0,0,0.85),0_0_25px_rgba(245,158,11,0.15)] z-[9999] text-right flex flex-col md:flex-row items-center justify-between gap-4 animate-in fade-in slide-in-from-bottom-4 duration-300" dir="rtl">
+          
+          {/* Right Section: Counter Tag and Deselect All Button */}
+          <div className="flex items-center justify-between w-full md:w-auto gap-3">
+            <span className="text-xs font-black text-amber-400 bg-amber-500/10 px-3.5 py-2 rounded-full border border-amber-500/20 flex items-center gap-1.5 shrink-0 select-none">
+              <span className="animate-pulse">⚡</span>
+              <span>تم تحديد <strong className="font-mono text-sm text-white px-0.5">{selected.size}</strong> شحنة</span>
+            </span>
             <button
-              onClick={() => setSelected(new Set())}
-              className="text-[10px] text-slate-400 hover:text-white bg-slate-900 px-2.5 py-1 rounded-lg border border-white/6 font-bold cursor-pointer"
+              onClick={() => {
+                setSelected(new Set());
+                setFloatingStatus("");
+                setFloatingCourier("");
+                setFloatingNotes("");
+                setFloatingDate("");
+                setShowAssignPopover(false);
+                setShowStatusPopover(false);
+              }}
+              className="text-[10px] text-slate-400 hover:text-white bg-slate-900 hover:bg-slate-950 px-3 py-2 rounded-full border border-white/6 font-bold cursor-pointer transition-all shrink-0"
             >
               إلغاء التحديد
             </button>
-            <span className="text-xs font-black text-amber-550 flex items-center gap-1">
-              <span>⚡ تم تحديد {selected.size} من الأوردرات</span>
-              <span>📎</span>
-            </span>
           </div>
 
-          <div className="space-y-3">
-            {/* Dynamic Dropdown per role */}
-            <div className="space-y-1">
-              <label className="block text-[10px] text-slate-400 font-bold">تحديد الإجراء الجماعي المتاح لدورك</label>
-              <select
-                value={floatingStatus}
-                onChange={(e) => setFloatingStatus(e.target.value)}
-                className="w-full bg-slate-900 text-slate-100 border border-white/8 rounded-xl px-3 py-2 text-xs text-right cursor-pointer"
+          {/* Left Section: Compact Dropdowns & Actions */}
+          <div className="flex items-center gap-3 w-full md:w-auto justify-end relative flex-wrap md:flex-nowrap">
+            
+            {/* 1. Assign to Courier Button & Popover (Admins & Supervisors only) */}
+            {(isAdmin || isSuper) && (
+              <div className="relative">
+                <button
+                  onClick={() => {
+                    setShowAssignPopover(!showAssignPopover);
+                    setShowStatusPopover(false);
+                  }}
+                  className={`px-4 py-2 rounded-full text-xs font-black transition-all border flex items-center gap-1.5 cursor-pointer ${
+                    showAssignPopover
+                      ? "bg-amber-500 text-slate-950 border-amber-500 font-extrabold shadow-lg"
+                      : "bg-slate-900 text-slate-200 border-white/10 hover:bg-slate-800"
+                  }`}
+                >
+                  <span>🚚</span>
+                  <span>إسناد لمندوب</span>
+                  {floatingCourier && (
+                    <span className="bg-amber-500/20 text-amber-300 text-[9px] px-1.5 py-0.5 rounded-full font-mono font-bold">
+                      {floatingCourier === "reset_warehouse" ? "المستودع" : floatingCourier}
+                    </span>
+                  )}
+                </button>
+
+                {/* Courier Popover Menu */}
+                {showAssignPopover && (
+                  <div className="absolute bottom-full mb-3 right-0 md:right-auto md:left-0 w-72 bg-slate-950/98 backdrop-blur-xl border border-amber-500/30 rounded-2xl p-4 shadow-2xl z-[99999] space-y-3 text-right text-xs animate-in fade-in slide-in-from-bottom-2 duration-200">
+                    <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                      <span className="font-black text-amber-400">إسناد لمندوب جماعياً</span>
+                      <button 
+                        onClick={() => setShowAssignPopover(false)}
+                        className="text-slate-400 hover:text-white font-bold"
+                      >
+                        ×
+                      </button>
+                    </div>
+                    <div className="space-y-3">
+                      <div className="space-y-1">
+                        <label className="block text-[10px] text-slate-400 font-bold">المندوب المسؤول</label>
+                        <SearchableCourierSelect
+                          value={floatingCourier}
+                          onChange={(val) => setFloatingCourier(val)}
+                          couriers={couriers}
+                          placeholder="-- اختر المندوب --"
+                          showWarehouseReset={true}
+                        />
+                      </div>
+                      <div className="flex gap-2 pt-1">
+                        <button
+                          onClick={async () => {
+                            if (!floatingCourier) {
+                              alert("يرجى تحديد مندوب أولاً");
+                              return;
+                            }
+                            await saveFloatingBulkUpdate();
+                            setShowAssignPopover(false);
+                          }}
+                          className="flex-1 py-2 bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-600 text-slate-950 font-black text-xs rounded-xl cursor-pointer shadow-md transition-all active:scale-95 text-center"
+                        >
+                          تأكيد الإسناد
+                        </button>
+                        <button
+                          onClick={() => setShowAssignPopover(false)}
+                          className="px-3 py-2 bg-slate-900 hover:bg-slate-800 border border-white/8 text-slate-300 font-bold text-xs rounded-xl cursor-pointer"
+                        >
+                          إلغاء
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* 2. Batch Update Status Button & Popover */}
+            <div className="relative">
+              <button
+                onClick={() => {
+                  setShowStatusPopover(!showStatusPopover);
+                  setShowAssignPopover(false);
+                }}
+                className={`px-4 py-2 rounded-full text-xs font-black transition-all border flex items-center gap-1.5 cursor-pointer ${
+                  showStatusPopover
+                    ? "bg-amber-500 text-slate-950 border-amber-500 font-extrabold shadow-lg"
+                    : "bg-slate-900 text-slate-200 border-white/10 hover:bg-slate-800"
+                }`}
               >
-                {isReturnsOfficer && (
-                  <>
-                    <option value="">-- اختر إجراء المرتجعات الجماعي --</option>
-                    <option value="تم تسليم المرتجع للمورد">تم تسليم المرتجع للمورد وتصفية حسابه</option>
-                  </>
+                <span>⚙️</span>
+                <span>تغيير الحالة</span>
+                {floatingStatus && (
+                  <span className="bg-amber-500/20 text-amber-300 text-[9px] px-1.5 py-0.5 rounded-full font-mono font-bold">
+                    {floatingStatus}
+                  </span>
                 )}
+              </button>
 
-                {isOps && (
-                  <>
-                    <option value="">-- اختر إجراء العمليات الجماعي --</option>
-                    <option value="تم رد العميل وجاري التنسيق">تم رد العميل وجاري التنسيق</option>
-                    <option value="لا يرد - محاولة أولى/ثانية">لا يرد - محاولة أولى/ثانية</option>
-                    <option value="تحديث نتيجة الاتصال">تحديث نتيجة الاتصال</option>
-                    <option value="العميل لغى الأوردر / مرتجع">العميل لغى الأوردر / مرتجع ❌</option>
-                  </>
-                )}
+              {/* Status Popover Menu */}
+              {showStatusPopover && (
+                <div className="absolute bottom-full mb-3 left-0 w-80 bg-slate-950/98 backdrop-blur-xl border border-amber-500/30 rounded-2xl p-4 shadow-2xl z-[99999] space-y-3 text-right text-xs animate-in fade-in slide-in-from-bottom-2 duration-200">
+                  <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                    <span className="font-black text-amber-400">تغيير حالة الشحنات جماعياً</span>
+                    <button 
+                      onClick={() => setShowStatusPopover(false)}
+                      className="text-slate-400 hover:text-white font-bold"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div className="space-y-3">
+                    <div className="space-y-1">
+                      <label className="block text-[10px] text-slate-400 font-bold">تحديد الحالة الجديدة</label>
+                      <select
+                        value={floatingStatus}
+                        onChange={(e) => setFloatingStatus(e.target.value)}
+                        className="w-full bg-slate-900 text-slate-100 border border-white/8 rounded-xl px-2.5 py-2 text-xs text-right cursor-pointer focus:outline-none focus:border-amber-500"
+                      >
+                        {isReturnsOfficer && (
+                          <>
+                            <option value="">-- اختر إجراء المرتجعات الجماعي --</option>
+                            <option value="تم تسليم المرتجع للمورد">تم تسليم المرتجع للمورد وتصفية حسابه</option>
+                          </>
+                        )}
 
-                {isAgent && (
-                  <>
-                    <option value="">-- اختر إجراء التوصيل الجماعي المندوب --</option>
-                    <option value="تم التسليم بنجاح">تم التسليم بنجاح</option>
-                    <option value="مؤجل بناءً على طلب العميل">مؤجل بناءً على طلب العميل</option>
-                  </>
-                )}
+                        {isOps && (
+                          <>
+                            <option value="">-- اختر إجراء العمليات الجماعي --</option>
+                            <option value="تم رد العميل وجاري التنسيق">تم رد العميل وجاري التنسيق</option>
+                            <option value="لا يرد - محاولة أولى/ثانية">لا يرد - محاولة أولى/ثانية</option>
+                            <option value="تحديث نتيجة الاتصال">تحديث نتيجة الاتصال</option>
+                            <option value="العميل لغى الأوردر / مرتجع">العميل لغى الأوردر / مرتجع ❌</option>
+                          </>
+                        )}
 
-                {(isAdmin || isSuper) && (
-                  <>
-                    <option value="">-- اختر حالة الأوردرات المحددة --</option>
-                    {Array.from(selected).every(tr => orders.find(x => x.tracking === tr)?.status === "جديد") && (
-                      <option value="جديد">جديد (إعادة للانتظار)</option>
+                        {isAgent && (
+                          <>
+                            <option value="">-- اختر إجراء التوصيل الجماعي المندوب --</option>
+                            <option value="تم التسليم بنجاح">تم التسليم بنجاح</option>
+                            <option value="مؤجل بناءً على طلب العميل">مؤجل بناءً على طلب العميل</option>
+                          </>
+                        )}
+
+                        {(isAdmin || isSuper) && (
+                          <>
+                            <option value="">-- اختر حالة الأوردرات المحددة --</option>
+                            {Array.from(selected).every(tr => orders.find(x => x.tracking === tr)?.status === "جديد") && (
+                              <option value="جديد">جديد (إعادة للانتظار)</option>
+                            )}
+                            <option value="تم الإسناد">تم الإسناد</option>
+                            <option value="مُسند جديد">مُسند جديد</option>
+                            <option value="خارج مع المندوب">خارج مع المندوب</option>
+                            <option value="تم التسليم">تم التسليم (ناجح كاش)</option>
+                            <option value="تسليم جزئي">تسليم جزئي</option>
+                            <option value="العميل رد وجاري التسليم">العميل رد وجاري التسليم</option>
+                            <option value="مرتجع بالمستودع">مرتجع بالمستودع</option>
+                            <option value="تم تسليم المرتجع للمورد">تم تسليم المرتجع للمورد</option>
+                            <option value="مرتجع">مرتجع (من طرف العميل)</option>
+                            <option value="مؤجل">مؤجل (متابعة لاحقة)</option>
+                            <option value="لا يوجد رد">لا يوجد رد</option>
+                          </>
+                        )}
+                      </select>
+                    </div>
+
+                    {/* Sub-fields for Operations logs or delay captures */}
+                    {(isOps || isAdmin || isSuper || floatingStatus === "مؤجل بناءً على طلب العميل" || floatingStatus === "تحديث نتيجة الاتصال") && (
+                      <div className="grid grid-cols-2 gap-2 animate-in fade-in zoom-in-95 duration-200">
+                        <div className="space-y-1">
+                          <label className="block text-[10px] text-indigo-400 font-bold">الملاحظات الجماعية</label>
+                          <input
+                            type="text"
+                            value={floatingNotes}
+                            onChange={(e) => setFloatingNotes(e.target.value)}
+                            placeholder="ملاحظات الاتصال الهاتفي..."
+                            className="w-full bg-slate-900 border border-white/10 rounded-xl px-2.5 py-1.5 text-[10px] text-right text-slate-200 placeholder-slate-500"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="block text-[10px] text-indigo-400 font-bold">التاريخ المؤجل</label>
+                          <input
+                            type="date"
+                            value={floatingDate}
+                            onChange={(e) => setFloatingDate(e.target.value)}
+                            className="w-full bg-slate-900 border border-white/10 rounded-xl px-2.5 py-1 text-[10px] text-slate-200 [color-scheme:dark] text-center"
+                          />
+                        </div>
+                      </div>
                     )}
-                    <option value="تم الإسناد">تم الإسناد</option>
-                    <option value="مُسند جديد">مُسند جديد</option>
-                    <option value="خارج مع المندوب">خارج مع المندوب</option>
-                    <option value="تم التسليم">تم التسليم (ناجح كاش)</option>
-                    <option value="تسليم جزئي">تسليم جزئي</option>
-                    <option value="العميل رد وجاري التسليم">العميل رد وجاري التسليم</option>
-                    <option value="مرتجع بالمستودع">مرتجع بالمستودع</option>
-                    <option value="تم تسليم المرتجع للمورد">تم تسليم المرتجع للمورد</option>
-                    <option value="مرتجع">مرتجع (من طرف العميل)</option>
-                    <option value="مؤجل">مؤجل (متابعة لاحقة)</option>
-                    <option value="لا يوجد رد">لا يوجد رد</option>
-                  </>
-                )}
-              </select>
+
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        onClick={async () => {
+                          if (!floatingStatus) {
+                            alert("يرجى اختيار حالة أولاً");
+                            return;
+                          }
+                          await saveFloatingBulkUpdate();
+                          setShowStatusPopover(false);
+                        }}
+                        className="flex-1 py-2 bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-600 text-slate-950 font-black text-xs rounded-xl cursor-pointer shadow-md transition-all active:scale-95 text-center"
+                      >
+                        تأكيد الحالة
+                      </button>
+                      <button
+                        onClick={() => setShowStatusPopover(false)}
+                        className="px-3 py-2 bg-slate-900 hover:bg-slate-800 border border-white/8 text-slate-300 font-bold text-xs rounded-xl cursor-pointer"
+                      >
+                        إلغاء
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
-            {/* Courier Assignment for Admins & Supervisors only */}
-            {(isAdmin || isSuper) && (
-              <div className="space-y-1">
-                <label className="block text-[10px] text-slate-400 font-bold">تعيين أو تغيير المندوب المسؤول</label>
-                <SearchableCourierSelect
-                  value={floatingCourier}
-                  onChange={(val) => setFloatingCourier(val)}
-                  couriers={couriers}
-                  placeholder="-- بقاء المندوب كما هو --"
-                  showWarehouseReset={true}
-                />
-              </div>
-            )}
-
-            {/* Sub-fields for Operations logs or delay captures */}
-            {(isOps || isAdmin || isSuper || floatingStatus === "مؤجل بناءً على طلب العميل" || floatingStatus === "تحديث نتيجة الاتصال") && (
-              <div className="grid grid-cols-2 gap-2 animate-in fade-in zoom-in-95 duration-200">
-                <div className="space-y-1">
-                  <label className="block text-[10px] text-indigo-400 font-bold">الملاحظات الجماعية</label>
-                  <input
-                    type="text"
-                    value={floatingNotes}
-                    onChange={(e) => setFloatingNotes(e.target.value)}
-                    placeholder="ملاحظات الاتصال الهاتفي..."
-                    className="w-full bg-slate-900 border border-white/10 rounded-xl px-2.5 py-2 text-[10px] text-right text-slate-200 placeholder-slate-500"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="block text-[10px] text-indigo-400 font-bold">التاريخ المؤجل</label>
-                  <input
-                    type="date"
-                    value={floatingDate}
-                    onChange={(e) => setFloatingDate(e.target.value)}
-                    className="w-full bg-slate-900 border border-white/10 rounded-xl px-2.5 py-1.5 text-[10px] text-slate-200 [color-scheme:dark] text-center"
-                  />
-                </div>
-              </div>
-            )}
-
-            <button
-              onClick={saveFloatingBulkUpdate}
-              className="w-full py-2.5 bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-600 text-slate-950 font-black text-xs rounded-xl cursor-pointer shadow-lg active:scale-98 transition-transform text-center"
-            >
-              حفظ التعديل الجماعي لحساب {selected.size} طلبات
-            </button>
-
+            {/* 3. Print Thermal Labels Button */}
             <button
               onClick={() => setIsPrintModalOpen(true)}
-              className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 border border-white/8 text-slate-100 font-bold text-xs rounded-xl cursor-pointer shadow-lg active:scale-98 transition-all text-center flex items-center justify-center gap-2 mt-2"
+              className="px-4 py-2 bg-slate-900 hover:bg-slate-800 border border-white/8 text-slate-200 font-bold text-xs rounded-full cursor-pointer transition-all flex items-center justify-center gap-1.5 shadow-md"
+              title="طباعة ملصقات حرارية جماعية"
             >
               <Printer size={13} className="text-amber-500 animate-pulse" />
-              <span>🖨️ طباعة ملصقات حرارية جماعية ({selected.size})</span>
+              <span>طباعة الملصقات ({selected.size})</span>
             </button>
+
           </div>
         </div>
       )}
