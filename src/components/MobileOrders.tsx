@@ -278,7 +278,7 @@ export default function MobileOrders({
   };
 
   return (
-    <div className="block md:hidden space-y-3.5 antialiased text-right font-sans pb-24 h-full relative" id="mobile_shipments_container">
+    <div className="block lg:hidden space-y-3.5 antialiased text-right font-sans pb-24 h-full relative" id="mobile_shipments_container">
       
       {/* 🌟 Sticky Top Header */}
       <div className="sticky top-0 z-40 bg-slate-950/95 backdrop-blur-md border-b border-white/6 px-4 py-3 flex items-center gap-2">

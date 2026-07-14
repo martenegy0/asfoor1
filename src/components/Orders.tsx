@@ -521,6 +521,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
   };
 
   const [selectedDate, setSelectedDate] = useState<string>(getTodayDateStr());
+  const [desktopSelectedTracking, setDesktopSelectedTracking] = useState<string | null>(null);
   const [selectedSupplierFilter, setSelectedSupplierFilter] = useState<string>("");
   const [selectedCourierFilter, setSelectedCourierFilter] = useState<string>("");
   const [selectedRegionFilter, setSelectedRegionFilter] = useState<string>("");
@@ -2741,8 +2742,8 @@ export default function Orders({ token, role, username, orders, setOrders, couri
         toggleHistory={toggleHistory}
       />
 
-      {/* 🖥️ Desktop Interface (visible on hidden md:block) */}
-      <div className="hidden md:block space-y-4">
+      {/* 🖥️ Desktop Interface (visible on hidden lg:block) */}
+      <div className="hidden lg:block space-y-4">
         {/* Search and select buttons */}
         <div className="flex bg-[#070d1a] px-4 py-3 border-b border-white/6 items-center flex-wrap gap-3">
         <div className="relative flex-1 min-w-[200px]">
@@ -3548,22 +3549,129 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                 )}
               </div>
             ) : (
-              <HighPerformanceVirtualList
-                items={visibleOrders}
-                itemHeight={320}
-                containerHeight="720px"
-                renderItem={(o: any) => (
-                  <OrderCard
-                    key={o.tracking}
-                    o={o}
-                    isSel={selected.has(o.tracking)}
-                    isExpanded={!!expandedHistories[o.tracking]}
-                    isLoadingHistory={!!loadingHistories[o.tracking]}
-                    historyList={histories[o.tracking]}
-                    render={renderOrderCard}
+              <>
+                {/* 1. Single-Column Scrolling Layout for tablet/medium viewports (lg:hidden) */}
+                <div className="block lg:hidden">
+                  <HighPerformanceVirtualList
+                    items={visibleOrders}
+                    itemHeight={320}
+                    containerHeight="720px"
+                    renderItem={(o: any) => (
+                      <OrderCard
+                        key={o.tracking}
+                        o={o}
+                        isSel={selected.has(o.tracking)}
+                        isExpanded={!!expandedHistories[o.tracking]}
+                        isLoadingHistory={!!loadingHistories[o.tracking]}
+                        historyList={histories[o.tracking]}
+                        render={renderOrderCard}
+                      />
+                    )}
                   />
-                )}
-              />
+                </div>
+
+                {/* 2. Master-Detail Split Screen Layout for desktop/laptop viewports (lg:flex) */}
+                <div className="hidden lg:flex gap-4 h-[780px] overflow-hidden text-right" dir="rtl">
+                  {/* Left Panel: Detail & Actions (65%) */}
+                  <div className="w-[65%] flex flex-col h-full bg-[#0a101f]/60 rounded-2xl border border-white/6 p-5 overflow-y-auto scrollbar-thin space-y-4">
+                    {(() => {
+                      const activeOrder = desktopSelectedTracking 
+                        ? visibleOrders.find((o: any) => o.tracking === desktopSelectedTracking) 
+                        : null;
+                      
+                      if (!activeOrder) {
+                        return (
+                          <div className="flex flex-col items-center justify-center h-full text-center p-8 space-y-4 text-slate-400 select-none">
+                            <div className="w-16 h-16 rounded-2xl bg-slate-950/50 border border-white/6 flex items-center justify-center text-3xl animate-pulse">
+                              📦
+                            </div>
+                            <div className="space-y-1">
+                              <h4 className="text-sm font-black text-slate-200">بوابة تفاصيل الشحنات اللوجستية</h4>
+                              <p className="text-xs text-slate-500 max-w-sm leading-relaxed">
+                                يرجى اختيار شحنة من القائمة اليسرى لعرض كافة البيانات التاريخية، والملاحظات، والإجراءات اللوجستية المتاحة لها.
+                              </p>
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div className="animate-in fade-in slide-in-from-bottom-2 duration-200">
+                          <OrderCard
+                            key={activeOrder.tracking}
+                            o={activeOrder}
+                            isSel={selected.has(activeOrder.tracking)}
+                            isExpanded={!!expandedHistories[activeOrder.tracking]}
+                            isLoadingHistory={!!loadingHistories[activeOrder.tracking]}
+                            historyList={histories[activeOrder.tracking]}
+                            render={renderOrderCard}
+                          />
+                        </div>
+                      );
+                    })()}
+                  </div>
+
+                  {/* Right Panel: Master List (35%) */}
+                  <div className="w-[35%] flex flex-col h-full bg-slate-900/60 rounded-2xl border border-white/6 p-3 overflow-hidden">
+                    <div className="flex items-center justify-between pb-2 mb-2 border-b border-white/5 text-xs text-slate-400 font-bold px-1 select-none">
+                      <span>القائمة المدمجة ({visibleOrders.length})</span>
+                      <span className="text-[10px]">اضغط على الطلب لعرض تفاصيله</span>
+                    </div>
+                    <div className="flex-1 overflow-hidden">
+                      <HighPerformanceVirtualList
+                        items={visibleOrders}
+                        itemHeight={70}
+                        containerHeight="100%"
+                        renderItem={(o: any) => {
+                          const isSelected = desktopSelectedTracking === o.tracking;
+                          const totalCODValue = o.totalCOD !== undefined ? o.totalCOD : (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
+                          return (
+                            <div
+                              key={o.tracking}
+                              onClick={() => setDesktopSelectedTracking(o.tracking)}
+                              className={`h-[68px] flex flex-col justify-between p-2.5 rounded-xl border transition-all cursor-pointer select-none text-right mb-1.5 ${
+                                isSelected
+                                  ? "bg-amber-500/10 border-amber-500 shadow-md shadow-amber-500/5 border-r-4 border-r-amber-500 font-black"
+                                  : "bg-slate-950/60 border-white/4 hover:bg-slate-900/60 hover:border-white/10"
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-1">
+                                <div className="flex items-center gap-1 font-mono text-[11px] font-extrabold text-amber-550 text-amber-500">
+                                  {canSelectBulk && (
+                                    <input
+                                      type="checkbox"
+                                      checked={selected.has(o.tracking)}
+                                      onChange={(e) => {
+                                        e.stopPropagation(); // Don't trigger row selection details
+                                        toggleSelect(o.tracking);
+                                      }}
+                                      className="w-3.5 h-3.5 rounded border-white/10 bg-slate-950 text-amber-500 accent-amber-500 cursor-pointer"
+                                    />
+                                  )}
+                                  <span>{o.tracking}</span>
+                                </div>
+                                <div className="flex items-center gap-1 text-[10px] text-slate-300 font-bold truncate max-w-[150px]">
+                                  <span className="truncate">📍 {o.gov}</span>
+                                  <span className={`text-[8.5px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${getBadgeStyle(o.status)}`}>
+                                    {o.status}
+                                  </span>
+                                </div>
+                              </div>
+                              
+                              <div className="flex items-center justify-between text-xs mt-0.5">
+                                <span className="font-bold text-slate-300 truncate max-w-[120px]">{o.customer || "مجهول"}</span>
+                                <span className="font-black text-emerald-400 font-mono text-[11px]">
+                                  {totalCODValue.toLocaleString("ar")} ج.م
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </>
             )}
           </div>
 
