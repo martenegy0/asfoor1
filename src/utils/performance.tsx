@@ -441,6 +441,9 @@ const backgroundWorkerCode = `
         var fCou = (username || "").toString().trim().toLowerCase();
         if (oCou !== fCou) return;
 
+        var isS = o.isSettled === true || o.isSettled === "true" || o.is_settled === "true" || o.is_settled === true || o.isClosed === true || o.isClosed === "true";
+        if (isS) return; // Instantly resets all counters for settled workload!
+
         myActiveOrders.push(o);
 
         var orderDayStr = normalizeDateToYMD(o.orderDate || o.createdAt);
@@ -646,6 +649,9 @@ export function useBackgroundAccounting(
           const oCou = (o.courier || o.lastCourier || "").toString().trim().toLowerCase();
           const fCou = (username || "").toString().trim().toLowerCase();
           if (oCou !== fCou) return;
+
+          const isSActive = o.isSettled === true || o.isSettled === "true" || o.is_settled === "true" || o.is_settled === true || o.isClosed === true || o.isClosed === "true";
+          if (isSActive) return; // Instantly resets all counters for settled workload!
 
           const orderDayStr = normalizeDateToYMD(o.orderDate || o.createdAt);
           if (orderDayStr === targetDateStr) {

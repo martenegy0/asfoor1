@@ -13,6 +13,134 @@ import OpsRoom from "./components/OpsRoom";
 import ArchivePortal from "./components/ArchivePortal";
 import { StaffPermissions } from "./components/StaffPermissions";
 
+function computeDynamicCounters(rawList: any[], userRole: string, userLogin: string, cashboxBal: number) {
+  const cleanRole = (userRole || "").toString().trim();
+  const isAgent = cleanRole === "مندوب" || cleanRole.includes("مندوب");
+  const isSupplier = cleanRole === "مورد" || cleanRole.includes("مورد");
+  const isSupervisor = cleanRole === "مشرف" || cleanRole.includes("مشرف");
+
+  const todayStr = getTodayDateStr();
+
+  // 1. Strict Supplier Isolation Guardrail (Adhere to v135 established ledger)
+  if (isSupplier) {
+    const deliveredOrders = rawList.filter((o: any) => o.status === "تم التسليم" || o.status === "تم التسليم بنجاح");
+    const cumulativeCollection = deliveredOrders.reduce((sum, o) => {
+      return sum + (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
+    }, 0);
+    const todayDeliveredOrders = deliveredOrders.filter((o: any) => {
+      const delDate = o.delivDate || o.updatedAt || "";
+      return delDate.startsWith(todayStr);
+    });
+    const todayCollection = todayDeliveredOrders.reduce((sum, o) => {
+      return sum + (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
+    }, 0);
+
+    return {
+      total: rawList.length,
+      delivered: deliveredOrders.length,
+      returned: rawList.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)).length,
+      active: rawList.filter((o: any) => ["خارج مع المندوب", "تم الإسناد", "قيد التنفيذ"].includes(o.status)).length,
+      totalCOD: cumulativeCollection,
+      todayCOD: todayCollection
+    };
+  }
+
+  // 2. Courier active workload calculations (0 active workload once settled)
+  if (isAgent) {
+    const courierActiveOrders = rawList.filter((o: any) => {
+      const isS = o.isSettled === true || o.isSettled === "true" || o.is_settled === "true" || o.is_settled === true || o.isClosed === true || o.isClosed === "true";
+      return !isS;
+    });
+
+    const deliveredOrders = courierActiveOrders.filter((o: any) => o.status === "تم التسليم");
+    const cumulativeCollection = deliveredOrders.reduce((sum, o) => {
+      return sum + (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
+    }, 0);
+    const todayDeliveredOrders = deliveredOrders.filter((o: any) => {
+      const delDate = o.delivDate || o.updatedAt || "";
+      return delDate.startsWith(todayStr);
+    });
+    const todayCollection = todayDeliveredOrders.reduce((sum, o) => {
+      return sum + (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
+    }, 0);
+
+    return {
+      total: courierActiveOrders.length,
+      delivered: deliveredOrders.length,
+      returned: courierActiveOrders.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)).length,
+      active: courierActiveOrders.filter((o: any) => ["خارج مع المندوب", "تم الإسناد", "قيد التنفيذ"].includes(o.status)).length,
+      totalCOD: cumulativeCollection,
+      todayCOD: todayCollection
+    };
+  }
+
+  // 3. Admin, Supervisor, and Ops Officer roles (Smart Dynamic Operational Counters)
+  const isUploadedToday = (o: any) => {
+    return (o.createdAt && o.createdAt.startsWith(todayStr)) || (o.updatedAt && o.updatedAt.startsWith(todayStr)) || (o.orderDate && o.orderDate.startsWith(todayStr));
+  };
+  
+  const isClosedOrArchived = (o: any) => {
+    const status = o.status || "";
+    return o.isArchived || o.isClosed || o.isSettled || o.is_settled === "true" || ["مؤرشف", "تم تسليم المرتجع للمورد وتصفية حسابه", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد"].includes(status);
+  };
+
+  const activeDailyCycleOrders = rawList.filter((o: any) => {
+    return isUploadedToday(o) || !isClosedOrArchived(o);
+  });
+
+  const dailyDeliveredOrders = rawList.filter((o: any) => {
+    const status = o.status || "";
+    const isDel = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(status);
+    const dateStr = o.delivDate || o.updatedAt || "";
+    return isDel && dateStr.startsWith(todayStr);
+  });
+
+  const activeInProgressOrders = rawList.filter((o: any) => {
+    const status = o.status || "";
+    const isInField = ["قيد التنفيذ", "خارج مع المندوب", "تم الإسناد", "مسند"].includes(status);
+    return isInField && !isClosedOrArchived(o);
+  });
+
+  const activeReturnsOrders = rawList.filter((o: any) => {
+    const status = o.status || "";
+    const isRet = ["مرتجع بالمستودع", "مرتجع بالستودع", "مرتجع", "مرتجع جديد", "مرتجع جزئي بالمستودع"].includes(status);
+    const isReturnedToVendor = ["مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(status);
+    return isRet && !isReturnedToVendor && !isClosedOrArchived(o);
+  });
+
+  const todayCODCustodyOrders = rawList.filter((o: any) => {
+    const status = o.status || "";
+    const isDel = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(status);
+    const dateStr = o.delivDate || o.updatedAt || "";
+    const isToday = dateStr.startsWith(todayStr);
+    const isHeldByCourier = !o.isSettled && !o.isClosed && !o.isArchived && o.courier;
+    return isDel && isToday && isHeldByCourier;
+  });
+
+  const getCODVal = (o: any) => Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0)));
+
+  const todayCODCustodySum = todayCODCustodyOrders.reduce((sum, o) => sum + getCODVal(o), 0);
+
+  const settledVaultOrders = rawList.filter((o: any) => {
+    const status = o.status || "";
+    const isS = o.isSettled === true || o.isSettled === "true" || o.is_settled === "true" || o.is_settled === true || o.isClosed || o.isArchived;
+    const isDel = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(status);
+    return isS && isDel;
+  });
+
+  const settledVaultCash = settledVaultOrders.reduce((sum, o) => sum + getCODVal(o), 0);
+  const vaultCash = (cleanRole === "مدير" || cleanRole === "محاسب") && cashboxBal > 0 ? cashboxBal : settledVaultCash;
+
+  return {
+    total: activeDailyCycleOrders.length,
+    delivered: dailyDeliveredOrders.length,
+    returned: activeReturnsOrders.length,
+    active: activeInProgressOrders.length,
+    totalCOD: vaultCash,
+    todayCOD: todayCODCustodySum
+  };
+}
+
 export default function App() {
   const [token, setToken] = useState("");
   const [username, setUsername] = useState("");
@@ -375,28 +503,14 @@ export default function App() {
       setOrders(orderList);
       localStorage.setItem("fp_orders_cache", JSON.stringify(orderList));
 
-      // Compute calculations programmatically (client-side)
-      const deliveredOrders = orderList.filter((o: any) => o.status === "تم التسليم");
-      const cumulativeCollection = deliveredOrders.reduce((sum, o) => {
-        return sum + (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
-      }, 0);
-
-      const todayStr = getTodayDateStr();
-      const todayDeliveredOrders = deliveredOrders.filter((o: any) => {
-        const delDate = o.delivDate || o.updatedAt || "";
-        return delDate.startsWith(todayStr);
-      });
-      const todayCollection = todayDeliveredOrders.reduce((sum, o) => {
-        return sum + (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
-      }, 0);
-
-      // Compute quick stats counters for header
-      setQuickTotal(orderList.length);
-      setQuickDelivered(deliveredOrders.length);
-      setQuickReturned(orderList.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length);
-      setQuickActive(orderList.filter((o: any) => o.status === "خارج مع المندوب" || o.status === "تم الإسناد").length);
-      setQuickTotalCOD(cumulativeCollection);
-      setQuickTodayCOD(todayCollection);
+      // Compute calculations programmatically (client-side) using dynamic helper
+      const stats = computeDynamicCounters(orderList, role, username, cashboxBalance);
+      setQuickTotal(stats.total);
+      setQuickDelivered(stats.delivered);
+      setQuickReturned(stats.returned);
+      setQuickActive(stats.active);
+      setQuickTotalCOD(stats.totalCOD);
+      setQuickTodayCOD(stats.todayCOD);
 
       // Stage 2: Load archived orders in background if needed (e.g. for non-Agent roles to cover full historical searches)
       if (!isAgent) {
@@ -457,25 +571,13 @@ export default function App() {
               setOrders(fullOrderList);
               localStorage.setItem("fp_orders_cache", JSON.stringify(fullOrderList));
 
-              const fullDeliveredOrders = fullOrderList.filter((o: any) => o.status === "تم التسليم");
-              const fullCumulativeCollection = fullDeliveredOrders.reduce((sum, o) => {
-                return sum + (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
-              }, 0);
-
-              const fullTodayDeliveredOrders = fullDeliveredOrders.filter((o: any) => {
-                const delDate = o.delivDate || o.updatedAt || "";
-                return delDate.startsWith(todayStr);
-              });
-              const fullTodayCollection = fullTodayDeliveredOrders.reduce((sum, o) => {
-                return sum + (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
-              }, 0);
-
-              setQuickTotal(fullOrderList.length);
-              setQuickDelivered(fullDeliveredOrders.length);
-              setQuickReturned(fullOrderList.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length);
-              setQuickActive(fullOrderList.filter((o: any) => o.status === "خارج مع المندوب" || o.status === "تم الإسناد").length);
-              setQuickTotalCOD(fullCumulativeCollection);
-              setQuickTodayCOD(fullTodayCollection);
+              const stats = computeDynamicCounters(fullOrderList, role, username, cashboxBalance);
+              setQuickTotal(stats.total);
+              setQuickDelivered(stats.delivered);
+              setQuickReturned(stats.returned);
+              setQuickActive(stats.active);
+              setQuickTotalCOD(stats.totalCOD);
+              setQuickTodayCOD(stats.todayCOD);
             }
           } catch (bgErr) {
             console.warn("Background full orders fetch failed:", bgErr);
@@ -797,27 +899,39 @@ export default function App() {
         <div className="grid grid-cols-2 md:grid-cols-6 border-b border-white/6 bg-slate-950 text-center text-xs py-2 md:h-14 items-center gap-y-2 md:gap-y-0">
           <div className="border-l border-white/4 space-y-0.5 pointer-events-none">
             <div className="text-sm font-black text-amber-500 font-mono">{quickTotal}</div>
-            <div className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider">إجمالي الطلبات</div>
+            <div className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider">
+              {isSupplierState || isAgentState ? "إجمالي الطلبات" : "إجمالي الطلبات النشطة"}
+            </div>
           </div>
           <div className="border-0 md:border-l border-white/4 space-y-0.5 pointer-events-none">
             <div className="text-sm font-black text-emerald-400 font-mono">{quickDelivered}</div>
-            <div className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider">تم التسليم</div>
+            <div className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider">
+              {isSupplierState ? "تم التسليم" : "تم التسليم اليوم"}
+            </div>
           </div>
           <div className="border-l border-white/4 space-y-0.5 pointer-events-none">
             <div className="text-sm font-black text-red-500 font-mono">{quickReturned}</div>
-            <div className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider">المرتجع</div>
+            <div className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider">
+              {isSupplierState ? "المرتجع" : "المرتجع النشط بالمستودع"}
+            </div>
           </div>
           <div className="border-0 md:border-l border-white/4 space-y-0.5 pointer-events-none">
             <div className="text-sm font-black text-blue-400 font-mono">{quickActive}</div>
-            <div className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider">قيد التنفيذ</div>
+            <div className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider">
+              {isSupplierState ? "قيد التنفيذ" : "قيد التنفيذ ميدانياً"}
+            </div>
           </div>
           <div className="border-l border-white/4 space-y-0.5 pointer-events-none">
             <div className="text-sm font-black text-emerald-500 font-mono">{(quickTotalCOD || 0).toLocaleString("ar")} ج.م</div>
-            <div className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest font-black leading-none py-0.5">التحصيل المتراكم</div>
+            <div className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest font-black leading-none py-0.5">
+              {isSupplierState ? "التحصيل المتراكم" : "التحصيل المتراكم بالخزنة"}
+            </div>
           </div>
           <div className="space-y-0.5 pointer-events-none">
             <div className="text-sm font-black text-amber-400 font-mono">{(quickTodayCOD || 0).toLocaleString("ar")} ج.م</div>
-            <div className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest font-black leading-none py-0.5">تحصيل اليوم</div>
+            <div className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest font-black leading-none py-0.5">
+              {isSupplierState ? "تحصيل اليوم" : "تحصيل اليوم (حقيبة المناديب)"}
+            </div>
           </div>
         </div>
       ) : (
