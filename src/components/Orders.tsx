@@ -949,7 +949,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
           if (activeFilter === "تسليم جزئي" && !["تسليم جزئي", "تسليم جزئي - معلق للجرد"].includes(status)) return false;
           if (activeFilter === "مؤجل" && status !== "مؤجل") return false;
           if (activeFilter === "العميل لا يرد" && !["لا يوجد رد", "العميل لم يقم بالرد", "العميل لا يرد"].includes(status)) return false;
-          if (activeFilter === "مرتجع بالمستودع" && !["مرتجع بالمستودع", "مرتجع", "مرتجع جديد", "مرتجع جاري تسليمه للمكتب"].includes(status)) return false;
+          if (activeFilter === "مرتجع بالمستودع" && !["مرتجع بالمستودع", "مرتجع", "مرتجع جديد", "مرتجع جاري تسليمه للمكتب", "العميل لغى الأوردر / مرتجع"].includes(status)) return false;
           if (activeFilter === "تم تسليمه للمورد" && !["تم تسليم المرتجع للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "جاري الرجوع للمورد", "التسليم للمورد", "تم تسليمه للمورد"].includes(status)) return false;
           
           // Non-standard fallback filter matching
@@ -1106,7 +1106,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
       else if (["تسليم جزئي", "تسليم جزئي - معلق للجرد"].includes(status)) counts["تسليم جزئي"]++;
       else if (status === "مؤجل") counts["مؤجل"]++;
       else if (["لا يوجد رد", "العميل لم يقم بالرد", "العميل لا يرد"].includes(status)) counts["العميل لا يرد"]++;
-      else if (["مرتجع بالمستودع", "مرتجع", "مرتجع جديد", "مرتجع جاري تسليمه للمكتب"].includes(status)) counts["مرتجع بالمستودع"]++;
+      else if (["مرتجع بالمستودع", "مرتجع", "مرتجع جديد", "مرتجع جاري تسليمه للمكتب", "العميل لغى الأوردر / مرتجع"].includes(status)) counts["مرتجع بالمستودع"]++;
       else if (["تم تسليم المرتجع للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه", "جاري الرجوع للمورد", "التسليم للمورد", "تم تسليمه للمورد"].includes(status)) counts["تم تسليمه للمورد"]++;
     });
 
@@ -1145,7 +1145,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
     
     const returnedInWarehouse = supplierDayOrders.filter(o => {
       const status = (o.status || "").toString().trim();
-      return ["مرتجع بالمستودع", "مرتجع", "مرتجع جديد", "مرتجع جاري تسليمه للمكتب"].includes(status);
+      return ["مرتجع بالمستودع", "مرتجع", "مرتجع جديد", "مرتجع جاري تسليمه للمكتب", "العميل لغى الأوردر / مرتجع"].includes(status);
     }).length;
     
     const returnedDelivered = supplierDayOrders.filter(o => {
@@ -2145,6 +2145,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                     <option value="تم رد العميل وجاري التنسيق">تم رد العميل وجاري التنسيق</option>
                     <option value="مؤجل">مؤجل (تأجيل الطلب)</option>
                     <option value="لا يوجد رد">لا يوجد رد (محاولة تواصل)</option>
+                    <option value="العميل لغى الأوردر / مرتجع">العميل لغى الأوردر / مرتجع ❌</option>
                     {o.status === "جديد" && (
                       <option value="جديد">إرجاع الأوردر لحالة "جديد"</option>
                     )}
@@ -3354,6 +3355,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                     <option value="تم رد العميل وجاري التنسيق">تم رد العميل وجاري التنسيق</option>
                     <option value="لا يرد - محاولة أولى/ثانية">لا يرد - محاولة أولى/ثانية</option>
                     <option value="تحديث نتيجة الاتصال">تحديث نتيجة الاتصال</option>
+                    <option value="العميل لغى الأوردر / مرتجع">العميل لغى الأوردر / مرتجع ❌</option>
                   </>
                 )}
 
@@ -3886,6 +3888,7 @@ export default function Orders({ token, role, username, orders, setOrders, couri
                               <option value="تم رد العميل وجاري التنسيق">تم رد العميل وجاري التنسيق</option>
                               <option value="مؤجل">مؤجل (تأجيل الطلب)</option>
                               <option value="لا يوجد رد">لا يوجد رد (محاولة تواصل)</option>
+                              <option value="العميل لغى الأوردر / مرتجع">العميل لغى الأوردر / مرتجع ❌</option>
                               {o.status === "جديد" && (
                                 <option value="جديد">إرجاع الأوردر لحالة "جديد"</option>
                               )}

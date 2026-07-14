@@ -528,6 +528,12 @@ export default function MobileOrders({
                           <span className="text-[9px] text-emerald-400 font-black block">العنوان التفصيلي للتوصيل</span>
                           <span className="font-medium text-slate-200 text-[11px] leading-relaxed block">{o.address || "غير مدرج"}</span>
                         </div>
+                        <div className="col-span-2 border-t border-white/4 pt-1.5 mt-1 text-right">
+                          <span className="text-[9px] text-amber-500 font-black block">المندوب المسؤول</span>
+                          <span className="font-extrabold text-slate-150 text-[11px] bg-amber-550/10 text-amber-400 px-2.5 py-1 rounded-md border border-amber-500/20 inline-block mt-0.5">
+                            👤 المندوب المسؤول: {o.courier || "لم يعين بعد ⚠️"}
+                          </span>
+                        </div>
                       </div>
 
                       <div className="grid grid-cols-2 gap-2.5 text-[11px]">

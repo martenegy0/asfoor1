@@ -4762,6 +4762,8 @@ app.post("/api", async (req: Request, res: Response) => {
             "لا يوجد رد",
             "جديد",
             "خارج مع المندوب",
+            "العميل لغى الأوردر / مرتجع",
+            "مرتجع",
           ];
           if (status && !opsAllowed.includes(status)) {
             return err(
@@ -5058,6 +5060,8 @@ app.post("/api", async (req: Request, res: Response) => {
                 "لا يوجد رد",
                 "جديد",
                 "خارج مع المندوب",
+                "العميل لغى الأوردر / مرتجع",
+                "مرتجع",
               ];
               if (!opsAllowed.includes(status)) continue;
             } else if (currentRole === "مندوب") {

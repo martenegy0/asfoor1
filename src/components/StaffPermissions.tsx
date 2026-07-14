@@ -287,6 +287,7 @@ export const StaffPermissions: React.FC<StaffPermissionsProps> = React.memo(({
                 <option value="محاسب">محاسب (Accountant)</option>
                 <option value="مسؤول مرتجعات">مسؤول مرتجعات (Returns Officer)</option>
                 <option value="موظف عمليات">موظف عمليات (Ops Officer)</option>
+                <option value="مورد">مورد (Vendor)</option>
                 <option value="مندوب">مندوب (Courier / Driver)</option>
               </select>
             </div>

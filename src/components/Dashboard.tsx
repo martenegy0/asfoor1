@@ -52,7 +52,7 @@ export function computeCustodyAlerts(ordersList: any[]): CustodyAlert[] {
     const statusStr = (o.status || "").toString().trim();
 
     const isDelivered = statusStr === "تم التسليم" || statusStr === "تم التسليم بنجاح" || statusStr === "تم التسليم (ناجح كاش)";
-    const isReturn = ["مرتجع", "مرتجع جديد", "مرفوض", "فشل", "مسترجع", "مرتجع والعميل دفع الشحن", "مرتجع مدفوع الشحن"].includes(statusStr);
+    const isReturn = ["مرتجع", "مرتجع جديد", "مرفوض", "فشل", "مسترجع", "مرتجع والعميل دفع الشحن", "مرتجع مدفوع الشحن", "العميل لغى الأوردر / مرتجع"].includes(statusStr);
     const isDelayedOrNoAnswer = ["مؤجل", "Delayed", "مؤجل من المندوب", "مؤجل بناءً على طلب العميل", "لا يوجد رد", "العميل لا يرد", "No Answer", "العميل لم يقم بالرد"].includes(statusStr);
     const isActiveDelivery = ["مع المندوب", "خارج للتسليم", "خارج مع المندوب", "تم الإسناد"].includes(statusStr);
 
@@ -302,7 +302,7 @@ export default function Dashboard({
         const isRealWarehouseOperationalStock = statusStr === "جديد" || statusStr === "مؤجل بالمستودع" || statusStr === "لا يوجد رد بالمستودع";
 
         // 2. صافي المرتجعات بالمكتب (Checked-in returned orders only: مرتجع بالمستودع + مرتجع جزئي بالمستودع)
-        const isRealWarehouseReturnStock = statusStr === "مرتجع بالمستودع" || statusStr === "مرتجع جزئي بالمستودع";
+        const isRealWarehouseReturnStock = statusStr === "مرتجع بالمستودع" || statusStr === "مرتجع جزئي بالمستودع" || statusStr === "العميل لغى الأوردر / مرتجع";
 
         // 3. إجمالي العهدة المعلقة بالخارج (Street custody: assigned courier, but not settled/checked-in yet)
         const isAssignedOnStreet = o.courier && o.courier.toString().trim() !== "" && !isSettledOffice;
@@ -317,7 +317,7 @@ export default function Dashboard({
           dStats.supplierReturnStockValue += Number(o.prodPrice || 0); // product net price
         }
 
-        const isPendingReturnSettlement = ["مرتجع", "مرتجع جديد", "مرفوض", "فشل", "مسترجع", "مرتجع والعميل دفع الشحن", "مرتجع مدفوع الشحن"].includes(statusStr) && !isSettled && !o.isArchived && !o.isClosed;
+        const isPendingReturnSettlement = ["مرتجع", "مرتجع جديد", "مرفوض", "فشل", "مسترجع", "مرتجع والعميل دفع الشحن", "مرتجع مدفوع الشحن", "العميل لغى الأوردر / مرتجع"].includes(statusStr) && !isSettled && !o.isArchived && !o.isClosed;
         if (isPendingReturnSettlement) {
           dStats.pendingReturnSettlementCount++;
           dStats.pendingReturnSettlementValue += Number(o.prodPrice || 0);
