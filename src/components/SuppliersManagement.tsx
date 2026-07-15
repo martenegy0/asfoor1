@@ -40,6 +40,12 @@ interface LedgerEntry {
   balanceAfter: number;
 }
 
+// Persistent cache for SuppliersManagement component
+if (!(window as any).__globalSuppliersStatementCache) {
+  (window as any).__globalSuppliersStatementCache = {};
+}
+const getGlobalSuppliersStatementCache = () => (window as any).__globalSuppliersStatementCache;
+
 export default function SuppliersManagement({ token, role, orders = [], user = "" }: SuppliersManagementProps) {
   // Navigation tabs (page internal)
   const isSupplierRole = (role || "").toString().trim() === "مورد" || 
@@ -230,20 +236,24 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
   }
 
   // Fetch detailed accounting statement for a target vendor
-  async function fetchSupplierStatement(supplierName: string) {
+  async function fetchSupplierStatement(supplierName: string, force = false) {
     const targetName = supplierName || (isSupplierRole ? user : "");
     if (!targetName) return;
 
+    const globalCache = getGlobalSuppliersStatementCache();
     // If cached, immediately set the states for instant rendering
-    const cached = ledgerCache[targetName];
-    if (cached) {
+    if (!force && globalCache[targetName]) {
+      const cached = globalCache[targetName];
       setLedgerEntries(cached.entries);
       setLedgerStats(cached.stats);
       setDailyLedgerData(cached.dailyLedger);
-      // Quiet background refresh: no full screen spinner
-    } else {
-      setIsLedgerLoading(true);
-      // Clear data to prevent old figures from sticking
+      setErrorMsg("");
+      return;
+    }
+
+    setIsLedgerLoading(true);
+    // Clear data only if forcing refresh to avoid visual flicker
+    if (force || !globalCache[targetName]) {
       setLedgerEntries([]);
       setLedgerStats(null);
       setDailyLedgerData(null);
@@ -257,26 +267,23 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
         const finalStats = res.stats || null;
         const finalDailyLedger = res.dailyLedger || null;
 
-        // Update the client cache
-        setLedgerCache(prev => ({
-          ...prev,
-          [targetName]: {
-            entries: finalEntries,
-            stats: finalStats,
-            dailyLedger: finalDailyLedger
-          }
-        }));
+        // Update the client global cache
+        globalCache[targetName] = {
+          entries: finalEntries,
+          stats: finalStats,
+          dailyLedger: finalDailyLedger
+        };
 
         setLedgerEntries(finalEntries);
         setLedgerStats(finalStats);
         setDailyLedgerData(finalDailyLedger);
       } else {
-        if (!cached) {
+        if (!globalCache[targetName]) {
           setErrorMsg(res.error || "خطأ أثناء تحميل كشف الحساب التفصيلي.");
         }
       }
     } catch (err: any) {
-      if (!cached) {
+      if (!globalCache[targetName]) {
         setErrorMsg("فشل جلب تفاصيل القيود المالية: " + err.message);
       }
     } finally {
@@ -334,12 +341,8 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
         setSettleTransType("payout");
         setAdjustmentType("subtract");
         
-        // Invalidate cache for this supplier
-        setLedgerCache(prev => {
-          const next = { ...prev };
-          delete next[activeSettleSupplier.name];
-          return next;
-        });
+        // Invalidate global cache for this supplier
+        delete getGlobalSuppliersStatementCache()[activeSettleSupplier.name];
 
         setActiveSettleSupplier(null);
         
@@ -347,7 +350,7 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
         await initializeData();
         // If current statement is for this supplier, refresh statement too
         if (selectedLedgerSupplier === activeSettleSupplier.name) {
-          fetchSupplierStatement(activeSettleSupplier.name);
+          fetchSupplierStatement(activeSettleSupplier.name, true);
         }
       } else {
         setErrorMsg(res.error || "عذراً، فشل تسجيل المستند المالي بالخيمة المركزية.");

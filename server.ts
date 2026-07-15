@@ -5857,8 +5857,6 @@ app.post("/api", async (req: Request, res: Response) => {
               order.courierSignature = `${order.courier} (توقيع تصفية عدم الرد ✍️)`;
             }
 
-            order.status = nextStatus;
-
             const isSuccessfullyClosed = [
               "تم التسليم",
               "تم التسليم بنجاح",
@@ -5868,12 +5866,19 @@ app.post("/api", async (req: Request, res: Response) => {
               "مرتجع جزئي"
             ].includes(oldStatus);
 
+            if (isSuccessfullyClosed) {
+              nextStatus = "تمت التصفية";
+            }
+
+            order.status = nextStatus;
+
             const shouldArchive = [
               "تم التسليم",
               "تم التسليم بنجاح",
               "تم التسليم (ناجح كاش)",
               "التسليم للمورد",
-              "تم تسليم المرتجع للمورد"
+              "تم تسليم المرتجع للمورد",
+              "تمت التصفية"
             ].includes(nextStatus);
 
             if (isSuccessfullyClosed) {
@@ -5941,19 +5946,26 @@ app.post("/api", async (req: Request, res: Response) => {
           scriptUrl &&
           scriptUrl.startsWith("http")
         ) {
-          executeProxyRequest(scriptUrl, {
-            action: "instantCourierSettlement",
-            token: "14014",
-            courier,
-            cashAmount: cashVal,
-            commissionAmount: commVal,
-            adjustmentType,
-            adjustmentAmount,
-            adjustmentDesc,
-            currentUser,
-          }).catch((err) => {
-            console.error("Async sheets write failure for instantCourierSettlement:", err);
-          });
+          try {
+            const sheetsResult = await executeProxyRequest(scriptUrl, {
+              action: "instantCourierSettlement",
+              token: "14014",
+              courier,
+              cashAmount: cashVal,
+              commissionAmount: commVal,
+              adjustmentType,
+              adjustmentAmount,
+              adjustmentDesc,
+              currentUser,
+            });
+            if (!sheetsResult || (!sheetsResult.ok && sheetsResult.success !== true)) {
+              console.error("Sheets write failure for instantCourierSettlement:", sheetsResult);
+              return err(res, "فشل تسجيل التصفية في شيت جوجل: " + (sheetsResult?.error || "خطأ غير معروف"));
+            }
+          } catch (err: any) {
+            console.error("Failed writing instantCourierSettlement to Google Sheets:", err);
+            return err(res, "فشل الاتصال بـ Google Sheets لحفظ التصفية: " + err.message);
+          }
         }
 
         return ok(res, {

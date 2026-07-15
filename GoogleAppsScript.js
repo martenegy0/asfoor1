@@ -4110,9 +4110,12 @@ function instantCourierSettlement(sheets, d) {
               rowDataMap["courierSignature"] = rowCourier + " (توقيع تصفية عدم الرد ✍️)";
             }
 
-            rowDataMap["status"] = nextStatus;
             var isSuccessfullyClosed = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي"].indexOf(oldStatus) !== -1;
-            var shouldArchive = (nextStatus === "تم التسليم" || nextStatus === "تم التسليم بنجاح" || nextStatus === "تم التسليم (ناجح كاش)" || nextStatus === "التسليم للمورد" || nextStatus === "تم تسليم المرتجع للمورد");
+            if (isSuccessfullyClosed) {
+              nextStatus = "تمت التصفية";
+            }
+            rowDataMap["status"] = nextStatus;
+            var shouldArchive = (nextStatus === "تم التسليم" || nextStatus === "تم التسليم بنجاح" || nextStatus === "تم التسليم (ناجح كاش)" || nextStatus === "التسليم للمورد" || nextStatus === "تم تسليم المرتجع للمورد" || nextStatus === "تمت التصفية");
 
             if (isSuccessfullyClosed) {
               rowDataMap["isSettled"] = "true";
@@ -4166,6 +4169,52 @@ function instantCourierSettlement(sheets, d) {
           }
         }
       }
+    }
+
+    // Clear custody/wallet columns in "users" or "couriers" sheets
+    try {
+      var searchNameLower = courier.toString().trim().toLowerCase();
+      var sheetsToZero = [sheets.users, sheets.couriers];
+      for (var s = 0; s < sheetsToZero.length; s++) {
+        var sh = sheetsToZero[s];
+        if (sh) {
+          var sLastRow = sh.getLastRow();
+          if (sLastRow >= 2) {
+            var sLastCol = sh.getLastColumn();
+            var sRange = sh.getRange(1, 1, sLastRow, sLastCol);
+            var sData = sRange.getValues();
+            var sHeaders = sData[0].map(function(h) { return h ? h.toString().trim().toLowerCase() : ""; });
+            
+            var nameColIdx = sHeaders.indexOf("name");
+            if (nameColIdx === -1) nameColIdx = sHeaders.indexOf("الاسم");
+            if (nameColIdx === -1) nameColIdx = 0;
+            
+            var colsToZero = [];
+            var targetKeys = ["العهدة الحالية", "تحصيل اليوم", "العهدة", "wallet", "current_custody", "today_collection", "العهده", "العهدة_الحالية", "تحصيل_اليوم", "الرصيد", "balance"];
+            for (var c = 0; c < sHeaders.length; c++) {
+              var hClean = sHeaders[c];
+              if (targetKeys.indexOf(hClean) !== -1 || hClean.indexOf("عهدة") !== -1 || hClean.indexOf("تحصيل") !== -1) {
+                colsToZero.push(c + 1);
+              }
+            }
+            
+            for (var rowIdx = 1; rowIdx < sData.length; rowIdx++) {
+              var valName = sData[rowIdx][nameColIdx] ? sData[rowIdx][nameColIdx].toString().trim() : "";
+              if (valName.toLowerCase() === searchNameLower) {
+                for (var z = 0; z < colsToZero.length; z++) {
+                  sh.getRange(rowIdx + 1, colsToZero[z]).setValue(0);
+                }
+                var lastClosingColIdx = sHeaders.indexOf("last_closing_date") + 1;
+                if (lastClosingColIdx > 0) {
+                  sh.getRange(rowIdx + 1, lastClosingColIdx).setValue(nowCairoStr);
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (zeroErr) {
+      Logger.log("Error zeroing courier columns in sheets: " + zeroErr.toString());
     }
 
     // Write audit log entry
