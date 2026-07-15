@@ -4197,12 +4197,26 @@ function instantCourierSettlement(sheets, d) {
                 colsToZero.push(c + 1);
               }
             }
+
+            var colsToAddComm = [];
+            var commKeys = ["العمولة", "العمولات", "العمولات المستلمة", "العمولات_المستلمة", "عمولات", "commissions", "total_commissions", "received_commissions", "commission_earned"];
+            for (var c = 0; c < sHeaders.length; c++) {
+              var hClean = sHeaders[c];
+              if (commKeys.indexOf(hClean) !== -1 || hClean.indexOf("عمول") !== -1) {
+                colsToAddComm.push(c + 1);
+              }
+            }
             
             for (var rowIdx = 1; rowIdx < sData.length; rowIdx++) {
               var valName = sData[rowIdx][nameColIdx] ? sData[rowIdx][nameColIdx].toString().trim() : "";
               if (valName.toLowerCase() === searchNameLower) {
                 for (var z = 0; z < colsToZero.length; z++) {
                   sh.getRange(rowIdx + 1, colsToZero[z]).setValue(0);
+                }
+                for (var k = 0; k < colsToAddComm.length; k++) {
+                  var cell = sh.getRange(rowIdx + 1, colsToAddComm[k]);
+                  var oldComm = Number(cell.getValue() || 0);
+                  cell.setValue(oldComm + commVal);
                 }
                 var lastClosingColIdx = sHeaders.indexOf("last_closing_date") + 1;
                 if (lastClosingColIdx > 0) {
@@ -4229,6 +4243,8 @@ function instantCourierSettlement(sheets, d) {
 
     return { 
       ok: true, 
+      success: true,
+      message: "تمت التصفية بنجاح",
       settled: settledCount, 
       msg: "✅ تم اعتماد تصفية الحساب وإغلاق العهدة اليومية للمندوب بنجاح! تم إيداع مبلغ " + cashVal + " ج.م بالخزنة كأثر فوري، وتصفير العداد لليوم الجديد."
     };

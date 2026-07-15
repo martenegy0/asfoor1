@@ -5969,6 +5969,8 @@ app.post("/api", async (req: Request, res: Response) => {
         }
 
         return ok(res, {
+          success: true,
+          message: "تمت التصفية بنجاح",
           settled: settledCount,
           msg: "✅ تم اعتماد تصفية الحساب وإغلاق العهدة اليومية للمندوب بنجاح! تم إيداع مبلغ " + cashVal + " ج.م بالخزنة كأثر فوري، وتصفير العداد لليوم الجديد."
         });

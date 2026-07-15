@@ -640,8 +640,8 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
         currentUser: user
       });
 
-      if (res && res.ok) {
-        alert(res.msg || "تم اعتماد تصفية الحساب وإغلاق العهدة اليومية للمندوب بنجاح!");
+      if (res && (res.ok === true || res.success === true)) {
+        alert(res.message || res.msg || "تمت التصفية بنجاح وتم تصفير العهدة في جداول البيانات!");
         // Invalidate cache for this courier
         const courierCache = getGlobalCourierCache();
         Object.keys(courierCache).forEach(key => {
@@ -657,7 +657,7 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
         }
         loadCourierLedger(true);
       } else {
-        alert(`⚠️ خطأ أثناء التصفية: ${res?.error || "فشل الاتصال بالخادم"}`);
+        alert(`⚠️ خطأ أثناء التصفية من السيرفر: ${res?.error || res?.message || "فشل الاتصال بالخادم أو السكريبت"}`);
       }
     } catch (err: any) {
       alert(`⚠️ فشل التصفية: ${err?.toString() || "خطأ غير متوقع"}`);
