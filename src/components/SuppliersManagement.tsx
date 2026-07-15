@@ -63,6 +63,7 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
   const [ledgerStats, setLedgerStats] = useState<any>(null);
   const [dailyLedgerData, setDailyLedgerData] = useState<any>(null);
   const [isLedgerLoading, setIsLedgerLoading] = useState(false);
+  const [ledgerCache, setLedgerCache] = useState<Record<string, { entries: any[]; stats: any; dailyLedger: any }>>({});
   const [copiedTracking, setCopiedTracking] = useState<string | null>(null);
   const [visibleEntriesLimit, setVisibleEntriesLimit] = useState<number>(50);
   const [expandedEntryIdx, setExpandedEntryIdx] = useState<number | null>(null);
@@ -232,19 +233,52 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
   async function fetchSupplierStatement(supplierName: string) {
     const targetName = supplierName || (isSupplierRole ? user : "");
     if (!targetName) return;
-    setIsLedgerLoading(true);
+
+    // If cached, immediately set the states for instant rendering
+    const cached = ledgerCache[targetName];
+    if (cached) {
+      setLedgerEntries(cached.entries);
+      setLedgerStats(cached.stats);
+      setDailyLedgerData(cached.dailyLedger);
+      // Quiet background refresh: no full screen spinner
+    } else {
+      setIsLedgerLoading(true);
+      // Clear data to prevent old figures from sticking
+      setLedgerEntries([]);
+      setLedgerStats(null);
+      setDailyLedgerData(null);
+    }
     setErrorMsg("");
+
     try {
       const res = await apiCall("getSupplierLedger", token, { supplier: targetName });
       if (res.ok) {
-        setLedgerEntries(res.entries || []);
-        setLedgerStats(res.stats || null);
-        setDailyLedgerData(res.dailyLedger || null);
+        const finalEntries = res.entries || [];
+        const finalStats = res.stats || null;
+        const finalDailyLedger = res.dailyLedger || null;
+
+        // Update the client cache
+        setLedgerCache(prev => ({
+          ...prev,
+          [targetName]: {
+            entries: finalEntries,
+            stats: finalStats,
+            dailyLedger: finalDailyLedger
+          }
+        }));
+
+        setLedgerEntries(finalEntries);
+        setLedgerStats(finalStats);
+        setDailyLedgerData(finalDailyLedger);
       } else {
-        setErrorMsg(res.error || "خطأ أثناء تحميل كشف الحساب التفصيلي.");
+        if (!cached) {
+          setErrorMsg(res.error || "خطأ أثناء تحميل كشف الحساب التفصيلي.");
+        }
       }
     } catch (err: any) {
-      setErrorMsg("فشل جلب تفاصيل القيود المالية: " + err.message);
+      if (!cached) {
+        setErrorMsg("فشل جلب تفاصيل القيود المالية: " + err.message);
+      }
     } finally {
       setIsLedgerLoading(false);
     }
@@ -299,6 +333,14 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
         setSettleDesc("");
         setSettleTransType("payout");
         setAdjustmentType("subtract");
+        
+        // Invalidate cache for this supplier
+        setLedgerCache(prev => {
+          const next = { ...prev };
+          delete next[activeSettleSupplier.name];
+          return next;
+        });
+
         setActiveSettleSupplier(null);
         
         // Refresh directories and stats

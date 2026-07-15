@@ -92,9 +92,10 @@ interface LedgerProps {
   user: string;
   activeLedgerMode?: "supplier" | "courier";
   orders?: any[];
+  onRefreshOrders?: () => void;
 }
 
-export default function Ledger({ token, role, user, activeLedgerMode, orders = [] }: LedgerProps) {
+export default function Ledger({ token, role, user, activeLedgerMode, orders = [], onRefreshOrders }: LedgerProps) {
   const isSupplier = (role || "").toString().trim() === "مورد" || (role || "").toString().trim().includes("مورد");
   const isCourier = (role || "").toString().trim() === "مندوب" || (role || "").toString().trim().includes("مندوب");
   const isFinancial = (role || "").toString().trim() === "مدير" || (role || "").toString().trim() === "محاسب" || (role || "").toString().trim().includes("مدير") || (role || "").toString().trim().includes("محاسب");
@@ -604,7 +605,10 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
         setClosingAdjType("لا يوجد");
         setClosingAdjAmount("");
         setClosingAdjDesc("");
-        window.location.reload();
+        if (onRefreshOrders) {
+          onRefreshOrders();
+        }
+        loadCourierLedger();
       } else {
         alert(`⚠️ خطأ أثناء التصفية: ${res?.error || "فشل الاتصال بالخادم"}`);
       }

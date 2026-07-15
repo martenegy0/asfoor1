@@ -196,7 +196,7 @@ export default function Dashboard({
   const [settleSuccess, setSettleSuccess] = useState(false);
 
   // Drilldown Modal Statuses
-  const [activeDrilldown, setActiveDrilldown] = useState<"street" | "warehouse" | "active_operational" | "supplier_returns" | "pending_return_settlement" | null>(null);
+  const [activeDrilldown, setActiveDrilldown] = useState<"street" | "warehouse" | "active_operational" | "supplier_returns" | "pending_return_settlement" | "market_pending" | null>(null);
   const [selectedCourierBag, setSelectedCourierBag] = useState<string | null>(null);
 
   // Fast Coordination Panel Statuses
@@ -698,6 +698,21 @@ export default function Dashboard({
     return isReturn;
   });
 
+  // 6. Market Pending Orders (الباقي للتشغيل)
+  const marketPendingOrders = allOrders.filter(o => {
+    if (o.isClosed || o.isArchived) return false;
+    const stat = (o.status || "").toString().trim();
+    const isTerminalForBacklog = [
+      "تم التسليم",
+      "تم التسليم بنجاح",
+      "تم تسليم المرتجع للمورد",
+      "مرتجع تم تسليمه للمورد",
+      "مرتجع بالمستودع",
+      "مؤرشف"
+    ].includes(stat);
+    return !isTerminalForBacklog;
+  });
+
   // -------------------------------------------------------------
   // FAST COORDINATION SUBMITTER (إرسال تحديث الأوردر للخلفية والذاكرة المحلية فوراً)
   // -------------------------------------------------------------
@@ -1144,14 +1159,25 @@ export default function Dashboard({
             {/* Card 4: Backlog / الباقي للتشغيل */}
             <div 
               id="card-market-backlog"
-              className="bg-slate-900 border border-white/5 rounded-2xl p-6 relative overflow-hidden flex flex-col justify-between min-h-[143px]"
+              onClick={() => {
+                setModalSearch("");
+                setActiveDrilldown("market_pending");
+              }}
+              className="bg-slate-900 border border-white/5 hover:border-violet-500/30 rounded-2xl p-6 relative overflow-hidden flex flex-col justify-between min-h-[143px] transition-all cursor-pointer group hover:scale-[1.02] active:scale-95 duration-200 hover:shadow-xl hover:shadow-violet-950/5"
+              title="اضغط لمعاينة تفاصيل وجرد بضائع المعلقات النشطة بالسوق"
             >
-              <div className="absolute top-2 left-2 text-violet-500/5">
-                <RefreshCw size={52} className="text-violet-500/10" />
+              <div className="absolute top-2 left-2 text-violet-500/5 group-hover:text-violet-500/10 transition-colors">
+                <RefreshCw size={52} className="text-violet-500/10 group-hover:rotate-45 transition-transform" />
               </div>
               <div>
-                <div className="text-3xl font-black text-violet-400 font-mono">{s.marketPendingCount} <span className="text-xs font-bold text-slate-400">طلب</span></div>
-                <div className="text-[11px] font-black text-slate-200 mt-1 uppercase tracking-wider">المعلقات الكلية النشطة بالسوق</div>
+                <div className="text-3xl font-black text-violet-400 font-mono flex items-baseline gap-1">
+                  <span>{s.marketPendingCount}</span>
+                  <span className="text-xs font-bold text-slate-400">طلب</span>
+                </div>
+                <div className="text-[11px] font-black text-slate-200 mt-1 uppercase tracking-wider flex items-center gap-1 font-sans">
+                  <span>المعلقات الكلية النشطة بالسوق</span>
+                  <span className="text-[8px] px-1 bg-violet-950 text-violet-400 rounded">افحص 🔍</span>
+                </div>
               </div>
               <div className="border-t border-white/5 pt-2 mt-2 flex justify-between items-center">
                 <div className="text-[9px] font-bold text-slate-400">المبلغ التقديري المتوقع</div>
@@ -1632,6 +1658,11 @@ export default function Dashboard({
                         <AlertTriangle className="text-red-400" size={16} />
                         <span>كشف الأوردرات المرتجعة بانتظار التصفية في المكتب</span>
                       </>
+                    ) : activeDrilldown === "market_pending" ? (
+                      <>
+                        <Package className="text-violet-400" size={16} />
+                        <span>جرد وجدول بضائع المعلقات الكلية النشطة بالسوق</span>
+                      </>
                     ) : (
                       <>
                         <Package className="text-orange-400" size={16} />
@@ -1648,6 +1679,8 @@ export default function Dashboard({
                       ? `تم العثور على ${supplierReturnStockOrders.length} أوردرات مرتجعة وبواقي تسليم جزئي منتظرة للموردين.`
                       : activeDrilldown === "pending_return_settlement"
                       ? `تم العثور على ${pendingReturnSettlementOrders.length} أوردرات مرتجعة معلقة بالخارج وبانتظار تصفية عهدة المناديب.`
+                      : activeDrilldown === "market_pending"
+                      ? `إجمالي المعلقات الكلية النشطة بالسوق: تم العثور على ${marketPendingOrders.length} أوردر نشط بالخارج.`
                       : `تم العثور على ${warehouseOrders.length} أوردرات في ذمة الرفوف داخل المستودع.`}
                   </p>
                 </div>
@@ -1684,6 +1717,7 @@ export default function Dashboard({
                     activeDrilldown === "active_operational" ? activeOperationalStockOrders :
                     activeDrilldown === "supplier_returns" ? supplierReturnStockOrders :
                     activeDrilldown === "pending_return_settlement" ? pendingReturnSettlementOrders :
+                    activeDrilldown === "market_pending" ? marketPendingOrders :
                     warehouseOrders;
                   const filtered = items.filter(o => {
                     if (!modalSearch.trim()) return true;
@@ -1710,65 +1744,81 @@ export default function Dashboard({
                   }
 
                   return (
-                    <div className="overflow-x-auto rounded-xl border border-white/5">
-                      <table className="w-full text-xs text-right border-collapse">
-                        <thead>
-                          <tr className="bg-slate-950 text-slate-400 font-extrabold border-b border-white/5 text-right">
-                            <th className="p-3">كود الأوردر</th>
-                            <th className="p-3">اسم المستلم</th>
-                            <th className="p-3">رقم الموبايل</th>
-                            <th className="p-3">المحافظة والمنطقة</th>
-                            <th className="p-3 text-center">المندوب</th>
-                            <th className="p-3 text-center">المورد</th>
-                            <th className="p-3 text-center">سعر المنتج</th>
-                            <th className="p-3 text-center">الحالة الحالية</th>
-                            <th className="p-3">أدوات</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {filtered.map((o, idx) => {
-                            return (
-                              <tr key={idx} className="border-b border-white/4 hover:bg-slate-950/40 transition-all">
-                                <td className="p-3 font-mono font-black text-slate-300 bg-slate-950/20">{o.tracking}</td>
-                                <td className="p-3 font-extrabold text-slate-100">{o.custName}</td>
-                                <td className="p-3 font-mono text-slate-400 font-semibold">{o.phone || o.phone2 || "—"}</td>
-                                <td className="p-3 text-slate-300 font-semibold">{o.gov} - {o.region}</td>
-                                <td className="p-3 text-center font-bold text-amber-400">{o.courier || "—"}</td>
-                                <td className="p-3 text-center font-semibold text-purple-400">{o.supplier}</td>
-                                <td className="p-3 text-center font-mono font-black text-emerald-400">
-                                  {((Number(o.prodPrice || 0) + Number(o.shipPrice || 0))).toLocaleString("ar")} ج.م
-                                </td>
-                                <td className="p-3 text-center">
-                                  <span className="px-2 py-0.5 rounded text-[10px] bg-slate-950 font-black border border-white/5">
-                                    {o.status}
-                                  </span>
-                                </td>
-                                <td className="p-3">
-                                  <div className="flex gap-1">
-                                    <a 
-                                      href={`tel:${o.phone}`}
-                                      className="p-1 px-1.5 bg-emerald-900/40 hover:bg-emerald-900/60 text-emerald-400 border border-emerald-900/40 rounded transition-all text-[10px] font-black"
-                                    >
-                                      اتصل
-                                    </a>
-                                    <button 
-                                      onClick={() => {
-                                        setCoordinatingOrder(o);
-                                        setCoordinationStatus(o.status);
-                                        setCoordinationNotes(o.notes || "");
-                                        setActiveDrilldown(null);
-                                      }}
-                                      className="p-1 px-1.5 bg-purple-900/40 hover:bg-purple-900/70 text-purple-400 border border-purple-900/40 rounded transition-all text-[10px] font-black cursor-pointer"
-                                    >
-                                      تنسيق
-                                    </button>
-                                  </div>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
+                    <div className="space-y-4">
+                      {activeDrilldown === "market_pending" && (
+                        <div className="bg-violet-950/30 border border-violet-900/40 p-4 rounded-xl flex justify-between items-center text-xs font-black">
+                          <span className="text-violet-300">📊 إجمالي قيمة بضاعة جرد المناديب الفعلي بالسوق (بدون شحن):</span>
+                          <span className="text-violet-400 text-sm font-mono bg-violet-950 px-2.5 py-1 rounded-lg">
+                            {filtered.reduce((acc, curr) => acc + Number(curr.prodPrice || 0), 0).toLocaleString("ar")} ج.م
+                          </span>
+                        </div>
+                      )}
+                      
+                      <div className="overflow-x-auto rounded-xl border border-white/5">
+                        <table className="w-full text-xs text-right border-collapse">
+                          <thead>
+                            <tr className="bg-slate-950 text-slate-400 font-extrabold border-b border-white/5 text-right">
+                              <th className="p-3">كود الأوردر</th>
+                              <th className="p-3">اسم المستلم</th>
+                              <th className="p-3">رقم الموبايل</th>
+                              <th className="p-3">المحافظة والمنطقة</th>
+                              <th className="p-3 text-center">المندوب</th>
+                              <th className="p-3 text-center">المورد</th>
+                              <th className="p-3 text-center">
+                                {activeDrilldown === "market_pending" ? "سعر المنتج (بدون شحن)" : "سعر المنتج"}
+                              </th>
+                              <th className="p-3 text-center">الحالة الحالية</th>
+                              <th className="p-3">أدوات</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {filtered.map((o, idx) => {
+                              return (
+                                <tr key={idx} className="border-b border-white/4 hover:bg-slate-950/40 transition-all">
+                                  <td className="p-3 font-mono font-black text-slate-300 bg-slate-950/20">{o.tracking}</td>
+                                  <td className="p-3 font-extrabold text-slate-100">{o.custName}</td>
+                                  <td className="p-3 font-mono text-slate-400 font-semibold">{o.phone || o.phone2 || "—"}</td>
+                                  <td className="p-3 text-slate-300 font-semibold">{o.gov} - {o.region}</td>
+                                  <td className="p-3 text-center font-bold text-amber-400">{o.courier || "—"}</td>
+                                  <td className="p-3 text-center font-semibold text-purple-400">{o.supplier}</td>
+                                  <td className="p-3 text-center font-mono font-black text-emerald-400">
+                                    {activeDrilldown === "market_pending"
+                                      ? `${Number(o.prodPrice || 0).toLocaleString("ar")} ج.م`
+                                      : `${(Number(o.prodPrice || 0) + Number(o.shipPrice || 0)).toLocaleString("ar")} ج.م`
+                                    }
+                                  </td>
+                                  <td className="p-3 text-center">
+                                    <span className="px-2 py-0.5 rounded text-[10px] bg-slate-950 font-black border border-white/5">
+                                      {o.status}
+                                    </span>
+                                  </td>
+                                  <td className="p-3">
+                                    <div className="flex gap-1">
+                                      <a 
+                                        href={`tel:${o.phone}`}
+                                        className="p-1 px-1.5 bg-emerald-900/40 hover:bg-emerald-900/60 text-emerald-400 border border-emerald-900/40 rounded transition-all text-[10px] font-black"
+                                      >
+                                        اتصل
+                                      </a>
+                                      <button 
+                                        onClick={() => {
+                                          setCoordinatingOrder(o);
+                                          setCoordinationStatus(o.status);
+                                          setCoordinationNotes(o.notes || "");
+                                          setActiveDrilldown(null);
+                                        }}
+                                        className="p-1 px-1.5 bg-purple-900/40 hover:bg-purple-900/70 text-purple-400 border border-purple-900/40 rounded transition-all text-[10px] font-black cursor-pointer"
+                                      >
+                                        تنسيق
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
                   );
                 })()}
