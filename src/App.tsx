@@ -12,7 +12,6 @@ import SuppliersManagement from "./components/SuppliersManagement";
 import OpsRoom from "./components/OpsRoom";
 import ArchivePortal from "./components/ArchivePortal";
 import { StaffPermissions } from "./components/StaffPermissions";
-import FinancialAuditClosing from "./components/FinancialAuditClosing";
 
 function computeDynamicCounters(rawList: any[], userRole: string, userLogin: string, cashboxBal: number) {
   const cleanRole = (userRole || "").toString().trim();
@@ -148,7 +147,6 @@ export default function App() {
   const [role, setRole] = useState("");
   const [perms, setPerms] = useState("");
   const [activeTab, setActiveTab] = useState<string>("orders");
-  const [closingSubTab, setClosingSubTab] = useState<"standard" | "audit">("standard");
   const [isBgSyncing, setIsBgSyncing] = useState(false);
 
   // Load and refresh orders state
@@ -1192,11 +1190,11 @@ export default function App() {
         )}
 
         {activeTab === "supplier_ledger" && showSupplierLedgerTab && (
-          <Ledger token={token} role={role} user={username} activeLedgerMode="supplier" orders={orders} onRefreshOrders={() => refreshAllData()} />
+          <Ledger token={token} role={role} user={username} activeLedgerMode="supplier" orders={orders} />
         )}
 
         {activeTab === "courier_ledger" && showCourierLedgerTab && (
-          <Ledger token={token} role={role} user={username} activeLedgerMode="courier" orders={orders} onRefreshOrders={() => refreshAllData()} />
+          <Ledger token={token} role={role} user={username} activeLedgerMode="courier" orders={orders} />
         )}
 
         {/* --- CASHBOX INTEGRATION (Only visible to accountant & admin per rules) --- */}
@@ -1370,37 +1368,7 @@ export default function App() {
 
         {/* --- DAILY CLOSING REPORT TAB (Only Accountant & Admin) --- */}
         {activeTab === "closing" && showFinanceTabs && (
-          <div className="space-y-6 px-4 py-2">
-            <div className="flex border-b border-white/5 pb-2 gap-4">
-              <button
-                onClick={() => setClosingSubTab("standard")}
-                className={`pb-2 text-xs font-black cursor-pointer transition-all border-b-2 ${
-                  closingSubTab === "standard" ? "text-amber-500 border-amber-500" : "text-slate-400 border-transparent"
-                }`}
-              >
-                📊 تقارير الإغلاق اليومي
-              </button>
-              <button
-                onClick={() => setClosingSubTab("audit")}
-                className={`pb-2 text-xs font-black cursor-pointer transition-all border-b-2 ${
-                  closingSubTab === "audit" ? "text-amber-500 border-amber-500" : "text-slate-400 border-transparent"
-                }`}
-              >
-                💼 الجرود والتقفيل المالي المركزي
-              </button>
-            </div>
-            {closingSubTab === "standard" ? (
-              <DailyClosing token={token} role={role} user={username} orders={orders} />
-            ) : (
-              <FinancialAuditClosing 
-                token={token} 
-                role={role} 
-                user={username} 
-                orders={orders} 
-                onRefreshOrders={() => refreshAllData()} 
-              />
-            )}
-          </div>
+          <DailyClosing token={token} role={role} user={username} orders={orders} />
         )}
 
         {/* --- USERS MANAGEMENT TAB (Odoo-Style RBAC & Hierarchy) --- */}

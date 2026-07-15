@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { PlusCircle, Wallet, FileText, ArrowUpRight, ArrowDownRight, Calendar, Filter, Users, ShieldAlert, Search, Eye, CheckCircle2, Clock, Loader2, ArrowLeft, Check, Shield, ChevronDown, ChevronUp, Lock, RefreshCw } from "lucide-react";
+import { PlusCircle, Wallet, FileText, ArrowUpRight, ArrowDownRight, Calendar, Filter, Users, ShieldAlert, Search, Eye, CheckCircle2, Clock, Loader2, ArrowLeft, Check, Shield, ChevronDown, ChevronUp, Lock } from "lucide-react";
 import { apiCall } from "../utils";
 
 function parseSafeNumber(val: any): number {
@@ -92,21 +92,9 @@ interface LedgerProps {
   user: string;
   activeLedgerMode?: "supplier" | "courier";
   orders?: any[];
-  onRefreshOrders?: () => void;
 }
 
-// Persistent module-level caches to avoid resetting on component unmount
-if (!(window as any).__globalSupplierLedgerCache) {
-  (window as any).__globalSupplierLedgerCache = {};
-}
-if (!(window as any).__globalCourierLedgerCache) {
-  (window as any).__globalCourierLedgerCache = {};
-}
-
-const getGlobalSupplierCache = () => (window as any).__globalSupplierLedgerCache;
-const getGlobalCourierCache = () => (window as any).__globalCourierLedgerCache;
-
-export default function Ledger({ token, role, user, activeLedgerMode, orders = [], onRefreshOrders }: LedgerProps) {
+export default function Ledger({ token, role, user, activeLedgerMode, orders = [] }: LedgerProps) {
   const isSupplier = (role || "").toString().trim() === "مورد" || (role || "").toString().trim().includes("مورد");
   const isCourier = (role || "").toString().trim() === "مندوب" || (role || "").toString().trim().includes("مندوب");
   const isFinancial = (role || "").toString().trim() === "مدير" || (role || "").toString().trim() === "محاسب" || (role || "").toString().trim().includes("مدير") || (role || "").toString().trim().includes("محاسب");
@@ -345,25 +333,22 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
   }
 
   // --- Load Supplier accounts information ---
-  async function loadSupplierLedger(force = false) {
+  async function loadSupplierLedger() {
     const targetSup = isSupplier ? user : selectedSupplier;
     if (!targetSup) return;
 
-    const cache = getGlobalSupplierCache();
-    if (!force && cache[targetSup]) {
-      const cached = cache[targetSup];
+    setFeedback("");
+
+    // Optimistically render from the client cache if available
+    if (ledgerCache[targetSup]) {
+      const cached = ledgerCache[targetSup];
       setSubscribes(cached.subscribes);
       setLiveBalance(cached.liveBalance);
       setSupplierStats(cached.stats);
       setDailyLedger(cached.dailyLedger || null);
-      setFeedback("");
-      return;
-    }
-
-    setFeedback("");
-
-    // Clear data only if forcing refresh to avoid screen flashes
-    if (force || !cache[targetSup]) {
+      setLoading(false); // No full screen blocker
+    } else {
+      // Clear data to prevent old figures from sticking
       setSubscribes([]);
       setLiveBalance(0);
       setSupplierStats(null);
@@ -391,13 +376,16 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
           rate: 0
         };
 
-        // Update global cache
-        cache[targetSup] = {
-          subscribes: finalEntries,
-          liveBalance: actualBalance,
-          stats: stats,
-          dailyLedger: res.dailyLedger || null
-        };
+        // Update the client local cache
+        setLedgerCache(prev => ({
+          ...prev,
+          [targetSup]: {
+            subscribes: finalEntries,
+            liveBalance: actualBalance,
+            stats: stats,
+            dailyLedger: res.dailyLedger || null
+          }
+        }));
 
         setSubscribes(finalEntries);
         setLiveBalance(actualBalance);
@@ -426,10 +414,8 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
         dateStr: dateStr
       });
       if (res.ok) {
-        // Invalidate cache for this supplier
-        delete getGlobalSupplierCache()[targetSup];
         // Reload ledger
-        await loadSupplierLedger(true);
+        await loadSupplierLedger();
       } else {
         alert(res.error || "فشل تصفية اليوم");
       }
@@ -441,36 +427,18 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
   }
 
   // --- Load Courier salary summaries ---
-  async function loadCourierLedger(force = false) {
-    const targetCourier = isCourier ? user : selectedCourier;
-    if (!targetCourier) return;
-
-    const cache = getGlobalCourierCache();
-    const cacheKey = `${targetCourier}_${periodFilter}`;
-    if (!force && cache[cacheKey]) {
-      const cached = cache[cacheKey];
-      setCourierSummary(cached.ledgerInfo);
-      setCourierTrs(cached.transactions || []);
-      setFeedback("");
-      return;
-    }
-
+  async function loadCourierLedger() {
+    if (!selectedCourier && !isCourier) return;
     setLoading(true);
     setFeedback("");
     try {
       const res = await apiCall("getCourierLedger", token, {
-        courier: targetCourier,
+        courier: isCourier ? user : selectedCourier,
         period: periodFilter
       });
       if (res.ok) {
         setCourierSummary(res.ledgerInfo);
         setCourierTrs(res.transactions || []);
-        
-        // Update global cache
-        cache[cacheKey] = {
-          ledgerInfo: res.ledgerInfo,
-          transactions: res.transactions || []
-        };
       } else {
         setFeedback(res.error || "خطأ أثناء تحميل كشف حساب المندوب المالية");
       }
@@ -518,12 +486,10 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
         transactionType: supplierTransType
       });
       if (res.ok) {
-        // Invalidate cache for this supplier
-        delete getGlobalSupplierCache()[selectedSupplier];
         setPayAmount("");
         setPayDesc("");
         setSupplierTransType("payout");
-        loadSupplierLedger(true);
+        loadSupplierLedger();
         alert(isWithdrawal ? "✅ تم تسجيل السحب وتسويته بالخزنة بنجاح" : "✅ تم تسجيل السداد المالي وصرفه من الخزينة بنجاح");
       } else {
         alert("⚠️ " + res.error);
@@ -599,15 +565,8 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
       .then((res) => {
         if (res && res.ok) {
           console.log("Asynchronous courier adjustment saved successfully");
-          // Invalidate cache keys for this courier
-          const courierCache = getGlobalCourierCache();
-          Object.keys(courierCache).forEach(key => {
-            if (key.startsWith(`${courier}_`)) {
-              delete courierCache[key];
-            }
-          });
           // Silently reload the actual server ledger values
-          loadCourierLedger(true);
+          loadCourierLedger();
         } else {
           console.error("Asynchronous courier adjustment sync error:", res?.error);
         }
@@ -640,24 +599,14 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
         currentUser: user
       });
 
-      if (res && (res.ok === true || res.success === true)) {
-        alert(res.message || res.msg || "تمت التصفية بنجاح وتم تصفير العهدة في جداول البيانات!");
-        // Invalidate cache for this courier
-        const courierCache = getGlobalCourierCache();
-        Object.keys(courierCache).forEach(key => {
-          if (key.startsWith(`${targetCourier}_`)) {
-            delete courierCache[key];
-          }
-        });
+      if (res && res.ok) {
+        alert(res.msg || "تم اعتماد تصفية الحساب وإغلاق العهدة اليومية للمندوب بنجاح!");
         setClosingAdjType("لا يوجد");
         setClosingAdjAmount("");
         setClosingAdjDesc("");
-        if (onRefreshOrders) {
-          onRefreshOrders();
-        }
-        loadCourierLedger(true);
+        window.location.reload();
       } else {
-        alert(`⚠️ خطأ أثناء التصفية من السيرفر: ${res?.error || res?.message || "فشل الاتصال بالخادم أو السكريبت"}`);
+        alert(`⚠️ خطأ أثناء التصفية: ${res?.error || "فشل الاتصال بالخادم"}`);
       }
     } catch (err: any) {
       alert(`⚠️ فشل التصفية: ${err?.toString() || "خطأ غير متوقع"}`);
@@ -682,14 +631,7 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
       .then((res) => {
         if (res && res.ok) {
           alert(`✅ ${res.msg || "تم سحب وتصفية عهدة المندوب بالمستودع وتبرئته بنجاح!"}`);
-          // Invalidate cache for this courier
-          const courierCache = getGlobalCourierCache();
-          Object.keys(courierCache).forEach(key => {
-            if (key.startsWith(`${selectedCourier}_`)) {
-              delete courierCache[key];
-            }
-          });
-          loadCourierLedger(true);
+          loadCourierLedger();
         } else {
           alert(`⚠️ عطل: ${res?.error || "فشل تصفية العهدة والفرز"}`);
         }
@@ -720,14 +662,7 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
       .then((res) => {
         if (res && res.ok) {
           alert(`✅ ${res.msg || "تم تقفيل وتصفير كشف الحساب الشهري للمندوب وبدء دورة جديدة بنجاح!"}`);
-          // Invalidate cache for this courier
-          const courierCache = getGlobalCourierCache();
-          Object.keys(courierCache).forEach(key => {
-            if (key.startsWith(`${selectedCourier}_`)) {
-              delete courierCache[key];
-            }
-          });
-          loadCourierLedger(true);
+          loadCourierLedger();
         } else {
           alert(`⚠️ عطل: ${res?.error || "فشل تقفيل كشف الحساب"}`);
         }
@@ -832,41 +767,20 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
       {activeLedger === "supplier" && (
         <div className="space-y-6">
           {/* Target Selector details for Financial staffs */}
-          {isFinancial ? (
+          {isFinancial && (
             <div className="flex items-center justify-between gap-4 bg-slate-900 border border-white/6 p-4 rounded-xl shadow-inner">
               <span className="text-xs font-extrabold text-slate-400 whitespace-nowrap">اختر المورد المراد عرض حسابه بالأيام:</span>
-              <div className="flex items-center gap-2">
-                <select
-                  value={selectedSupplier}
-                  onChange={(e) => setSelectedSupplier(e.target.value)}
-                  className="bg-slate-950 border border-white/10 rounded-lg px-3 py-2 text-xs font-bold text-slate-200 focus:outline-none"
-                >
-                  {allSuppliers.map((s, idx) => (
-                    <option key={idx} value={s.name}>
-                      {s.name}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  onClick={() => loadSupplierLedger(true)}
-                  disabled={loading}
-                  className="px-3 py-2 bg-emerald-950 text-emerald-400 border border-emerald-800 rounded-lg transition-all text-xs font-black flex items-center gap-1.5 cursor-pointer hover:bg-emerald-900"
-                >
-                  {loading ? <Loader2 className="animate-spin" size={13} /> : <RefreshCw size={13} />}
-                  <span>تحديث</span>
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="flex justify-end">
-              <button
-                onClick={() => loadSupplierLedger(true)}
-                disabled={loading}
-                className="px-3 py-1.5 bg-emerald-950 text-emerald-400 border border-emerald-800 rounded-lg transition-all text-xs font-black flex items-center gap-1.5 cursor-pointer hover:bg-emerald-900"
+              <select
+                value={selectedSupplier}
+                onChange={(e) => setSelectedSupplier(e.target.value)}
+                className="bg-slate-950 border border-white/10 rounded-lg px-3 py-2 text-xs font-bold text-slate-200 focus:outline-none"
               >
-                {loading ? <Loader2 className="animate-spin" size={13} /> : <RefreshCw size={13} />}
-                <span>🔄 تحديث الحساب المالي</span>
-              </button>
+                {allSuppliers.map((s, idx) => (
+                  <option key={idx} value={s.name}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
             </div>
           )}
 
@@ -1575,45 +1489,24 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
         return (
           <div className="space-y-6">
             {/* Target Courier selection detail */}
-            {isFinancial ? (
+            {isFinancial && (
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-900 border border-white/6 p-4 rounded-xl shadow-lg">
                 <div className="flex items-center gap-2">
                   <Users className="text-amber-500" size={18} />
                   <span className="text-xs font-extrabold text-slate-300">اختر المندوب لمراجعة وتصفية الحساب اليومي:</span>
                 </div>
-                <div className="flex items-center gap-2 w-full md:w-auto">
-                  <select
-                    value={selectedCourier}
-                    onChange={(e) => setSelectedCourier(e.target.value)}
-                    className="bg-slate-950 border border-white/10 rounded-lg px-3 py-2 text-xs font-bold text-slate-200 focus:outline-none w-full md:w-64 cursor-pointer hover:border-amber-500/50 transition-colors"
-                  >
-                    <option value="">-- اختر مندوباً --</option>
-                    {allCouriers.map((c, idx) => (
-                      <option key={idx} value={c.name}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    onClick={() => loadCourierLedger(true)}
-                    disabled={loading}
-                    className="px-3 py-2 bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded-lg transition-all text-xs font-black flex items-center gap-1.5 cursor-pointer hover:bg-amber-500/40"
-                  >
-                    {loading ? <Loader2 className="animate-spin" size={13} /> : <RefreshCw size={13} />}
-                    <span>تحديث</span>
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="flex justify-end">
-                <button
-                  onClick={() => loadCourierLedger(true)}
-                  disabled={loading}
-                  className="px-3 py-1.5 bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded-lg transition-all text-xs font-black flex items-center gap-1.5 cursor-pointer hover:bg-amber-500/40"
+                <select
+                  value={selectedCourier}
+                  onChange={(e) => setSelectedCourier(e.target.value)}
+                  className="bg-slate-950 border border-white/10 rounded-lg px-3 py-2 text-xs font-bold text-slate-200 focus:outline-none w-full md:w-64 cursor-pointer hover:border-amber-500/50 transition-colors"
                 >
-                  {loading ? <Loader2 className="animate-spin" size={13} /> : <RefreshCw size={13} />}
-                  <span>🔄 تحديث كشف الحساب</span>
-                </button>
+                  <option value="">-- اختر مندوباً --</option>
+                  {allCouriers.map((c, idx) => (
+                    <option key={idx} value={c.name}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
               </div>
             )}
 

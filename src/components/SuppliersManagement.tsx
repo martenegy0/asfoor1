@@ -40,12 +40,6 @@ interface LedgerEntry {
   balanceAfter: number;
 }
 
-// Persistent cache for SuppliersManagement component
-if (!(window as any).__globalSuppliersStatementCache) {
-  (window as any).__globalSuppliersStatementCache = {};
-}
-const getGlobalSuppliersStatementCache = () => (window as any).__globalSuppliersStatementCache;
-
 export default function SuppliersManagement({ token, role, orders = [], user = "" }: SuppliersManagementProps) {
   // Navigation tabs (page internal)
   const isSupplierRole = (role || "").toString().trim() === "مورد" || 
@@ -69,7 +63,6 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
   const [ledgerStats, setLedgerStats] = useState<any>(null);
   const [dailyLedgerData, setDailyLedgerData] = useState<any>(null);
   const [isLedgerLoading, setIsLedgerLoading] = useState(false);
-  const [ledgerCache, setLedgerCache] = useState<Record<string, { entries: any[]; stats: any; dailyLedger: any }>>({});
   const [copiedTracking, setCopiedTracking] = useState<string | null>(null);
   const [visibleEntriesLimit, setVisibleEntriesLimit] = useState<number>(50);
   const [expandedEntryIdx, setExpandedEntryIdx] = useState<number | null>(null);
@@ -236,56 +229,22 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
   }
 
   // Fetch detailed accounting statement for a target vendor
-  async function fetchSupplierStatement(supplierName: string, force = false) {
+  async function fetchSupplierStatement(supplierName: string) {
     const targetName = supplierName || (isSupplierRole ? user : "");
     if (!targetName) return;
-
-    const globalCache = getGlobalSuppliersStatementCache();
-    // If cached, immediately set the states for instant rendering
-    if (!force && globalCache[targetName]) {
-      const cached = globalCache[targetName];
-      setLedgerEntries(cached.entries);
-      setLedgerStats(cached.stats);
-      setDailyLedgerData(cached.dailyLedger);
-      setErrorMsg("");
-      return;
-    }
-
     setIsLedgerLoading(true);
-    // Clear data only if forcing refresh to avoid visual flicker
-    if (force || !globalCache[targetName]) {
-      setLedgerEntries([]);
-      setLedgerStats(null);
-      setDailyLedgerData(null);
-    }
     setErrorMsg("");
-
     try {
       const res = await apiCall("getSupplierLedger", token, { supplier: targetName });
       if (res.ok) {
-        const finalEntries = res.entries || [];
-        const finalStats = res.stats || null;
-        const finalDailyLedger = res.dailyLedger || null;
-
-        // Update the client global cache
-        globalCache[targetName] = {
-          entries: finalEntries,
-          stats: finalStats,
-          dailyLedger: finalDailyLedger
-        };
-
-        setLedgerEntries(finalEntries);
-        setLedgerStats(finalStats);
-        setDailyLedgerData(finalDailyLedger);
+        setLedgerEntries(res.entries || []);
+        setLedgerStats(res.stats || null);
+        setDailyLedgerData(res.dailyLedger || null);
       } else {
-        if (!globalCache[targetName]) {
-          setErrorMsg(res.error || "خطأ أثناء تحميل كشف الحساب التفصيلي.");
-        }
+        setErrorMsg(res.error || "خطأ أثناء تحميل كشف الحساب التفصيلي.");
       }
     } catch (err: any) {
-      if (!globalCache[targetName]) {
-        setErrorMsg("فشل جلب تفاصيل القيود المالية: " + err.message);
-      }
+      setErrorMsg("فشل جلب تفاصيل القيود المالية: " + err.message);
     } finally {
       setIsLedgerLoading(false);
     }
@@ -340,17 +299,13 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
         setSettleDesc("");
         setSettleTransType("payout");
         setAdjustmentType("subtract");
-        
-        // Invalidate global cache for this supplier
-        delete getGlobalSuppliersStatementCache()[activeSettleSupplier.name];
-
         setActiveSettleSupplier(null);
         
         // Refresh directories and stats
         await initializeData();
         // If current statement is for this supplier, refresh statement too
         if (selectedLedgerSupplier === activeSettleSupplier.name) {
-          fetchSupplierStatement(activeSettleSupplier.name, true);
+          fetchSupplierStatement(activeSettleSupplier.name);
         }
       } else {
         setErrorMsg(res.error || "عذراً، فشل تسجيل المستند المالي بالخيمة المركزية.");

@@ -1921,8 +1921,8 @@ function calculateSupplierBalance(sheets, supplierName, preloadedDb) {
   };
 }
 
-function getSupplierUnifiedLedger(sheets, supplierName, preloadedDb) {
-  var calc = calculateSupplierBalance(sheets, supplierName, preloadedDb);
+function getSupplierUnifiedLedger(sheets, supplierName) {
+  var calc = calculateSupplierBalance(sheets, supplierName);
   var openingBalance = calc.openingBalance;
   var supplierOrders = calc.supplierOrders;
   var returnedOrders = calc.returnedOrders;
@@ -2051,13 +2051,13 @@ function getSupplierUnifiedLedger(sheets, supplierName, preloadedDb) {
   };
 }
 
-function getSupplierLedgerData(sheets, d, preloadedDb) {
+function getSupplierLedgerData(sheets, d) {
   var supplier = d.supplier;
   if (!supplier) {
     return { ok: false, error: "اسم المورد مطلوب" };
   }
 
-  var calc = calculateSupplierBalance(sheets, supplier, preloadedDb);
+  var calc = calculateSupplierBalance(sheets, supplier);
   var supplierOrders = calc.supplierOrders;
   var adjustmentsAndPayments = calc.adjustmentsAndPayments;
 
@@ -2075,13 +2075,9 @@ function getSupplierLedgerData(sheets, d, preloadedDb) {
 
   // Settlements set
   var settlements = [];
-  if (preloadedDb && preloadedDb.supplierSettlements) {
-    settlements = preloadedDb.supplierSettlements;
-  } else {
-    try {
-      settlements = getTableData(sheets.supplierSettlements) || [];
-    } catch (e) {}
-  }
+  try {
+    settlements = getTableData(sheets.supplierSettlements) || [];
+  } catch (e) {}
   
   var settledDaysSet = {};
   settlements.forEach(function(s) {
@@ -2096,13 +2092,9 @@ function getSupplierLedgerData(sheets, d, preloadedDb) {
 
   // Also check supplierLedger for settlements
   var ledgerEntries = [];
-  if (preloadedDb && preloadedDb.supplierLedger) {
-    ledgerEntries = preloadedDb.supplierLedger;
-  } else {
-    try {
-      ledgerEntries = getTableData(sheets.supplierLedger) || [];
-    } catch (e) {}
-  }
+  try {
+    ledgerEntries = getTableData(sheets.supplierLedger) || [];
+  } catch (e) {}
   ledgerEntries.forEach(function(l) {
     var lSup = l.supplier || l["المورد"] || "";
     if (isSameSupplier(lSup, supplier)) {
@@ -2293,16 +2285,8 @@ function getSupplierLedger(sheets, d) {
     return { ok: true, ledger: ledger };
   }
 
-  // Pre-load all required database tables once to avoid duplicate Google Sheet reads (speeds up execution by 3x-5x!)
-  var preloadedDb = {
-    suppliers: getTableData(sheets.suppliers) || [],
-    allOrders: (getTableData(sheets.orders) || []).concat(getTableData(sheets.archivedOrders) || []),
-    supplierLedger: getTableData(sheets.supplierLedger) || [],
-    supplierSettlements: getTableData(sheets.supplierSettlements) || []
-  };
-
-  var unified = getSupplierUnifiedLedger(sheets, supplier, preloadedDb);
-  var dailyData = getSupplierLedgerData(sheets, d, preloadedDb);
+  var unified = getSupplierUnifiedLedger(sheets, supplier);
+  var dailyData = getSupplierLedgerData(sheets, d);
 
   return { 
     ok: true, 
@@ -4110,12 +4094,9 @@ function instantCourierSettlement(sheets, d) {
               rowDataMap["courierSignature"] = rowCourier + " (توقيع تصفية عدم الرد ✍️)";
             }
 
-            var isSuccessfullyClosed = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي"].indexOf(oldStatus) !== -1;
-            if (isSuccessfullyClosed) {
-              nextStatus = "تمت التصفية";
-            }
             rowDataMap["status"] = nextStatus;
-            var shouldArchive = (nextStatus === "تم التسليم" || nextStatus === "تم التسليم بنجاح" || nextStatus === "تم التسليم (ناجح كاش)" || nextStatus === "التسليم للمورد" || nextStatus === "تم تسليم المرتجع للمورد" || nextStatus === "تمت التصفية");
+            var isSuccessfullyClosed = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي"].indexOf(oldStatus) !== -1;
+            var shouldArchive = (nextStatus === "تم التسليم" || nextStatus === "تم التسليم بنجاح" || nextStatus === "تم التسليم (ناجح كاش)" || nextStatus === "التسليم للمورد" || nextStatus === "تم تسليم المرتجع للمورد");
 
             if (isSuccessfullyClosed) {
               rowDataMap["isSettled"] = "true";
@@ -4171,66 +4152,6 @@ function instantCourierSettlement(sheets, d) {
       }
     }
 
-    // Clear custody/wallet columns in "users" or "couriers" sheets
-    try {
-      var searchNameLower = courier.toString().trim().toLowerCase();
-      var sheetsToZero = [sheets.users, sheets.couriers];
-      for (var s = 0; s < sheetsToZero.length; s++) {
-        var sh = sheetsToZero[s];
-        if (sh) {
-          var sLastRow = sh.getLastRow();
-          if (sLastRow >= 2) {
-            var sLastCol = sh.getLastColumn();
-            var sRange = sh.getRange(1, 1, sLastRow, sLastCol);
-            var sData = sRange.getValues();
-            var sHeaders = sData[0].map(function(h) { return h ? h.toString().trim().toLowerCase() : ""; });
-            
-            var nameColIdx = sHeaders.indexOf("name");
-            if (nameColIdx === -1) nameColIdx = sHeaders.indexOf("الاسم");
-            if (nameColIdx === -1) nameColIdx = 0;
-            
-            var colsToZero = [];
-            var targetKeys = ["العهدة الحالية", "تحصيل اليوم", "العهدة", "wallet", "current_custody", "today_collection", "العهده", "العهدة_الحالية", "تحصيل_اليوم", "الرصيد", "balance"];
-            for (var c = 0; c < sHeaders.length; c++) {
-              var hClean = sHeaders[c];
-              if (targetKeys.indexOf(hClean) !== -1 || hClean.indexOf("عهدة") !== -1 || hClean.indexOf("تحصيل") !== -1) {
-                colsToZero.push(c + 1);
-              }
-            }
-
-            var colsToAddComm = [];
-            var commKeys = ["العمولة", "العمولات", "العمولات المستلمة", "العمولات_المستلمة", "عمولات", "commissions", "total_commissions", "received_commissions", "commission_earned"];
-            for (var c = 0; c < sHeaders.length; c++) {
-              var hClean = sHeaders[c];
-              if (commKeys.indexOf(hClean) !== -1 || hClean.indexOf("عمول") !== -1) {
-                colsToAddComm.push(c + 1);
-              }
-            }
-            
-            for (var rowIdx = 1; rowIdx < sData.length; rowIdx++) {
-              var valName = sData[rowIdx][nameColIdx] ? sData[rowIdx][nameColIdx].toString().trim() : "";
-              if (valName.toLowerCase() === searchNameLower) {
-                for (var z = 0; z < colsToZero.length; z++) {
-                  sh.getRange(rowIdx + 1, colsToZero[z]).setValue(0);
-                }
-                for (var k = 0; k < colsToAddComm.length; k++) {
-                  var cell = sh.getRange(rowIdx + 1, colsToAddComm[k]);
-                  var oldComm = Number(cell.getValue() || 0);
-                  cell.setValue(oldComm + commVal);
-                }
-                var lastClosingColIdx = sHeaders.indexOf("last_closing_date") + 1;
-                if (lastClosingColIdx > 0) {
-                  sh.getRange(rowIdx + 1, lastClosingColIdx).setValue(nowCairoStr);
-                }
-              }
-            }
-          }
-        }
-      }
-    } catch (zeroErr) {
-      Logger.log("Error zeroing courier columns in sheets: " + zeroErr.toString());
-    }
-
     // Write audit log entry
     appendToSheet(sheets.auditLog, ["user", "type", "dateTime", "oldVal", "newVal", "reason"], {
       user: currentUser || "إدارة الحسابات",
@@ -4243,8 +4164,6 @@ function instantCourierSettlement(sheets, d) {
 
     return { 
       ok: true, 
-      success: true,
-      message: "تمت التصفية بنجاح",
       settled: settledCount, 
       msg: "✅ تم اعتماد تصفية الحساب وإغلاق العهدة اليومية للمندوب بنجاح! تم إيداع مبلغ " + cashVal + " ج.م بالخزنة كأثر فوري، وتصفير العداد لليوم الجديد."
     };
