@@ -557,6 +557,8 @@ function writeDB(data: any): void {
   cachedDB = data;
   try {
     fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2), "utf-8");
+    // Background asynchronously sync with Supabase (Disabled in v191)
+    // syncDbToSupabase(data);
   } catch (error) {
     console.error("Error writing database:", error);
   }
@@ -1653,7 +1655,7 @@ interface CacheEntry {
 const READ_CACHE = new Map<string, CacheEntry>();
 const ACTIVE_FETCHES = new Map<string, Promise<any>>();
 const CACHE_TTL_MS = 10000; // 10 seconds cache
-let isGoogleScriptHealthy = true;
+let isGoogleScriptHealthy = true; // Powered 100% by Google Sheets Central Engine (v191)
 
 function getCacheKey(payload: any): string {
   const keyObj = {
@@ -1870,6 +1872,11 @@ async function executeProxyRequest(
 // ─────────────────────────────────────────────────────────────
 app.post("/api", async (req: Request, res: Response) => {
   try {
+    // Initialize database cache if missing
+    if (!cachedDB) {
+      readDB();
+    }
+
     const d = req.body;
     if (!d || !d.action) {
       return err(res, "Missing action parameter");
@@ -7594,6 +7601,8 @@ app.post("/api", async (req: Request, res: Response) => {
 // MIDDLEWARES & DEV SERVERS INGRESS
 // ─────────────────────────────────────────────────────────────
 async function startServer() {
+  console.log("🚀 Starting Friend Plus Logistics in Google Sheets Central Mode...");
+
   if (process.env.NODE_ENV !== "production") {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
