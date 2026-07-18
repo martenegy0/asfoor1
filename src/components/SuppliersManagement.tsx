@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { 
   Users, RefreshCw, DollarSign, Wallet, ShieldAlert, CheckCircle2, 
   ChevronRight, ArrowUpRight, ArrowDownRight, Edit3, Sparkles,
@@ -126,7 +126,7 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
     const names = new Set<string>();
     accounts.forEach(a => { if (a.name) names.add(a.name.trim()); });
     allRegisteredSuppliers.forEach(s => { if (s.name) names.add(s.name.trim()); });
-    return Array.from(names).filter(Boolean).sort();
+    return Array.from(names).filter(Boolean).sort((a, b) => a.localeCompare(b, "ar", { sensitivity: "base" }));
   }, [accounts, allRegisteredSuppliers]);
 
   // Handle supplier dashboard query details
@@ -379,13 +379,12 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
       return "pending";
     };
 
-    return ledgerEntries.filter(entry => {
-      // Date constraints
+    const normalizedSearchTerm = filterSearch.trim().toLowerCase();
+    const filtered = ledgerEntries.filter(entry => {
       const entryYMD = normalizeEntryDate(entry.date);
       if (filterStartDate && entryYMD && entryYMD < filterStartDate) return false;
       if (filterEndDate && entryYMD && entryYMD > filterEndDate) return false;
 
-      // Type Constraints
       if (filterType !== "all") {
         const typeClean = entry.type || "";
         if (filterType === "rights" && !typeClean.includes("حقوق")) return false;
@@ -394,22 +393,26 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
         if (filterType === "adjustments" && !["خصم", "سحب", "تعديل", "عكسية"].some(kw => typeClean.includes(kw))) return false;
       }
 
-      // Status Filter
       if (statusFilter !== "all") {
         const settleStatus = getEntrySettleStatus(entry);
         if (settleStatus !== statusFilter) return false;
       }
 
-      // Keyword search (tracking, description, type)
-      if (filterSearch.trim()) {
-        const kw = filterSearch.toLowerCase().trim();
+      if (normalizedSearchTerm) {
         const trackingClean = (entry.tracking || "").toString().toLowerCase();
         const descClean = (entry.desc || "").toString().toLowerCase();
         const typeClean = (entry.type || "").toString().toLowerCase();
-        if (!trackingClean.includes(kw) && !descClean.includes(kw) && !typeClean.includes(kw)) return false;
+        if (!trackingClean.includes(normalizedSearchTerm) && !descClean.includes(normalizedSearchTerm) && !typeClean.includes(normalizedSearchTerm)) return false;
       }
 
       return true;
+    });
+
+    return filtered.sort((a, b) => {
+      const dateA = normalizeEntryDate(a.date);
+      const dateB = normalizeEntryDate(b.date);
+      if (dateA && dateB && dateA !== dateB) return dateB.localeCompare(dateA);
+      return Number(b.amount || 0) - Number(a.amount || 0);
     });
   }, [ledgerEntries, filterStartDate, filterEndDate, filterType, statusFilter, filterSearch, dailyLedgerData]);
 
@@ -430,17 +433,21 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
     return accounts.reduce((sum, item) => sum + Number(item.payments || 0), 0);
   }, [accounts]);
 
+  const normalizedSearchQuery = useMemo(() => searchQuery.trim().toLowerCase(), [searchQuery]);
+
   const filteredAccounts = useMemo(() => {
+    if (!normalizedSearchQuery) return accounts;
     return accounts.filter(acc => 
-      acc.name ? acc.name.toLowerCase().includes(searchQuery.toLowerCase()) : false
+      acc.name ? acc.name.toLowerCase().includes(normalizedSearchQuery) : false
     );
-  }, [accounts, searchQuery]);
+  }, [accounts, normalizedSearchQuery]);
 
   // Pre-calculated O(1) snapshots for ALL suppliers
   const supplierSnapshots = useMemo(() => {
-    // 1. Build a fast Map of pending counts per supplier in O(Orders)
     const pendingCountsMap = new Map<string, number>();
-    (orders || []).forEach(o => {
+    const safeOrders = orders || [];
+
+    safeOrders.forEach(o => {
       const oSup = (o.supplier || o["المورد"] || "").toString().trim().toLowerCase();
       if (!oSup) return;
       const isPending = !["تم التسليم", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد", "تسليم المرتجع للمورد"].includes(o.status);
@@ -449,11 +456,10 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
       }
     });
 
-    // 2. Map accounts in O(Accounts)
     return accounts.map(acc => {
       const accNameClean = acc.name.toString().trim().toLowerCase();
       const pendingCount = pendingCountsMap.get(accNameClean) || 0;
-      
+
       return {
         name: acc.name,
         totalCollection: acc.totalCOD || 0,
@@ -461,12 +467,16 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
         pendingCount,
         phone: acc.phone || ""
       };
-    });
+    }).sort((a, b) => a.name.localeCompare(b.name, "ar", { sensitivity: "base" }));
   }, [accounts, orders]);
+
+  const visibleSupplierSnapshots = useMemo(() => {
+    return supplierSnapshots.filter(snap => !isSupplierRole || snap.name === user);
+  }, [supplierSnapshots, isSupplierRole, user]);
 
   const isAdminOrAccountant = role === "مدير" || role === "محاسب";
 
-  function handleEditSupplierClick(supplierName: string) {
+  const handleEditSupplierClick = useCallback((supplierName: string) => {
     const sup = allRegisteredSuppliers.find(s => s.name === supplierName) || 
                 accounts.find(a => a.name === supplierName);
     
@@ -476,7 +486,7 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
     setEditSupplierNotes(sup?.notes || "");
     setEditSupplierOpeningBalance(sup?.openingBalance !== undefined ? sup.openingBalance.toString() : "0");
     setIsEditModalOpen(true);
-  }
+  }, [accounts, allRegisteredSuppliers]);
 
   async function handleSaveSupplierSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -507,9 +517,9 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
   }
 
   // Statement print view trigger
-  function handlePrintStatement() {
+  const handlePrintStatement = useCallback(() => {
     window.print();
-  }
+  }, []);
 
   return (
     <div className="p-4 space-y-6 select-none font-sans text-right" id="suppliers-unified-view">
@@ -564,9 +574,9 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
             </div>
           </div>
           {/* Total Uploaded Value */}
-          <div className="bg-slate-900 border border-white/6 rounded-2xl p-4 text-right space-y-1">
+          <div className="bg-slate-900/95 border border-amber-400/20 rounded-2xl p-4 text-right space-y-2 shadow-sm shadow-black/20">
             <span className="text-[10px] text-slate-400 font-black block">📦 البضائع المرفوعة (صافي)</span>
-            <div className="text-lg font-mono font-black text-blue-450 text-blue-400">
+            <div className="text-lg font-mono font-black text-blue-400">
               {totalUploadedGoodsSystem.toLocaleString()} <span className="text-xs">ج.م</span>
             </div>
           </div>
@@ -846,9 +856,7 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
               ⚡ المراقبة الفورية والمستحقات المباشرة لكل مورد (انقر لتصفية وفرد كشف الحساب)
             </span>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-              {supplierSnapshots
-                .filter(snap => !isSupplierRole || snap.name === user)
-                .map(snap => {
+              {visibleSupplierSnapshots.map(snap => {
                   const isSelected = selectedLedgerSupplier === snap.name;
                   return (
                     <div
@@ -901,9 +909,7 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
 
           {/* Accordion List of Supplier Accounting Workspaces */}
           <div className="space-y-4">
-            {supplierSnapshots
-              .filter(snap => !isSupplierRole || snap.name === user)
-              .map(snap => {
+            {visibleSupplierSnapshots.map(snap => {
                 const isExpanded = selectedLedgerSupplier === snap.name;
                 return (
                   <div 
@@ -1334,7 +1340,7 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
                 );
               })}
 
-            {supplierSnapshots.filter(snap => !isSupplierRole || snap.name === user).length === 0 && (
+            {visibleSupplierSnapshots.length === 0 && (
               <div className="text-center py-12 text-xs text-slate-500 bg-slate-900 border border-white/6 rounded-2xl">
                 لا يوجد موردين مسجلين حالياً لعرض كشف حساب مالي.
               </div>

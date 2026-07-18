@@ -24,6 +24,33 @@ const app = express();
 const PORT = 3000;
 const DB_PATH = path.join(process.cwd(), "src", "db.json");
 
+const STRICT_ROLE_ACTIONS: Record<string, string[]> = {
+  مدير: ["dashboard", "orders", "ledger", "expenses", "staff", "all"],
+  مشرف: ["dashboard", "orders", "ledger"],
+  محاسب: ["dashboard", "ledger", "expenses"],
+  "موظف عمليات": ["dashboard", "orders"],
+  "مسؤول مرتجعات": ["dashboard", "orders", "ledger"],
+  مندوب: ["orders"],
+  مورد: ["orders", "ledger"],
+  زائر: []
+};
+
+function getStrictRoleActions(role: string): string[] {
+  const clean = (role || "").toString().trim();
+  if (!clean) return [];
+  const direct = STRICT_ROLE_ACTIONS[clean];
+  if (direct) return [...direct];
+  if (clean.includes("مندوب")) return [...STRICT_ROLE_ACTIONS["مندوب"]];
+  if (clean.includes("مورد")) return [...STRICT_ROLE_ACTIONS["مورد"]];
+  if (clean.includes("مرتجع")) return [...STRICT_ROLE_ACTIONS["مسؤول مرتجعات"]];
+  return [];
+}
+
+function hasStrictAction(role: string, action: string): boolean {
+  const actions = getStrictRoleActions(role);
+  return actions.includes(action) || actions.includes("all");
+}
+
 // Default Fallback Database to ensure successful startup & login under environments like Vercel with read-only/missing storage
 const DEFAULT_DB = {
   users: [
@@ -3497,7 +3524,11 @@ app.post("/api", async (req: Request, res: Response) => {
 
     const currentUser = sess.user;
     const currentRole = sess.role;
-
+        const strongRole = (currentRole || "").toString().trim();
+        const isStrictAdmin = strongRole === "مدير";
+        const isStrictSupervisor = strongRole === "مشرف";
+        const isStrictCourier = strongRole === "مندوب" || strongRole.includes("مندوب");
+        const isStrictSupplier = strongRole === "مورد" || strongRole.includes("مورد");
     switch (d.action) {
       // ─────────────────────────────────────────────────────────────
       // GET ORDERS
@@ -7215,6 +7246,38 @@ app.post("/api", async (req: Request, res: Response) => {
         });
       }
 
+      case "toggleStaffStatus": {
+        if (currentRole !== "مدير") {
+          return err(res, "صلاحية حصرية لمدير النظام");
+        }
+        const staffName = (d.staffName || "").toString().trim();
+        const active = (d.active || "نعم").toString().trim();
+        if (!staffName) return err(res, "اسم الموظف مفقود");
+        const staffEntry = db.staffPermissions.find((item: any) => item.name.toString().trim() === staffName);
+        if (staffEntry) {
+          staffEntry.active = active;
+        }
+        const userEntry = db.users.find((item: any) => item.name.toString().trim() === staffName);
+        if (userEntry) {
+          userEntry.active = active;
+        }
+        writeDB(db);
+        return ok(res, { msg: active === "نعم" ? "تم تفعيل الموظف بنجاح" : "تم إيقاف الموظف بنجاح" });
+      }
+
+      case "deleteStaff": {
+        if (currentRole !== "مدير") {
+          return err(res, "صلاحية حصرية لمدير النظام");
+        }
+        const staffName = (d.staffName || "").toString().trim();
+        if (!staffName) return err(res, "اسم الموظف مفقود");
+        db.staffPermissions = (db.staffPermissions || []).filter((item: any) => item.name.toString().trim() !== staffName);
+        db.users = (db.users || []).filter((item: any) => item.name.toString().trim() !== staffName);
+        db.couriers = (db.couriers || []).filter((item: any) => item.name.toString().trim() !== staffName);
+        writeDB(db);
+        return ok(res, { msg: "تم حذف الموظف بنجاح" });
+      }
+
       case "updateUser": {
         if (currentRole !== "مدير") {
           return err(res, "صلاحية حصرية لمدير النظام");
@@ -7286,7 +7349,7 @@ app.post("/api", async (req: Request, res: Response) => {
           name: staff.name.trim(),
           role: staff.role,
           pass: hashPassword(d.pass || "123456"),
-          active: "نعم",
+          active: staff.active || "نعم",
           email: staff.name.trim() + "@friendplus.com",
           perms: getPermissionsStringForStaff(staff)
         };
@@ -7295,6 +7358,7 @@ app.post("/api", async (req: Request, res: Response) => {
           db.users.push(userObj);
         } else {
           db.users[uIdx].role = staff.role;
+          db.users[uIdx].active = staff.active || db.users[uIdx].active || "نعم";
           db.users[uIdx].perms = getPermissionsStringForStaff(staff);
           if (d.pass) {
             db.users[uIdx].pass = hashPassword(d.pass);

@@ -4180,16 +4180,16 @@ function getStaffPermissions(sheets, d) {
   var cleanRole = d ? (d.currentRole || "").toString().trim() : "";
   var isAdmin = cleanRole === "مدير";
   
-  // Salary protection: Hide salary from non-admins
   var safeList = list.map(function(item) {
     var copy = {};
     for (var k in item) {
       if (k === "salary" && !isAdmin) {
-        copy[k] = ""; // strip salary
+        copy[k] = "";
       } else {
         copy[k] = item[k];
       }
     }
+    copy.active = copy.active || "نعم";
     return copy;
   });
   
@@ -4200,21 +4200,22 @@ function saveStaffPermissions(sheets, d) {
   var staff = d.staff || {};
   if (!staff.name) return { ok: false, error: "اسم الموظف مفقود" };
   
-  // Find or create in staff_permissions
+  var safeStaff = Object.assign({}, staff);
+  safeStaff.active = safeStaff.active || "نعم";
+  
   var staffIdx = findRowIndex(sheets.staffPermissions, "name", staff.name);
   if (staffIdx === -1) {
-    appendToSheet(sheets.staffPermissions, ["name", "phone", "role", "salary", "perm_dashboard", "perm_orders", "perm_ledger", "perm_expenses", "perm_staff", "supervisor_id"], staff);
+    appendToSheet(sheets.staffPermissions, ["name", "phone", "role", "salary", "perm_dashboard", "perm_orders", "perm_ledger", "perm_expenses", "perm_staff", "supervisor_id", "active"], safeStaff);
   } else {
-    updateRowByObject(sheets.staffPermissions, staffIdx, staff);
+    updateRowByObject(sheets.staffPermissions, staffIdx, safeStaff);
   }
   
-  // Make sure they have a matching login user in `users`
   var userIdx = findRowIndex(sheets.users, "name", staff.name);
   var userObj = {
     name: staff.name,
     role: staff.role,
-    active: "نعم",
-    pass: hashPassword(d.pass || "123456"), // default password if brand new
+    active: safeStaff.active || "نعم",
+    pass: hashPassword(d.pass || "123456"),
     email: staff.name + "@friendplus.com",
     perms: getPermissionsStringForStaff(staff)
   };
@@ -4224,6 +4225,7 @@ function saveStaffPermissions(sheets, d) {
   } else {
     var updateObj = {
       role: staff.role,
+      active: safeStaff.active || "نعم",
       perms: getPermissionsStringForStaff(staff)
     };
     if (d.pass) {
@@ -4258,6 +4260,61 @@ function saveStaffPermissions(sheets, d) {
   }
 
   return { ok: true, msg: "تم حفظ وتحديث بيانات وصلاحيات الموظف بنجاح" };
+}
+
+function toggleStaffStatus(sheets, d) {
+  var staffName = (d.staffName || "").toString().trim();
+  var active = (d.active || "نعم").toString().trim();
+  if (!staffName) return { ok: false, error: "اسم الموظف مفقود" };
+  var staffIdx = findRowIndex(sheets.staffPermissions, "name", staffName);
+  if (staffIdx !== -1) {
+    updateRowByObject(sheets.staffPermissions, staffIdx, { active: active });
+  }
+  var userIdx = findRowIndex(sheets.users, "name", staffName);
+  if (userIdx !== -1) {
+    updateRowByObject(sheets.users, userIdx, { active: active });
+  }
+  return { ok: true, msg: active === "نعم" ? "تم تفعيل الموظف بنجاح" : "تم إيقاف الموظف بنجاح" };
+}
+
+function deleteStaff(sheets, d) {
+  var staffName = (d.staffName || "").toString().trim();
+  if (!staffName) return { ok: false, error: "اسم الموظف مفقود" };
+  var staffSheet = sheets.staffPermissions;
+  var usersSheet = sheets.users;
+  var couriersSheet = sheets.couriers;
+  var targetRows = [];
+  var staffLastRow = staffSheet.getLastRow();
+  if (staffLastRow > 1) {
+    var staffValues = staffSheet.getRange(2, 1, staffLastRow - 1, staffSheet.getLastColumn()).getValues();
+    for (var i = 0; i < staffValues.length; i++) {
+      if ((staffValues[i][0] || "").toString().trim() === staffName) {
+        targetRows.push(i + 2);
+      }
+    }
+  }
+  for (var j = targetRows.length - 1; j >= 0; j--) {
+    staffSheet.deleteRow(targetRows[j]);
+  }
+  var userLastRow = usersSheet.getLastRow();
+  if (userLastRow > 1) {
+    var userValues = usersSheet.getRange(2, 1, userLastRow - 1, usersSheet.getLastColumn()).getValues();
+    for (var k = userValues.length - 1; k >= 0; k--) {
+      if ((userValues[k][0] || "").toString().trim() === staffName) {
+        usersSheet.deleteRow(k + 2);
+      }
+    }
+  }
+  var courierLastRow = couriersSheet.getLastRow();
+  if (courierLastRow > 1) {
+    var courierValues = couriersSheet.getRange(2, 1, courierLastRow - 1, couriersSheet.getLastColumn()).getValues();
+    for (var l = courierValues.length - 1; l >= 0; l--) {
+      if ((courierValues[l][0] || "").toString().trim() === staffName) {
+        couriersSheet.deleteRow(l + 2);
+      }
+    }
+  }
+  return { ok: true, msg: "تم حذف الموظف بنجاح" };
 }
 
 function getPermissionsStringForStaff(staff) {

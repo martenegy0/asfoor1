@@ -832,18 +832,23 @@ export default function App() {
 
   // Role permissions definitions
   const cleanRoleState = (role || "").toString().trim();
-  const isAgentState = cleanRoleState === "مندوب" || cleanRoleState.includes("مندوب");
-  const isSupplierState = cleanRoleState === "مورد" || cleanRoleState.includes("مورد");
-  const isReturnsOfficer = cleanRoleState === "مسؤول مرتجعات" || cleanRoleState.includes("مرتجع");
-  const showDashTab = role === "مدير" || role === "مشرف";
-  const showOpsRoomTab = role === "مدير";
-  const showFinanceTabs = role === "مدير" || role === "محاسب";
-  const showUsersTab = role === "مدير";
-  const showAddInputTab = role === "مدير" || role === "مشرف" || role === "موظف عمليات" || isSupplierState;
-  const showSupplierLedgerTab = isSupplierState || role === "مدير" || role === "محاسب";
-  const showCourierLedgerTab = isAgentState || role === "مدير" || role === "محاسب";
-  const showCouriersProfileTab = role === "مدير" || role === "محاسب" || role === "مشرف";
-  const showSuppliersPageTab = role === "مدير" || role === "محاسب" || role === "مشرف";
+  const normalizeRole = (value: string) => (value || "").toString().trim();
+  const isAgentState = normalizeRole(cleanRoleState) === "مندوب" || normalizeRole(cleanRoleState).includes("مندوب");
+  const isSupplierState = normalizeRole(cleanRoleState) === "مورد" || normalizeRole(cleanRoleState).includes("مورد");
+  const isReturnsOfficer = normalizeRole(cleanRoleState) === "مسؤول مرتجعات" || normalizeRole(cleanRoleState).includes("مرتجع");
+  const isStrictAdmin = normalizeRole(cleanRoleState) === "مدير";
+  const isStrictSupervisor = normalizeRole(cleanRoleState) === "مشرف";
+  const isStrictAccountant = normalizeRole(cleanRoleState) === "محاسب";
+  const isStrictOps = normalizeRole(cleanRoleState) === "موظف عمليات" || normalizeRole(cleanRoleState).includes("عمليات");
+  const showDashTab = isStrictAdmin || isStrictSupervisor;
+  const showOpsRoomTab = isStrictAdmin;
+  const showFinanceTabs = isStrictAdmin || isStrictAccountant;
+  const showUsersTab = isStrictAdmin;
+  const showAddInputTab = isStrictAdmin || isStrictSupervisor || isStrictOps || isSupplierState;
+  const showSupplierLedgerTab = isSupplierState || isStrictAdmin || isStrictAccountant;
+  const showCourierLedgerTab = isAgentState || isStrictAdmin || isStrictAccountant;
+  const showCouriersProfileTab = isStrictAdmin || isStrictAccountant || isStrictSupervisor;
+  const showSuppliersPageTab = isStrictAdmin || isStrictAccountant || isStrictSupervisor;
 
   return (
     <div className="min-h-screen flex flex-col font-sans bg-[#040813] text-[#e2e8f0] relative select-none antialiased">
@@ -878,7 +883,7 @@ export default function App() {
           <button
             onClick={() => refreshAllData()}
             disabled={loadingOrders}
-            className="p-2 text-slate-400 hover:text-slate-200 bg-slate-950 rounded-xl border border-white/6 cursor-pointer active:scale-95 transition-all text-xs flex items-center gap-1 font-bold"
+            className="p-2 text-slate-950 bg-amber-500 hover:bg-amber-400 rounded-xl border border-amber-400/40 cursor-pointer active:scale-95 transition-all text-xs flex items-center gap-1 font-black shadow-sm"
           >
             <RefreshCw size={14} className={loadingOrders ? "animate-spin" : ""} />
             <span>تحديث</span>
@@ -887,7 +892,7 @@ export default function App() {
           {/* Master Logout cleanly redirecting */}
           <button
             onClick={handleLogout}
-            className="p-2 text-red-400 hover:text-red-300 bg-slate-950 rounded-xl border border-red-950/20 cursor-pointer active:scale-95 transition-all text-xs font-bold"
+            className="p-2 text-slate-950 bg-red-500 hover:bg-red-400 rounded-xl border border-red-500/40 cursor-pointer active:scale-95 transition-all text-xs font-black shadow-sm"
           >
             <LogOut size={14} />
           </button>

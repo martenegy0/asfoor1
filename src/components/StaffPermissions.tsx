@@ -6,6 +6,7 @@ interface StaffMember {
   phone: string;
   role: string;
   salary: number | null;
+  active?: string;
   perm_dashboard: boolean | string;
   perm_orders: boolean | string;
   perm_ledger: boolean | string;
@@ -40,6 +41,7 @@ export const StaffPermissions: React.FC<StaffPermissionsProps> = React.memo(({
   const [formSalary, setFormSalary] = useState<number | "">("");
   const [formPass, setFormPass] = useState("");
   const [formSupervisorId, setFormSupervisorId] = useState("");
+  const [formActive, setFormActive] = useState<"نعم" | "لا">("نعم");
   const [permDashboard, setPermDashboard] = useState(false);
   const [permOrders, setPermOrders] = useState(false);
   const [permLedger, setPermLedger] = useState(false);
@@ -108,6 +110,7 @@ export const StaffPermissions: React.FC<StaffPermissionsProps> = React.memo(({
     setFormSalary(member.salary || "");
     setFormPass(""); // blank for existing unless editing
     setFormSupervisorId(member.supervisor_id);
+    setFormActive((member.active === "لا" ? "لا" : "نعم"));
     setPermDashboard(!!member.perm_dashboard);
     setPermOrders(!!member.perm_orders);
     setPermLedger(!!member.perm_ledger);
@@ -124,6 +127,7 @@ export const StaffPermissions: React.FC<StaffPermissionsProps> = React.memo(({
     setFormSalary("");
     setFormPass("123456");
     setFormSupervisorId("");
+    setFormActive("نعم");
     setPermDashboard(false);
     setPermOrders(true);
     setPermLedger(false);
@@ -153,13 +157,16 @@ export const StaffPermissions: React.FC<StaffPermissionsProps> = React.memo(({
       perm_ledger: permLedger ? "true" : "false",
       perm_expenses: permExpenses ? "true" : "false",
       perm_staff: permStaff ? "true" : "false",
-      supervisor_id: formSupervisorId
+      supervisor_id: formSupervisorId,
+      active: formActive
     };
 
     try {
       const res = await apiCall("saveStaffPermissions", token, {
         staff: staffPayload,
-        pass: formPass.trim() || undefined
+        pass: formPass.trim() || undefined,
+        currentRole: role,
+        currentUser: username
       });
       if (res && res.ok) {
         setSuccess(res.msg || "تم حفظ التعديلات بنجاح");
@@ -171,6 +178,55 @@ export const StaffPermissions: React.FC<StaffPermissionsProps> = React.memo(({
       }
     } catch (err: any) {
       setError("خطأ أثناء الحفظ: " + (err.message || err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleToggleActive = async (member: StaffMember) => {
+    if (!isAdmin) return;
+    const nextActive = member.active === "لا" ? "نعم" : "لا";
+    try {
+      setLoading(true);
+      const res = await apiCall("toggleStaffStatus", token, {
+        staffName: member.name,
+        active: nextActive,
+        currentRole: role,
+        currentUser: username
+      });
+      if (res && res.ok) {
+        setSuccess(res.msg || "تم تحديث حالة الموظف بنجاح");
+        fetchStaff();
+        onRefreshAll();
+      } else {
+        setError(res?.error || "فشل تحديث حالة الموظف");
+      }
+    } catch (err: any) {
+      setError("خطأ أثناء تحديث الحالة: " + (err.message || err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDelete = async (member: StaffMember) => {
+    if (!isAdmin) return;
+    if (!window.confirm(`هل أنت متأكد من حذف الموظف ${member.name} نهائياً؟`)) return;
+    try {
+      setLoading(true);
+      const res = await apiCall("deleteStaff", token, {
+        staffName: member.name,
+        currentRole: role,
+        currentUser: username
+      });
+      if (res && res.ok) {
+        setSuccess(res.msg || "تم حذف الموظف بنجاح");
+        fetchStaff();
+        onRefreshAll();
+      } else {
+        setError(res?.error || "فشل حذف الموظف");
+      }
+    } catch (err: any) {
+      setError("خطأ أثناء حذف الموظف: " + (err.message || err));
     } finally {
       setLoading(false);
     }
@@ -458,17 +514,36 @@ export const StaffPermissions: React.FC<StaffPermissionsProps> = React.memo(({
                                 <div className="text-[9px] text-slate-400 mt-0.5">مندوب توصيل نشط · هاتف: {child.phone || "—"}</div>
                               </div>
                             </div>
-                            <div className="flex items-center gap-3">
+                            <div className="flex items-center gap-2">
                               {isAdmin && child.salary !== null && (
                                 <span className="text-[10px] text-emerald-400 font-mono font-bold">الراتب: {child.salary} ج.م</span>
                               )}
                               {isAdmin && (
-                                <button
-                                  onClick={() => handleEdit(child)}
-                                  className="p-1 px-2 text-[9px] font-bold bg-slate-950 text-slate-400 rounded hover:text-white border border-white/8 cursor-pointer"
-                                >
-                                  تعديل
-                                </button>
+                                <span className={`text-[10px] font-black ${child.active === "لا" ? "text-red-400" : "text-emerald-400"}`}>
+                                  {child.active === "لا" ? "موقوف" : "نشط"}
+                                </span>
+                              )}
+                              {isAdmin && (
+                                <>
+                                  <button
+                                    onClick={() => handleToggleActive(child)}
+                                    className="p-1 px-2 text-[9px] font-bold bg-slate-950 text-slate-300 rounded hover:text-white border border-white/8 cursor-pointer"
+                                  >
+                                    {child.active === "لا" ? "تفعيل" : "إيقاف"}
+                                  </button>
+                                  <button
+                                    onClick={() => handleEdit(child)}
+                                    className="p-1 px-2 text-[9px] font-bold bg-slate-950 text-slate-400 rounded hover:text-white border border-white/8 cursor-pointer"
+                                  >
+                                    تعديل
+                                  </button>
+                                  <button
+                                    onClick={() => handleDelete(child)}
+                                    className="p-1 px-2 text-[9px] font-bold bg-red-950/30 text-red-400 rounded hover:bg-red-950/50 border border-red-900/30 cursor-pointer"
+                                  >
+                                    حذف
+                                  </button>
+                                </>
                               )}
                             </div>
                           </div>
@@ -495,17 +570,36 @@ export const StaffPermissions: React.FC<StaffPermissionsProps> = React.memo(({
                             <div className="text-[9px] text-slate-400 mt-0.5">الدور: {child.role} · هاتف: {child.phone || "—"}</div>
                           </div>
                         </div>
-                        <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-2">
                           {isAdmin && child.salary !== null && (
                             <span className="text-[10px] text-emerald-400 font-mono font-bold">الراتب: {child.salary} ج.م</span>
                           )}
                           {isAdmin && (
-                            <button
-                              onClick={() => handleEdit(child)}
-                              className="p-1 px-2 text-[9px] font-bold bg-slate-950 text-slate-400 rounded hover:text-white border border-white/8 cursor-pointer"
-                            >
-                              تعديل
-                            </button>
+                            <span className={`text-[10px] font-black ${child.active === "لا" ? "text-red-400" : "text-emerald-400"}`}>
+                              {child.active === "لا" ? "موقوف" : "نشط"}
+                            </span>
+                          )}
+                          {isAdmin && (
+                            <>
+                              <button
+                                onClick={() => handleToggleActive(child)}
+                                className="p-1 px-2 text-[9px] font-bold bg-slate-950 text-slate-300 rounded hover:text-white border border-white/8 cursor-pointer"
+                              >
+                                {child.active === "لا" ? "تفعيل" : "إيقاف"}
+                              </button>
+                              <button
+                                onClick={() => handleEdit(child)}
+                                className="p-1 px-2 text-[9px] font-bold bg-slate-950 text-slate-400 rounded hover:text-white border border-white/8 cursor-pointer"
+                              >
+                                تعديل
+                              </button>
+                              <button
+                                onClick={() => handleDelete(child)}
+                                className="p-1 px-2 text-[9px] font-bold bg-red-950/30 text-red-400 rounded hover:bg-red-950/50 border border-red-900/30 cursor-pointer"
+                              >
+                                حذف
+                              </button>
+                            </>
                           )}
                         </div>
                       </div>
