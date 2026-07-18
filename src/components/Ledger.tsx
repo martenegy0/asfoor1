@@ -132,6 +132,7 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
   const [modalSearchFilter, setModalSearchFilter] = useState<string>("");
   const [expandedDays, setExpandedDays] = useState<Record<string, boolean>>({});
   const [expandedCourierDays, setExpandedCourierDays] = useState<Record<string, boolean>>({});
+  const [timelineVisibleCount, setTimelineVisibleCount] = useState(8);
 
   const toggleDay = (dateStr: string) => {
     setExpandedDays(prev => ({ ...prev, [dateStr]: !prev[dateStr] }));
@@ -468,6 +469,10 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
       loadCourierLedger();
     }
   }, [activeLedger, selectedSupplier, selectedCourier, periodFilter, user]);
+
+  useEffect(() => {
+    setTimelineVisibleCount(8);
+  }, [selectedSupplier, daySearchQuery]);
 
   // Submit payment to supplier (Deducted from Ledger & Cashbox)
   async function handleSupplierPayout(e: React.FormEvent) {
@@ -1141,6 +1146,8 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
                     return item.date && item.date.includes(daySearchQuery);
                   });
 
+                  const visibleTimeline = finalFiltered.slice(0, timelineVisibleCount);
+
                   if (finalFiltered.length === 0) {
                     return (
                       <div className="col-span-2 bg-slate-900/50 border border-white/4 rounded-2xl py-12 text-center text-xs text-slate-405 font-bold">
@@ -1149,8 +1156,10 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
                     );
                   }
 
-                  return finalFiltered.map((item: any, idx: number) => {
-                    if (item.timelineType === "payment") {
+                  return (
+                    <>
+                      {visibleTimeline.map((item: any, idx: number) => {
+                        if (item.timelineType === "payment") {
                       const typeStr = (item.type || "").toString().trim();
                       const descStr = (item.desc || "").toString().trim();
                       

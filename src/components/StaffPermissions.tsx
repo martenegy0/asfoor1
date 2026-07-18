@@ -162,7 +162,7 @@ export const StaffPermissions: React.FC<StaffPermissionsProps> = React.memo(({
     };
 
     try {
-      const res = await apiCall("saveStaffPermissions", token, {
+      const res = await apiCall("saveStaff", token, {
         staff: staffPayload,
         pass: formPass.trim() || undefined,
         currentRole: role,
@@ -188,7 +188,7 @@ export const StaffPermissions: React.FC<StaffPermissionsProps> = React.memo(({
     const nextActive = member.active === "لا" ? "نعم" : "لا";
     try {
       setLoading(true);
-      const res = await apiCall("toggleStaffStatus", token, {
+      const res = await apiCall("toggleStaff", token, {
         staffName: member.name,
         active: nextActive,
         currentRole: role,
@@ -213,7 +213,7 @@ export const StaffPermissions: React.FC<StaffPermissionsProps> = React.memo(({
     if (!window.confirm(`هل أنت متأكد من حذف الموظف ${member.name} نهائياً؟`)) return;
     try {
       setLoading(true);
-      const res = await apiCall("deleteStaff", token, {
+      const res = await apiCall("deleteStaffMember", token, {
         staffName: member.name,
         currentRole: role,
         currentUser: username

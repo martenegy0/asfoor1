@@ -7246,6 +7246,7 @@ app.post("/api", async (req: Request, res: Response) => {
         });
       }
 
+      case "toggleStaff":
       case "toggleStaffStatus": {
         if (currentRole !== "مدير") {
           return err(res, "صلاحية حصرية لمدير النظام");
@@ -7265,6 +7266,7 @@ app.post("/api", async (req: Request, res: Response) => {
         return ok(res, { msg: active === "نعم" ? "تم تفعيل الموظف بنجاح" : "تم إيقاف الموظف بنجاح" });
       }
 
+      case "deleteStaffMember":
       case "deleteStaff": {
         if (currentRole !== "مدير") {
           return err(res, "صلاحية حصرية لمدير النظام");
@@ -7314,6 +7316,7 @@ app.post("/api", async (req: Request, res: Response) => {
         return ok(res, { staff: safeList });
       }
 
+      case "saveStaff":
       case "saveStaffPermissions": {
         if (currentRole !== "مدير") {
           return err(res, "صلاحية حصرية لمدير النظام");

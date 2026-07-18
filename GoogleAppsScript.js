@@ -208,8 +208,17 @@ function doPost(e) {
       case "getStaffPermissions":
         result = getStaffPermissions(sheets, requestData);
         break;
+      case "saveStaff":
       case "saveStaffPermissions":
         result = saveStaffPermissions(sheets, requestData);
+        break;
+      case "toggleStaff":
+      case "toggleStaffStatus":
+        result = toggleStaffStatus(sheets, requestData);
+        break;
+      case "deleteStaffMember":
+      case "deleteStaff":
+        result = deleteStaff(sheets, requestData);
         break;
       case "addUser":
       case "registerUser":
