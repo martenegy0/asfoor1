@@ -15,6 +15,34 @@
 // 🔑 توكن الحماية المركزي (يجب أن يطابق المرسل من التطبيق لضمان الأمان والخصوصية)
 const ACCESS_TOKEN = "14014"; 
 
+function hashPassword(password) {
+  if (!password) return "";
+  var rawHash = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, password, Utilities.Charset.UTF_8);
+  var hexString = "";
+  for (var i = 0; i < rawHash.length; i++) {
+    var byteValue = rawHash[i];
+    if (byteValue < 0) {
+      byteValue += 256;
+    }
+    var byteString = byteValue.toString(16);
+    if (byteString.length == 1) {
+      byteString = "0" + byteString;
+    }
+    hexString += byteString;
+  }
+  return hexString;
+}
+
+function verifyPassword(inputPass, storedPass) {
+  if (!storedPass) return false;
+  var cleanedStored = String(storedPass).trim();
+  var cleanedInput = String(inputPass).trim();
+  if (cleanedStored.length === 64 && /^[0-9a-fA-F]+$/.test(cleanedStored)) {
+    return hashPassword(cleanedInput) === cleanedStored;
+  }
+  return cleanedInput === cleanedStored;
+}
+
 /**
  * 🚀 دالة التهيئة المباشرة (تشغيل يدوي)
  * اختر هذه الدالة (setup) من القائمة المنسدلة في الأعلى واضغط على "Run" أو "تشغيل"
@@ -62,7 +90,9 @@ function doPost(e) {
     "bulkUpdate", "updateOrdersStatusBulk", "addSupplierPayment", 
     "addCourierAdjustment", "addCashbox", "addExpense", "addUser", 
     "registerUser", "updateUser", "updateCourier", "addDailyClosing",
-    "settleCourierOrders", "settleSupplierDay"
+    "settleCourierOrders", "settleSupplierDay", "requestWithdrawal",
+    "approveWithdrawal", "rejectWithdrawal", "instantCourierSettlement",
+    "saveStaffPermissions"
   ];
   
   var isWrite = writeActions.indexOf(action) !== -1;
@@ -85,7 +115,7 @@ function doPost(e) {
 
     switch (action) {
       case "getOrders":
-        result = getOrders(sheets);
+        result = getOrders(sheets, requestData);
         break;
       case "getArchivedOrders":
         result = getArchivedOrders(sheets);
@@ -151,6 +181,9 @@ function doPost(e) {
       case "settleCourierOrders":
         result = settleCourierOrders(sheets, requestData);
         break;
+      case "instantCourierSettlement":
+        result = instantCourierSettlement(sheets, requestData);
+        break;
       case "closeCourierMonth":
         result = closeCourierMonth(sheets, requestData);
         break;
@@ -172,6 +205,21 @@ function doPost(e) {
       case "getUsers":
         result = getUsers(sheets);
         break;
+      case "getStaffPermissions":
+        result = getStaffPermissions(sheets, requestData);
+        break;
+      case "saveStaff":
+      case "saveStaffPermissions":
+        result = saveStaffPermissions(sheets, requestData);
+        break;
+      case "toggleStaff":
+      case "toggleStaffStatus":
+        result = toggleStaffStatus(sheets, requestData);
+        break;
+      case "deleteStaffMember":
+      case "deleteStaff":
+        result = deleteStaff(sheets, requestData);
+        break;
       case "addUser":
       case "registerUser":
         result = registerUser(sheets, requestData);
@@ -183,7 +231,7 @@ function doPost(e) {
         result = checkPhone(sheets, requestData);
         break;
       case "getCouriers":
-        result = getCouriers(sheets);
+        result = getCouriers(sheets, requestData);
         break;
       case "updateCourier":
         result = updateCourier(sheets, requestData);
@@ -199,6 +247,18 @@ function doPost(e) {
         break;
       case "addDailyClosing":
         result = addDailyClosing(sheets, requestData);
+        break;
+      case "getWithdrawalRequests":
+        result = getWithdrawalRequests(sheets);
+        break;
+      case "requestWithdrawal":
+        result = requestWithdrawal(sheets, requestData);
+        break;
+      case "approveWithdrawal":
+        result = approveWithdrawal(sheets, requestData);
+        break;
+      case "rejectWithdrawal":
+        result = rejectWithdrawal(sheets, requestData);
         break;
       default:
         result = { ok: false, error: "الإجراء المطلوب غير مدعوم في السكريبت الحالي." };
@@ -236,13 +296,15 @@ function initSheets() {
       "tracking", "createdAt", "updatedAt", "orderDate", "supplier", "customer", 
       "phone", "phone2", "gov", "region", "address", "prodPrice", "shipPrice", 
       "totalCOD", "shipCost", "courier", "status", "prodType", "notes", "delivDate", "retDate", 
-      "addedBy", "commission", "returnShippingType", "returnQueueStatus", "returnQueueAgent", "isSettledMonth", "موقع العميل/الخريطة"
+      "addedBy", "commission", "returnShippingType", "returnQueueStatus", "returnQueueAgent", "isSettledMonth", "موقع العميل/الخريطة",
+      "originalProdPrice", "originalTotalCOD", "actualReceivedCash", "partialAmount", "isPartial", "returnSubStatus", "keptGoodsValue", "returnedGoodsValue"
     ],
     archivedOrders: [
       "tracking", "createdAt", "updatedAt", "orderDate", "supplier", "customer", 
       "phone", "phone2", "gov", "region", "address", "prodPrice", "shipPrice", 
       "totalCOD", "shipCost", "courier", "status", "prodType", "notes", "delivDate", "retDate", 
-      "addedBy", "commission", "returnShippingType", "returnQueueStatus", "returnQueueAgent", "isSettled", "is_settled", "isSettledMonth", "موقع العميل/الخريطة"
+      "addedBy", "commission", "returnShippingType", "returnQueueStatus", "returnQueueAgent", "isSettled", "is_settled", "isSettledMonth", "موقع العميل/الخريطة",
+      "originalProdPrice", "originalTotalCOD", "actualReceivedCash", "partialAmount", "isPartial", "returnSubStatus", "keptGoodsValue", "returnedGoodsValue"
     ],
     expenses: ["id", "date", "amount", "desc", "category", "addedBy", "isSettledMonth"],
     cashbox: ["date", "desc", "type", "amount", "ref", "addedBy", "isSettledMonth"],
@@ -251,7 +313,9 @@ function initSheets() {
     supplierSettlements: ["supplier", "date", "status", "settledAt", "settledBy"],
     courierLedger: ["courier", "date", "type", "tracking", "amount", "desc", "isSettledMonth"],
     auditLog: ["user", "type", "dateTime", "oldVal", "newVal", "reason"],
-    dailyClosing: ["date", "deliveredCount", "returnedCount", "totalCOD", "shippingCost", "addedBy"]
+    dailyClosing: ["date", "deliveredCount", "returnedCount", "totalCOD", "shippingCost", "addedBy"],
+    withdrawalRequests: ["id", "date", "supplier", "amount", "paymentMethod", "status", "notes"],
+    staffPermissions: ["name", "phone", "role", "salary", "perm_dashboard", "perm_orders", "perm_ledger", "perm_expenses", "perm_staff", "supervisor_id"]
   };
 
   // 🔄 قائمة مرادفات أسماء الشيتات (عربي / إنجليزي) لربط الشيتات الموجودة مسبقاً ومنع تكرارها
@@ -268,7 +332,9 @@ function initSheets() {
     supplierSettlements: ["تصفية حسابات الموردين", "تصفية الموردين", "Supplier_Settlements", "supplierSettlements"],
     courierLedger: ["كشف حساب المناديب", "حساب المناديب", "حساب المندوبين", "courierLedger"],
     auditLog: ["سجل العمليات", "سجل التدقيق", "audit.log", "auditLog"],
-    dailyClosing: ["التقفيل اليومي", "dailyClosing"]
+    dailyClosing: ["التقفيل اليومي", "dailyClosing"],
+    withdrawalRequests: ["Withdrawal_Requests", "طلبات السحب", "withdrawalRequests"],
+    staffPermissions: ["صلاحيات الموظفين", "Staff_Permissions", "staffPermissions", "staff_permissions"]
   };
 
   const sheets = {};
@@ -279,6 +345,8 @@ function initSheets() {
       fallbackName = "التقفيل اليومي";
     } else if (key === "supplierSettlements") {
       fallbackName = "Supplier_Settlements";
+    } else if (key === "withdrawalRequests") {
+      fallbackName = "Withdrawal_Requests";
     }
 
     // البحث المتقدم بالأسماء المتوقعة
@@ -446,7 +514,7 @@ function updateRowByObject(sheet, rowIndex, obj) {
 // (أ) الدوال الرئيسية للتعامل مع الأوردرات
 // ───────────────────────────────────────────────
 
-function getOrders(sheets) {
+function getOrders(sheets, d) {
   var orders = getTableData(sheets.orders) || [];
   orders.forEach(function(o) { if (o) o.isArchived = false; });
   var archived = [];
@@ -473,6 +541,24 @@ function getOrders(sheets) {
       seen[track] = true;
       uniqueMerged.push(o);
     }
+  }
+
+  // Supervisor Hierarchy Filter in Google Sheets backend
+  if (d && d.currentRole === "مشرف") {
+    var supervisorName = (d.currentUser || "").toString().trim();
+    var staffPermissionsList = getTableData(sheets.staffPermissions) || [];
+    var supervisedNames = [];
+    for (var j = 0; j < staffPermissionsList.length; j++) {
+      var item = staffPermissionsList[j];
+      if ((item.supervisor_id || "").toString().trim() === supervisorName) {
+        supervisedNames.push((item.name || "").toString().trim());
+      }
+    }
+    // Filter merged orders list to show only those assigned to supervised couriers
+    uniqueMerged = uniqueMerged.filter(function(o) {
+      var oCou = (o.courier || "").toString().trim();
+      return oCou && supervisedNames.indexOf(oCou) !== -1;
+    });
   }
   
   return { ok: true, orders: uniqueMerged };
@@ -533,16 +619,17 @@ function addOrder(sheets, d) {
     }
   }
 
-  const initialCourier = matchedCourier ? matchedCourier.name : "";
-  const initialStatus = matchedCourier ? "مُسند جديد" : "جديد";
-  const initialCommission = matchedCourier ? Number(matchedCourier.commission || 25) : 0;
+  const isSupplier = d.currentRole === "مورد" || d.role === "مورد";
+  const initialCourier = isSupplier ? "" : (matchedCourier ? matchedCourier.name : "");
+  const initialStatus = isSupplier ? "جاهز للاستلام من المورد" : (matchedCourier ? "مُسند جديد" : "جديد");
+  const initialCommission = isSupplier ? 0 : (matchedCourier ? Number(matchedCourier.commission || 25) : 0);
 
   const newOrder = {
     tracking: trackingId,
     createdAt: now(),
     updatedAt: now(),
     orderDate: o.orderDate || nowDay(),
-    supplier: o.supplier || "مورد عام",
+    supplier: isSupplier ? d.currentUser : (o.supplier || "مورد عام"),
     customer: o.customer || "",
     phone: o.phone || "",
     phone2: o.phone2 || "",
@@ -720,9 +807,10 @@ function addBulk(sheets, d) {
         }
       }
 
-      const initialCourier = matchedCourier ? matchedCourier.name : "";
-      const initialStatus = matchedCourier ? "مُسند جديد" : "جديد";
-      const initialCommission = matchedCourier ? Number(matchedCourier.commission || 25) : 0;
+      const isSupplier = d.currentRole === "مورد" || d.role === "مورد";
+      const initialCourier = isSupplier ? "" : (matchedCourier ? matchedCourier.name : "");
+      const initialStatus = isSupplier ? "جاهز للاستلام من المورد" : (matchedCourier ? "مُسند جديد" : "جديد");
+      const initialCommission = isSupplier ? 0 : (matchedCourier ? Number(matchedCourier.commission || 25) : 0);
 
       const draft = {
         tracking: o.tracking,
@@ -804,7 +892,7 @@ function updateStatus(sheets, d) {
   }
 
   if (isOps) {
-    const allowed = ["تم رد العميل وجاري التنسيق", "لا يرد - محاولة أولى/ثانية", "تحديث نتيجة الاتصال", "مؤجل", "لا يوجد رد", "جديد", "خارج مع المندوب"];
+    const allowed = ["تم رد العميل وجاري التنسيق", "لا يرد - محاولة أولى/ثانية", "تحديث نتيجة الاتصال", "مؤجل", "لا يوجد رد", "جديد", "خارج مع المندوب", "العميل لغى الأوردر / مرتجع", "مرتجع"];
     if (!allowed.includes(status)) {
       return { ok: false, error: "Unauthorized Action: غير مسموح لموظف العمليات باختيار هذه الحالة" };
     }
@@ -920,21 +1008,8 @@ function updateStatus(sheets, d) {
   }
 
   // معالجة استلام المرتجع عند المورد وحسم حسابه المالي تلقائياً
-  if (status === "التسليم للمورد" || status === "تم تسليم المرتجع للمورد") {
+  if (status === "التسليم للمورد" || status === "تم تسليم المرتجع للمورد" || status === "مرتجع تم تسليمه للمورد") {
     updateObj.retDate = now();
-    // خصم قيمة المنتج من حساب المورد لكي لا يستحق الأرباح
-    const ledgerData = getTableData(sheets.supplierLedger);
-    const dupLedger = ledgerData.find(l => l.tracking === tracking && (l.type === "مرتجع" || l.type === "مرتجع تم تسليمه للمورد"));
-    if (!dupLedger) {
-      appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
-        supplier: order.supplier,
-        date: now(),
-        type: "مرتجع تم تسليمه للمورد",
-        tracking: tracking,
-        amount: -Number(order.prodPrice || 0),
-        desc: `خصم قيمة المنتج لمرتجع تسلمه المورد: ${tracking}`
-      });
-    }
   }
 
   // معالجة الأوردرات المسلّمة (تم التسليم) وحركتها المالية بالخزنة المركزية لتجنب العجز
@@ -955,19 +1030,6 @@ function updateStatus(sheets, d) {
       desc: `عمولة تسليم الأوردر والتحصيل للأوردر: ${tracking}`
     });
 
-    const ledgerData = getTableData(sheets.supplierLedger);
-    const dupLedger = ledgerData.find(l => l.tracking === tracking && (l.type === "أوردر مستلم" || l.type === "تسليم"));
-    if (!dupLedger) {
-      const supplierShare = Number(order.prodPrice || 0) - Number(order.shipPrice || 0);
-      appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
-        supplier: order.supplier,
-        date: now(),
-        type: "أوردر مستلم",
-        tracking: tracking,
-        amount: supplierShare,
-        desc: `حقوق أوردر تم تسليمه: ${tracking} (سعر المنتج ${order.prodPrice} - شحن الشركة ${order.shipPrice})`
-      });
-    }
   }
 
   if (status === "تسليم جزئي" || status === "تسليم جزئي - معلق للجرد") {
@@ -983,9 +1045,16 @@ function updateStatus(sheets, d) {
       updateObj.originalTotalCOD = financialsBefore.totalCOD;
     }
 
+    const shipPrice = Number(order.shipPrice || financialsBefore.shipPrice || 60);
+    const original_prod_price = Number(order.originalProdPrice || financialsBefore.prodPrice);
+    const kept_goods_value = Math.max(0, pAm - shipPrice);
+    const returned_goods_value = Math.max(0, original_prod_price - kept_goods_value);
+
     updateObj.totalCOD = pAm;
     updateObj.partialAmount = pAm;
     updateObj.actualReceivedCash = pAm;
+    updateObj.keptGoodsValue = kept_goods_value;
+    updateObj.returnedGoodsValue = returned_goods_value;
     updateObj.returnQueueStatus = "مرتجع جزئي بالمستودع";
     updateObj.isPartial = true;
 
@@ -1003,19 +1072,6 @@ function updateStatus(sheets, d) {
       desc: `عمولة تسليم جزئي للأوردر: ${tracking} (المبلغ الفعلي المستلم: ${pAm} ج.م)`
     });
 
-    const ledgerData = getTableData(sheets.supplierLedger);
-    const dupLedger = ledgerData.find(l => l.tracking === tracking && (l.type === "أوردر مستلم" || l.type === "تسليم" || l.type === "أوردر مستلم جزئي"));
-    if (!dupLedger) {
-      const supplierShare = pAm;
-      appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
-        supplier: order.supplier,
-        date: now(),
-        type: "أوردر مستلم جزئي",
-        tracking: tracking,
-        amount: supplierShare,
-        desc: `حقوق توريد أوردر تسليم جزئي: ${tracking} (قيمة البضاعة المباعة الصافية: ${pAm} ج.م)`
-      });
-    }
   }
 
   if (status === "العميل رد وجاري التسليم") {
@@ -1273,7 +1329,7 @@ function bulkUpdate(sheets, d) {
   }
 
   if (isOps) {
-    const allowed = ["تم رد العميل وجاري التنسيق", "لا يرد - محاولة أولى/ثانية", "تحديث نتيجة الاتصال", "مؤجل", "لا يوجد رد", "جديد"];
+    const allowed = ["تم رد العميل وجاري التنسيق", "لا يرد - محاولة أولى/ثانية", "تحديث نتيجة الاتصال", "مؤجل", "لا يوجد رد", "جديد", "العميل لغى الأوردر / مرتجع", "مرتجع"];
     if (targetStatus && !allowed.includes(targetStatus)) {
       return { ok: false, error: "Unauthorized Action: خطأ في صلاحيات موظف العمليات لتحديث هذه الحالة جماعياً" };
     }
@@ -1478,40 +1534,10 @@ function updateOrdersStatusBulk(sheets, d) {
             desc: "عمولة تسليم الأوردر جماعياً (الدفعة المجمعة): " + tr
           });
 
-          const totalCOD = Number(order.totalCOD || 0);
-          const prodPrice = Number(order.prodPrice || 0);
-          const shipPrice = Number(order.shipPrice || 0);
-          const supplierPrice = prodPrice !== 0 ? prodPrice : (totalCOD - shipPrice);
-          const supplierName = order.supplier || "";
-          
-          if (supplierName) {
-            appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
-              supplier: supplierName,
-              date: now(),
-              type: "أوردر مستلم",
-              tracking: tr,
-              amount: supplierPrice,
-              desc: "حقوق توريد أوردر تم تسليمه جماعياً (الدفعة المجمعة): " + tr + " (بضاعة " + supplierPrice + ")"
-            });
-          }
         }
 
-        if (["مرتجع", "تم تسليم المرتجع للمورد", "التسليم للمورد"].indexOf(targetStatus) !== -1) {
+         if (["مرتجع", "تم تسليم المرتجع للمورد", "التسليم للمورد", "مرتجع تم تسليمه للمورد"].indexOf(targetStatus) !== -1) {
           updateObj.retDate = now();
-          if (targetStatus === "تم تسليم المرتجع للمورد" || targetStatus === "التسليم للمورد") {
-            const prodPrice = Number(order.prodPrice || 0);
-            const supplierName = order.supplier || "";
-            if (supplierName) {
-              appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
-                supplier: supplierName,
-                date: now(),
-                type: "مرتجع تم تسليمه للمورد",
-                tracking: tr,
-                amount: -Number(prodPrice),
-                desc: "خصم قيمة المنتج لمرتجع تسلمه المورد جماعياً (الدفعة المجمعة): " + tr
-              });
-            }
-          }
         }
 
         appendToSheet(sheets.statusHistory, ["tracking", "oldStatus", "newStatus", "updatedBy", "dateTime"], {
@@ -1811,12 +1837,33 @@ function calculateSupplierBalance(sheets, supplierName, preloadedDb) {
     var status = (o.status || "").toString().trim();
     var isPartial = o.isPartial === true || o.isPartial === "true" || ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(status) !== -1;
     if (isPartial) {
-      var soldValue = Number(o.partialAmount || o.actualReceivedCash || o["المبلغ المحصل"] || 0);
+      var shipPrice = Number(o.shipPrice || financials.shipPrice || 60);
+      var soldValue = Number(o.actualReceivedCash || o.partialAmount || o["المبلغ المحصل"] || 0);
       if (isNaN(soldValue)) soldValue = 0;
-      var unsoldPortion = financials.prodPrice - soldValue;
+      var kept_goods_value = Math.max(0, soldValue - shipPrice);
+      var unsoldPortion = financials.prodPrice - kept_goods_value;
       return sum + (unsoldPortion > 0 ? unsoldPortion : 0);
     }
     return sum + financials.prodPrice;
+  }, 0);
+
+  // 3. Kept goods value (strict rule for outstanding calculation)
+  var totalKeptGoodsValue = supplierOrders.reduce(function(sum, o) {
+    var status = (o.status || "").toString().trim();
+    var financials = getOrderFinancials(o);
+    var isDelivered = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].indexOf(status) !== -1;
+    var isPartial = o.isPartial === true || o.isPartial === "true" || ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(status) !== -1;
+    
+    if (isDelivered) {
+      return sum + financials.prodPrice;
+    } else if (isPartial) {
+      var shipPrice = Number(o.shipPrice || financials.shipPrice || 60);
+      var soldValue = Number(o.actualReceivedCash || o.partialAmount || o["المبلغ المحصل"] || 0);
+      if (isNaN(soldValue)) soldValue = 0;
+      var kept_goods_value = Math.max(0, soldValue - shipPrice);
+      return sum + kept_goods_value;
+    }
+    return sum;
   }, 0);
 
   var adjustmentsAndPayments = rawLedger.filter(isHumanPayout);
@@ -1846,12 +1893,10 @@ function calculateSupplierBalance(sheets, supplierName, preloadedDb) {
   var totalOrdersCount = supplierOrders.length;
   var deliveredOrders = supplierOrders.filter(function(o) {
     var status = (o.status || "").toString().trim();
-    return ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].indexOf(status) !== -1;
+    return ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(status) !== -1;
   });
   var deliveredOrdersCount = deliveredOrders.length;
-  var deliveredOrdersValue = deliveredOrders.reduce(function(sum, o) {
-    return sum + getOrderFinancials(o).prodPrice;
-  }, 0);
+  var deliveredOrdersValue = totalKeptGoodsValue;
 
   var rate = totalOrdersCount
     ? Math.round((deliveredOrdersCount / totalOrdersCount) * 100)
@@ -1905,50 +1950,67 @@ function getSupplierUnifiedLedger(sheets, supplierName) {
     });
   }
 
-  // B. All uploaded orders count as supplier credit immediately
+  // B. Process all orders of the supplier
   for (var i = 0; i < supplierOrders.length; i++) {
     var o = supplierOrders[i];
     var financials = getOrderFinancials(o);
     var status = (o.status || o["الحالة"] || "").toString().trim();
     var tracking = o.tracking || o["رقم التتبع"] || "";
-    var prodPriceNum = financials.prodPrice;
-
-    var orderDesc = "حقوق بضاعة أوردر رقم #" + tracking + " (صافي بضاعة: " + prodPriceNum + " ج.م - حالة الأوردر: " + status + ")";
-
-    entries.push({
-      date: o.orderDate || o.createdAt || o["تاريخ الطلب"] || "",
-      type: "حقوق بضاعة أوردر",
-      tracking: tracking,
-      amount: prodPriceNum,
-      desc: orderDesc
-    });
-  }
-
-  // C. Returned orders as debit action (negative deduction since they are delivered back to supplier)
-  for (var i = 0; i < returnedOrders.length; i++) {
-    var o = returnedOrders[i];
-    var financials = getOrderFinancials(o);
-    var tracking = o.tracking || o["رقم التتبع"] || "";
-    var status = (o.status || o["الحالة"] || "").toString().trim();
-
+    
+    var isDelivered = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].indexOf(status) !== -1;
     var isPartial = o.isPartial === true || o.isPartial === "true" || ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(status) !== -1;
-    var deductAmount = financials.prodPrice;
-    if (isPartial) {
-      var soldValue = Number(o.partialAmount || o.actualReceivedCash || o["المبلغ المحصل"] || 0);
-      if (isNaN(soldValue)) soldValue = 0;
-      var unsoldPortion = financials.prodPrice - soldValue;
-      deductAmount = unsoldPortion > 0 ? unsoldPortion : 0;
+    var isReturned = isReturnedDeliveredToSupplier(status);
+
+    if (isDelivered) {
+      var prodPriceNum = financials.prodPrice;
+      var orderDesc = "حقوق بضاعة أوردر رقم #" + tracking + " (تم التسليم بنجاح - صافي بضاعة: " + prodPriceNum + " ج.م)";
+      entries.push({
+        date: o.orderDate || o.createdAt || o["تاريخ الطلب"] || "",
+        type: "حقوق بضاعة أوردر",
+        tracking: tracking,
+        amount: prodPriceNum,
+        desc: orderDesc
+      });
+    } else if (isPartial) {
+      var shipPrice = Number(o.shipPrice || financials.shipPrice || 60);
+      var actualReceived = Number(o.actualReceivedCash || o.partialAmount || o["المبلغ المحصل"] || 0);
+      var keptValue = Math.max(0, actualReceived - shipPrice);
+      var unsoldPortion = Math.max(0, financials.prodPrice - keptValue);
+      
+      var orderDesc = "";
+      if (status === "مرتجع تم تسليمه للمورد" || status === "تم تسليم المرتجع للمورد") {
+        orderDesc = "مرتجع تم تسليمه للمورد (جزئي) أوردر رقم #" + tracking + " (تم تصفية الحركة: المحصل الفعلي الصافي " + keptValue + " ج.م، وقيمة البضاعة المرجعة " + unsoldPortion + " ج.م، مصاريف الشحن " + shipPrice + " ج.م)";
+      } else {
+        orderDesc = "حقوق بضاعة جزئي أوردر رقم #" + tracking + " (تسليم جزئي: قيمة المستلم الصافي " + keptValue + " ج.م، قيمة المرتجع المستبعد " + unsoldPortion + " ج.م، مصاريف الشحن " + shipPrice + " ج.م)";
+      }
+      entries.push({
+        date: o.orderDate || o.createdAt || o["تاريخ الطلب"] || "",
+        type: "حقوق بضاعة جزئي",
+        tracking: tracking,
+        amount: keptValue,
+        desc: orderDesc
+      });
+    } else if (isReturned) {
+      // Just log the return with 0 financial effect since it wasn't credited
+      var orderDesc = "أوردر مرتجع رقم #" + tracking + " (تم إرجاع البضاعة للمورد بالكامل - قيمة الحركة: 0 ج.م)";
+      entries.push({
+        date: o.returnDate || o.updatedAt || "",
+        type: "مرتجع مخصوم",
+        tracking: tracking,
+        amount: 0,
+        desc: orderDesc
+      });
+    } else {
+      // For in-transit/pending/postponed orders, optionally list with 0 amount
+      var orderDesc = "أوردر رقم #" + tracking + " (حالة: " + status + " - قيد المعالجة/لم يصفى بعد)";
+      entries.push({
+        date: o.orderDate || o.createdAt || "",
+        type: "أوردر معلق",
+        tracking: tracking,
+        amount: 0,
+        desc: orderDesc
+      });
     }
-
-    var returnDesc = "مرتجع مستلم للمورد أوردر رقم #" + tracking + " (قيمة المستقطع: -" + deductAmount + " ج.م - حالة: " + status + ")";
-
-    entries.push({
-      date: o.returnDate || o.updatedAt || "",
-      type: "مرتجع مخصوم",
-      tracking: tracking,
-      amount: -deductAmount,
-      desc: returnDesc
-    });
   }
 
   // D. Payouts and adjustments with corrected signs
@@ -2097,9 +2159,11 @@ function getSupplierLedgerData(sheets, d) {
         var financials = getOrderFinancials(o);
         var isPartial = o.isPartial === true || o.isPartial === "true" || ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(o.status || o["الحالة"] || "") !== -1;
         if (isPartial) {
+          var shipPrice = Number(o.shipPrice || financials.shipPrice || 60);
           var soldValue = Number(o.partialAmount || o.actualReceivedCash || o["المبلغ المحصل"] || 0);
           if (isNaN(soldValue)) soldValue = 0;
-          var unsoldPortion = financials.prodPrice - soldValue;
+          var kept_goods_value = Math.max(0, soldValue - shipPrice);
+          var unsoldPortion = financials.prodPrice - kept_goods_value;
           return sum + (unsoldPortion > 0 ? unsoldPortion : 0);
         }
         return sum + financials.prodPrice;
@@ -2134,14 +2198,15 @@ function getSupplierLedgerData(sheets, d) {
       var status = (o.status || "").toString().trim();
       var fin = getOrderFinancials(o);
       var isDelivered = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].indexOf(status) !== -1;
-      var isPartial = ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(status) !== -1;
+      var isPartial = o.isPartial === true || o.isPartial === "true" || ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(status) !== -1;
       if (isDelivered) {
         var netProduct = Number(fin.totalCOD) - Number(fin.shipPrice);
         return sum + (isNaN(netProduct) ? 0 : netProduct);
       } else if (isPartial) {
         var cash = Number(o.actualReceivedCash || o.partialAmount || o["المبلغ المحصل"] || 0);
+        var shipPrice = Number(o.shipPrice || fin.shipPrice || 60);
         if (isNaN(cash)) cash = 0;
-        return sum + cash;
+        return sum + Math.max(0, cash - shipPrice);
       }
       return sum;
     }, 0);
@@ -2185,13 +2250,14 @@ function getSupplierLedgerData(sheets, d) {
     var status = (o.status || "").toString().trim();
     var fin = getOrderFinancials(o);
     var isDelivered = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].indexOf(status) !== -1;
-    var isPartial = ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(status) !== -1;
+    var isPartial = o.isPartial === true || o.isPartial === "true" || ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].indexOf(status) !== -1;
     if (isDelivered) {
       return sum + (Number(fin.totalCOD) - Number(fin.shipPrice));
     } else if (isPartial) {
       var cash = Number(o.actualReceivedCash || o.partialAmount || o["المبلغ المحصل"] || 0);
+      var shipPrice = Number(o.shipPrice || fin.shipPrice || 60);
       if (isNaN(cash)) cash = 0;
-      return sum + cash;
+      return sum + Math.max(0, cash - shipPrice);
     }
     return sum;
   }, 0);
@@ -3133,7 +3199,7 @@ function registerUser(sheets, d) {
   appendToSheet(usersSheet, ["name", "role", "pass", "active", "email", "perms"], {
     name: name,
     role: role,
-    pass: pass,
+    pass: hashPassword(pass),
     active: active,
     email: email || "—",
     perms: assignedPerms
@@ -3201,16 +3267,36 @@ function checkPhone(sheets, d) {
   return { ok: true, exists: found };
 }
 
-function getCouriers(sheets) {
+function getCouriers(sheets, d) {
   const users = getTableData(sheets.users);
   const profiles = getTableData(sheets.couriers);
 
-  const activeUsersCouriers = users.filter(function(u) {
+  let activeUsersCouriers = users.filter(function(u) {
     const role = (u.role || "").toString().trim();
     const active = (u.active || "").toString().trim();
     const name = (u.name || "").toString().trim();
     return (role === "مندوب" || role.indexOf("مندوب") > -1 || name === "عصفور") && active !== "لا";
   });
+
+  // Supervisor Hierarchy Filter in Google Sheets backend
+  var cleanRole = d ? (d.currentRole || "").toString().trim() : "";
+  var currentUser = d ? (d.currentUser || "").toString().trim() : "";
+  var isAdmin = cleanRole === "مدير";
+
+  if (cleanRole === "مشرف" && currentUser) {
+    var staffPermissionsList = getTableData(sheets.staffPermissions) || [];
+    var supervisedNames = [];
+    for (var j = 0; j < staffPermissionsList.length; j++) {
+      var item = staffPermissionsList[j];
+      if ((item.supervisor_id || "").toString().trim() === currentUser) {
+        supervisedNames.push((item.name || "").toString().trim());
+      }
+    }
+    activeUsersCouriers = activeUsersCouriers.filter(function(u) {
+      var uName = (u.name || "").toString().trim();
+      return supervisedNames.indexOf(uName) !== -1;
+    });
+  }
 
   const list = activeUsersCouriers.map(function(u) {
     const profile = profiles.find(function(c) {
@@ -3221,9 +3307,9 @@ function getCouriers(sheets) {
       name: u.name,
       phone: profile.phone || "—",
       commission: profile.commission !== undefined ? profile.commission : 25,
-      salary: profile.salary !== undefined ? profile.salary : 3000,
+      salary: isAdmin ? (profile.salary !== undefined ? profile.salary : 3000) : null,
       region: profile.region || "—",
-      base_fixed_salary: profile.base_fixed_salary !== undefined ? profile.base_fixed_salary : (profile.salary || 3000),
+      base_fixed_salary: isAdmin ? (profile.base_fixed_salary !== undefined ? profile.base_fixed_salary : (profile.salary || 3000)) : null,
       commission_success: profile.commission_success !== undefined ? profile.commission_success : (profile.commission || 25),
       commission_return: profile.commission_return !== undefined ? profile.commission_return : 10
     };
@@ -3724,4 +3810,528 @@ function closeCourierMonth(sheets, d) {
   } finally {
     lock.releaseLock();
   }
+}
+
+function getWithdrawalRequests(sheets) {
+  try {
+    const data = getTableData(sheets.withdrawalRequests) || [];
+    return { ok: true, requests: data };
+  } catch (err) {
+    return { ok: false, error: err.toString() };
+  }
+}
+
+function requestWithdrawal(sheets, d) {
+  try {
+    const { supplier, amount, paymentMethod } = d;
+    if (!supplier || !amount || isNaN(Number(amount)) || Number(amount) <= 0) {
+      return { ok: false, error: "المبلغ المطلوب غير صحيح أو يجب أن يكون أكبر من الصفر." };
+    }
+    const val = Number(amount);
+
+    // Calculate current outstanding balance
+    const calc = calculateSupplierBalance(sheets, supplier);
+    const balance = calc.outstanding;
+
+    // Prevent request if amount exceeds outstanding balance
+    if (val > balance) {
+      return { ok: false, error: "المبلغ المطلوب (" + val + " ج.م) يتجاوز رصيدك المستحق الحالي (" + balance + " ج.م)" };
+    }
+
+    // Generate random unique ID
+    const reqId = "WDR-" + Math.floor(100000 + Math.random() * 900000);
+
+    appendToSheet(sheets.withdrawalRequests, ["id", "date", "supplier", "amount", "paymentMethod", "status", "notes"], {
+      id: reqId,
+      date: now(),
+      supplier: supplier,
+      amount: val,
+      paymentMethod: paymentMethod || "",
+      status: "معلق",
+      notes: ""
+    });
+
+    return { ok: true, message: "تم تقديم طلب سحب الرصيد بنجاح وهو قيد المراجعة حالياً." };
+  } catch (err) {
+    return { ok: false, error: err.toString() };
+  }
+}
+
+function approveWithdrawal(sheets, d) {
+  try {
+    const { id, currentUser } = d;
+    if (!id) return { ok: false, error: "معرف الطلب مفقود" };
+
+    const rowIndex = findRowIndex(sheets.withdrawalRequests, "id", id);
+    if (rowIndex === -1) {
+      return { ok: false, error: "لم يتم العثور على طلب السحب" };
+    }
+
+    const requests = getTableData(sheets.withdrawalRequests) || [];
+    const req = requests.find(r => r.id === id);
+    if (!req) {
+      return { ok: false, error: "لم يتم العثور على تفاصيل الطلب" };
+    }
+
+    if (req.status !== "معلق") {
+      return { ok: false, error: "هذا الطلب تم معالجته مسبقاً وحالته الحالية: " + req.status };
+    }
+
+    const supplierName = req.supplier;
+    const amount = Math.abs(Number(req.amount || 0));
+
+    // Deduct from supplier ledger
+    appendToSheet(sheets.supplierLedger, ["supplier", "date", "type", "tracking", "amount", "desc"], {
+      supplier: supplierName,
+      date: now(),
+      type: "دفع نقدي",
+      tracking: id,
+      amount: -amount, // MUST BE NEGATIVE [-] for payout
+      desc: "سحب رصيد مقبول (معرف الطلب: #" + id + ") عبر وسيلة الدفع: " + (req.paymentMethod || "")
+    });
+
+    // Add to cashbox
+    appendToSheet(sheets.cashbox, ["date", "desc", "type", "amount", "ref", "addedBy"], {
+      date: now(),
+      desc: "سحب رصيد مقبول (معرف الطلب: #" + id + ") للمورد: " + supplierName,
+      type: "سداد مورد",
+      amount: amount,
+      ref: id,
+      addedBy: currentUser || "إدارة الحسابات"
+    });
+
+    // Change status of the request to "مقبول"
+    updateRowByObject(sheets.withdrawalRequests, rowIndex, {
+      status: "مقبول",
+      notes: "تم الموافقة والتحويل بواسطة " + (currentUser || "الأدمن") + " في " + now()
+    });
+
+    // Add audit log entry
+    appendToSheet(sheets.auditLog, ["user", "type", "dateTime", "oldVal", "newVal", "reason"], {
+      user: currentUser || "حسابات",
+      type: "قبول طلب سحب رصيد مورد",
+      dateTime: now(),
+      oldVal: "معلق",
+      newVal: "مقبول - تم التحويل بقيمة " + amount + " ج.م للمورد " + supplierName,
+      reason: "موافقة الأدمن وصرف المبلغ من الخزينة"
+    });
+
+    return { ok: true, msg: "تمت الموافقة على طلب السحب رقم " + id + " بنجاح، وتم خصم " + amount + " ج.م من كشف حساب المورد وصرفه من الخزينة." };
+  } catch (err) {
+    return { ok: false, error: err.toString() };
+  }
+}
+
+function rejectWithdrawal(sheets, d) {
+  try {
+    const { id, reason, currentUser } = d;
+    if (!id) return { ok: false, error: "معرف الطلب مفقود" };
+
+    const rowIndex = findRowIndex(sheets.withdrawalRequests, "id", id);
+    if (rowIndex === -1) {
+      return { ok: false, error: "لم يتم العثور على طلب السحب" };
+    }
+
+    const requests = getTableData(sheets.withdrawalRequests) || [];
+    const req = requests.find(r => r.id === id);
+    if (!req) {
+      return { ok: false, error: "لم يتم العثور على تفاصيل الطلب" };
+    }
+
+    if (req.status !== "معلق") {
+      return { ok: false, error: "هذا الطلب تم معالجته مسبقاً وحالته الحالية: " + req.status };
+    }
+
+    updateRowByObject(sheets.withdrawalRequests, rowIndex, {
+      status: "مرفوض",
+      notes: (reason || "تم الرفض من الإدارة") + " (بواسطة " + (currentUser || "الأدمن") + " في " + now() + ")"
+    });
+
+    // Add audit log entry
+    appendToSheet(sheets.auditLog, ["user", "type", "dateTime", "oldVal", "newVal", "reason"], {
+      user: currentUser || "حسابات",
+      type: "رفض طلب سحب رصيد مورد",
+      dateTime: now(),
+      oldVal: "معلق",
+      newVal: "مرفوض - سبب الرفض: " + (reason || "تم الرفض من الإدارة"),
+      reason: "رفض الإدارة لطلب سحب الرصيد"
+    });
+
+    return { ok: true, msg: "تم رفض طلب السحب رقم " + id + " بنجاح." };
+  } catch (err) {
+    return { ok: false, error: err.toString() };
+  }
+}
+
+function instantCourierSettlement(sheets, d) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+
+  try {
+    var courier = d.courier;
+    var cashAmount = d.cashAmount;
+    var commissionAmount = d.commissionAmount;
+    var adjustmentType = d.adjustmentType;
+    var adjustmentAmount = d.adjustmentAmount;
+    var adjustmentDesc = d.adjustmentDesc;
+    var currentUser = d.currentUser;
+
+    if (!courier) return { ok: false, error: "المندوب غير محدد" };
+
+    var nowCairoStr = now();
+
+    // 1. If cashAmount > 0, record deposit in cashbox (Main Treasury)
+    var cashVal = Number(cashAmount || 0);
+    if (cashVal > 0) {
+      appendToSheet(sheets.cashbox, ["date", "desc", "type", "amount", "ref", "addedBy"], {
+        date: nowCairoStr,
+        desc: "تصفية كاش وإغلاق العهدة اليومية للمندوب: " + courier,
+        type: "استلام عهدة مندوب",
+        amount: cashVal,
+        ref: courier,
+        addedBy: currentUser || "إدارة الحسابات"
+      });
+    }
+
+    // 2. Record commissions earned in courierLedger as a positive entry
+    var commVal = Number(commissionAmount || 0);
+    if (commVal > 0) {
+      appendToSheet(sheets.courierLedger, ["courier", "date", "type", "tracking", "amount", "desc"], {
+        courier: courier,
+        date: nowCairoStr,
+        type: "عمولة توصيل",
+        tracking: "—",
+        amount: commVal,
+        desc: "إجمالي العمولات المستحقة لليوم المصفى"
+      });
+    }
+
+    // 3. Record adjustment if adjustmentAmount > 0
+    var adjVal = Number(adjustmentAmount || 0);
+    if (adjVal > 0 && adjustmentType) {
+      appendToSheet(sheets.courierLedger, ["courier", "date", "type", "tracking", "amount", "desc"], {
+        courier: courier,
+        date: nowCairoStr,
+        type: adjustmentType,
+        tracking: "—",
+        amount: adjustmentType === "جزاء" ? -adjVal : adjVal,
+        desc: adjustmentDesc || ("تسوية يدوية مصاحبة للتصفية اليومية - " + adjustmentType)
+      });
+
+      if (adjustmentType === "مكافأة") {
+        appendToSheet(sheets.cashbox, ["date", "desc", "type", "amount", "ref", "addedBy"], {
+          date: nowCairoStr,
+          desc: "مكافأة منصرفة للمندوب مصاحبة للتصفية اليومية: " + courier + " - " + (adjustmentDesc || ""),
+          type: "صرف",
+          amount: adjVal,
+          ref: "BONUS",
+          addedBy: currentUser || "إدارة الحسابات"
+        });
+      } else if (adjustmentType === "جزاء") {
+        appendToSheet(sheets.cashbox, ["date", "desc", "type", "amount", "ref", "addedBy"], {
+          date: nowCairoStr,
+          desc: "تسوية خصم/جزاء مستقطع مصاحب للتصفية اليومية للمندوب: " + courier + " - " + (adjustmentDesc || ""),
+          type: "استلام عهدة مندوب",
+          amount: adjVal,
+          ref: "PENALTY",
+          addedBy: currentUser || "إدارة الحسابات"
+        });
+      }
+    }
+
+    // 4. Now perform logical status settlement and archiving of active orders in Google Sheets
+    var sheet = sheets.orders;
+    var lastRow = sheet.getLastRow();
+    var settledCount = 0;
+
+    if (lastRow > 1) {
+      var lastCol = sheet.getLastColumn();
+      var dataRange = sheet.getRange(1, 1, lastRow, lastCol);
+      var data = dataRange.getValues();
+      var headers = data[0].map(function(h) { return h ? h.toString().trim() : ""; });
+
+      var trackingIdx = headers.indexOf("tracking");
+      var courierIdx = headers.indexOf("courier");
+      var statusIdx = headers.indexOf("status");
+      var commissionIdx = headers.indexOf("commission");
+      var lastCourierIdx = headers.indexOf("lastCourier");
+      var lastCommissionIdx = headers.indexOf("lastCommission");
+      var courierSignatureIdx = headers.indexOf("courierSignature");
+      var updatedAtIdx = headers.indexOf("updatedAt");
+      var isSettledIdx = headers.indexOf("isSettled");
+      var is_settledIdx = headers.indexOf("is_settled");
+      var partialAmountIdx = headers.indexOf("partialAmount");
+      var actualReceivedCashIdx = headers.indexOf("actualReceivedCash");
+
+      if (trackingIdx !== -1 && courierIdx !== -1 && statusIdx !== -1) {
+        var searchCourier = courier.toString().trim().toLowerCase();
+        var archiveSheet = sheets.archivedOrders;
+        var archiveHeaders = archiveSheet.getRange(1, 1, 1, archiveSheet.getLastColumn()).getValues()[0].map(function(h) { return h ? h.toString().trim() : ""; });
+
+        for (var r = data.length - 1; r >= 1; r--) {
+          var rowCourier = data[r][courierIdx] ? data[r][courierIdx].toString().trim() : "";
+          if (rowCourier.toLowerCase() === searchCourier) {
+            var trackingVal = data[r][trackingIdx] ? data[r][trackingIdx].toString().trim() : "";
+            var oldStatus = data[r][statusIdx] ? data[r][statusIdx].toString().trim() : "";
+            var oldCommission = data[r][commissionIdx] ? Number(data[r][commissionIdx] || 0) : 0;
+            var rowIndex = r + 1;
+
+            var rowDataMap = {};
+            for (var c = 0; c < headers.length; c++) {
+              if (headers[c]) {
+                rowDataMap[headers[c]] = data[r][c];
+              }
+            }
+
+            rowDataMap["lastCourier"] = rowCourier;
+            rowDataMap["lastCommission"] = oldCommission;
+
+            var nextStatus = oldStatus;
+            if (oldStatus === "مرتجع" || oldStatus === "مرتجع جديد") {
+              nextStatus = "مرتجع بالمستودع";
+              rowDataMap["courierSignature"] = rowCourier + " (توقيع تصفية المرتجع الميداني ✍️)";
+            } else if (oldStatus === "تسليم جزئي" || oldStatus === "مرتجع جزئي" || oldStatus === "تسليم جزئي - معلق للجرد") {
+              nextStatus = "مرتجع جزئي بالمستودع";
+              rowDataMap["returnReason"] = "مرتجع جزئي متبقي";
+              rowDataMap["returnSubStatus"] = "بضاعة متبقية من تسليم جزئي";
+              rowDataMap["courierSignature"] = rowCourier + " (توقيع تصفية المرتجع الجزئي ✍️)";
+            } else if (oldStatus === "مؤجل" || oldStatus === "Delayed" || oldStatus === "مؤجل من المندوب" || oldStatus === "مؤجل بناءً على طلب العميل") {
+              nextStatus = "مؤجل بالمستودع";
+              rowDataMap["courierSignature"] = rowCourier + " (توقيع تصفية المؤجل ✍️)";
+            } else if (oldStatus === "لا يوجد رد" || oldStatus === "العميل لا يرد" || oldStatus === "No Answer" || oldStatus === "العميل لم يقم بالرد") {
+              nextStatus = "لا يوجد رد بالمستودع";
+              rowDataMap["courierSignature"] = rowCourier + " (توقيع تصفية عدم الرد ✍️)";
+            }
+
+            rowDataMap["status"] = nextStatus;
+            var isSuccessfullyClosed = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي"].indexOf(oldStatus) !== -1;
+            var shouldArchive = (nextStatus === "تم التسليم" || nextStatus === "تم التسليم بنجاح" || nextStatus === "تم التسليم (ناجح كاش)" || nextStatus === "التسليم للمورد" || nextStatus === "تم تسليم المرتجع للمورد");
+
+            if (isSuccessfullyClosed) {
+              rowDataMap["isSettled"] = "true";
+              rowDataMap["is_settled"] = "true";
+              if (!shouldArchive) {
+                rowDataMap["courier"] = "";
+                rowDataMap["commission"] = 0;
+              }
+            } else {
+              rowDataMap["courier"] = "";
+              rowDataMap["commission"] = 0;
+              rowDataMap["isSettled"] = "false";
+              rowDataMap["is_settled"] = "false";
+            }
+            rowDataMap["updatedAt"] = nowCairoStr;
+
+            // Record status history event
+            appendToSheet(sheets.statusHistory, ["tracking", "oldStatus", "newStatus", "updatedBy", "dateTime"], {
+              tracking: trackingVal,
+              oldStatus: oldStatus,
+              newStatus: nextStatus,
+              updatedBy: currentUser || "إدارة",
+              dateTime: nowCairoStr
+            });
+
+            if (shouldArchive) {
+              var archiveRowValues = [];
+              for (var h = 0; h < archiveHeaders.length; h++) {
+                var headerName = archiveHeaders[h];
+                var val = rowDataMap[headerName] !== undefined ? rowDataMap[headerName] : "";
+                archiveRowValues.push(val);
+              }
+              archiveSheet.appendRow(archiveRowValues);
+              
+              var lastArchRow = archiveSheet.getLastRow();
+              var trColIdx = archiveHeaders.indexOf("tracking") + 1;
+              var confirmTracking = "";
+              if (trColIdx > 0 && lastArchRow > 0) {
+                confirmTracking = archiveSheet.getRange(lastArchRow, trColIdx).getValue().toString().trim();
+              }
+
+              if (confirmTracking.toUpperCase() === trackingVal.toUpperCase()) {
+                sheet.deleteRow(rowIndex);
+                settledCount++;
+              } else {
+                updateRowByObject(sheet, rowIndex, rowDataMap);
+              }
+            } else {
+              updateRowByObject(sheet, rowIndex, rowDataMap);
+            }
+          }
+        }
+      }
+    }
+
+    // Write audit log entry
+    appendToSheet(sheets.auditLog, ["user", "type", "dateTime", "oldVal", "newVal", "reason"], {
+      user: currentUser || "إدارة الحسابات",
+      type: "تصفية عهدة يومية فورية",
+      dateTime: nowCairoStr,
+      oldVal: "عامل: " + courier,
+      newVal: "كاش: " + cashVal + " | عمولة: " + commVal,
+      reason: "اعتماد تصفية الحساب وإغلاق العهدة اليومية"
+    });
+
+    return { 
+      ok: true, 
+      settled: settledCount, 
+      msg: "✅ تم اعتماد تصفية الحساب وإغلاق العهدة اليومية للمندوب بنجاح! تم إيداع مبلغ " + cashVal + " ج.م بالخزنة كأثر فوري، وتصفير العداد لليوم الجديد."
+    };
+
+  } catch (e) {
+    return { ok: false, error: "خطأ في سكريبت جوجل شيت أثناء التصفية الفورية: " + e.toString() };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function getStaffPermissions(sheets, d) {
+  var list = getTableData(sheets.staffPermissions) || [];
+  var cleanRole = d ? (d.currentRole || "").toString().trim() : "";
+  var isAdmin = cleanRole === "مدير";
+  
+  var safeList = list.map(function(item) {
+    var copy = {};
+    for (var k in item) {
+      if (k === "salary" && !isAdmin) {
+        copy[k] = "";
+      } else {
+        copy[k] = item[k];
+      }
+    }
+    copy.active = copy.active || "نعم";
+    return copy;
+  });
+  
+  return { ok: true, staff: safeList };
+}
+
+function saveStaffPermissions(sheets, d) {
+  var staff = d.staff || {};
+  if (!staff.name) return { ok: false, error: "اسم الموظف مفقود" };
+  
+  var safeStaff = Object.assign({}, staff);
+  safeStaff.active = safeStaff.active || "نعم";
+  
+  var staffIdx = findRowIndex(sheets.staffPermissions, "name", staff.name);
+  if (staffIdx === -1) {
+    appendToSheet(sheets.staffPermissions, ["name", "phone", "role", "salary", "perm_dashboard", "perm_orders", "perm_ledger", "perm_expenses", "perm_staff", "supervisor_id", "active"], safeStaff);
+  } else {
+    updateRowByObject(sheets.staffPermissions, staffIdx, safeStaff);
+  }
+  
+  var userIdx = findRowIndex(sheets.users, "name", staff.name);
+  var userObj = {
+    name: staff.name,
+    role: staff.role,
+    active: safeStaff.active || "نعم",
+    pass: hashPassword(d.pass || "123456"),
+    email: staff.name + "@friendplus.com",
+    perms: getPermissionsStringForStaff(staff)
+  };
+  
+  if (userIdx === -1) {
+    appendToSheet(sheets.users, ["name", "role", "pass", "active", "email", "perms"], userObj);
+  } else {
+    var updateObj = {
+      role: staff.role,
+      active: safeStaff.active || "نعم",
+      perms: getPermissionsStringForStaff(staff)
+    };
+    if (d.pass) {
+      updateObj.pass = hashPassword(d.pass);
+    }
+    updateRowByObject(sheets.users, userIdx, updateObj);
+  }
+
+  // Also update or create courier profile if the role is "مندوب"
+  var roleLower = (staff.role || "").toString().toLowerCase();
+  if (roleLower === "مندوب" || roleLower.indexOf("مندوب") > -1) {
+    var courierIdx = findRowIndex(sheets.couriers, "name", staff.name);
+    var courierObj = {
+      name: staff.name,
+      phone: staff.phone,
+      salary: staff.salary || 3000,
+      base_fixed_salary: staff.salary || 3000,
+      commission: 25,
+      commission_success: 25,
+      commission_return: 10,
+      region: "—"
+    };
+    if (courierIdx === -1) {
+      appendToSheet(sheets.couriers, ["name", "phone", "commission", "salary", "region", "base_fixed_salary", "commission_success", "commission_return", "hire_date", "last_closing_date"], courierObj);
+    } else {
+      updateRowByObject(sheets.couriers, courierIdx, {
+        phone: staff.phone,
+        salary: staff.salary || 3000,
+        base_fixed_salary: staff.salary || 3000
+      });
+    }
+  }
+
+  return { ok: true, msg: "تم حفظ وتحديث بيانات وصلاحيات الموظف بنجاح" };
+}
+
+function toggleStaffStatus(sheets, d) {
+  var staffName = (d.staffName || "").toString().trim();
+  var active = (d.active || "نعم").toString().trim();
+  if (!staffName) return { ok: false, error: "اسم الموظف مفقود" };
+  var staffIdx = findRowIndex(sheets.staffPermissions, "name", staffName);
+  if (staffIdx !== -1) {
+    updateRowByObject(sheets.staffPermissions, staffIdx, { active: active });
+  }
+  var userIdx = findRowIndex(sheets.users, "name", staffName);
+  if (userIdx !== -1) {
+    updateRowByObject(sheets.users, userIdx, { active: active });
+  }
+  return { ok: true, msg: active === "نعم" ? "تم تفعيل الموظف بنجاح" : "تم إيقاف الموظف بنجاح" };
+}
+
+function deleteStaff(sheets, d) {
+  var staffName = (d.staffName || "").toString().trim();
+  if (!staffName) return { ok: false, error: "اسم الموظف مفقود" };
+  var staffSheet = sheets.staffPermissions;
+  var usersSheet = sheets.users;
+  var couriersSheet = sheets.couriers;
+  var targetRows = [];
+  var staffLastRow = staffSheet.getLastRow();
+  if (staffLastRow > 1) {
+    var staffValues = staffSheet.getRange(2, 1, staffLastRow - 1, staffSheet.getLastColumn()).getValues();
+    for (var i = 0; i < staffValues.length; i++) {
+      if ((staffValues[i][0] || "").toString().trim() === staffName) {
+        targetRows.push(i + 2);
+      }
+    }
+  }
+  for (var j = targetRows.length - 1; j >= 0; j--) {
+    staffSheet.deleteRow(targetRows[j]);
+  }
+  var userLastRow = usersSheet.getLastRow();
+  if (userLastRow > 1) {
+    var userValues = usersSheet.getRange(2, 1, userLastRow - 1, usersSheet.getLastColumn()).getValues();
+    for (var k = userValues.length - 1; k >= 0; k--) {
+      if ((userValues[k][0] || "").toString().trim() === staffName) {
+        usersSheet.deleteRow(k + 2);
+      }
+    }
+  }
+  var courierLastRow = couriersSheet.getLastRow();
+  if (courierLastRow > 1) {
+    var courierValues = couriersSheet.getRange(2, 1, courierLastRow - 1, couriersSheet.getLastColumn()).getValues();
+    for (var l = courierValues.length - 1; l >= 0; l--) {
+      if ((courierValues[l][0] || "").toString().trim() === staffName) {
+        couriersSheet.deleteRow(l + 2);
+      }
+    }
+  }
+  return { ok: true, msg: "تم حذف الموظف بنجاح" };
+}
+
+function getPermissionsStringForStaff(staff) {
+  var p = [];
+  if (staff.perm_dashboard === "true" || staff.perm_dashboard === true) p.push("لوحة القيادة");
+  if (staff.perm_orders === "true" || staff.perm_orders === true) p.push("الطلبات");
+  if (staff.perm_ledger === "true" || staff.perm_ledger === true) p.push("الحسابات");
+  if (staff.perm_expenses === "true" || staff.perm_expenses === true) p.push("المصاريف");
+  if (staff.perm_staff === "true" || staff.perm_staff === true) p.push("الموظفين");
+  return p.join(" · ") || "صلاحيات أساسية";
 }

@@ -1,15 +1,100 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { PlusCircle, Wallet, FileText, ArrowUpRight, ArrowDownRight, Calendar, Filter, Users, ShieldAlert, Search, Eye, CheckCircle2, Clock, Loader2, ArrowLeft, Check, Shield, ChevronDown, ChevronUp, Lock } from "lucide-react";
 import { apiCall } from "../utils";
+
+function parseSafeNumber(val: any): number {
+  if (val === undefined || val === null || val === "") return 0;
+  if (typeof val === "number") return val;
+  const cleaned = val.toString().replace(/[^\d.\-]/g, "");
+  const num = parseFloat(cleaned);
+  return isNaN(num) ? 0 : num;
+}
+
+function getOrderFinancials(o: any) {
+  if (!o) return { prodPrice: 0, shipPrice: 0, totalCOD: 0 };
+  
+  var shipPrice = 0;
+  var rawShip = o["سعر الشحن"] !== undefined ? o["سعر الشحن"] :
+                (o["الشحن"] !== undefined ? o["الشحن"] :
+                (o["تكلفة الشحن"] !== undefined ? o["تكلفة الشحن"] :
+                (o["مصاريف الشحن"] !== undefined ? o["مصاريف الشحن"] :
+                (o["shipping"] !== undefined ? o["shipping"] :
+                (o["shipPrice"] !== undefined ? o["shipPrice"] :
+                o["ship_price"])))));
+                
+  if (rawShip !== undefined && rawShip !== null && rawShip !== "") {
+    shipPrice = parseSafeNumber(rawShip);
+  }
+
+  var totalCOD = 0;
+  var rawTotal = o["المطلب تحصيله"] !== undefined ? o["المطلب تحصيله"] :
+                 (o["المطلوب تحصيله"] !== undefined ? o["المطلوب تحصيله"] :
+                 (o["التحصيل"] !== undefined ? o["التحصيل"] :
+                 (o["المطلوب"] !== undefined ? o["المطلوب"] :
+                 (o["إجمالي الكود"] !== undefined ? o["إجمالي الكود"] :
+                 (o["الإجمالي"] !== undefined ? o["الإجمالي"] :
+                 (o["الاجمالي"] !== undefined ? o["الاجمالي"] :
+                 (o["إجمالي الأوردر"] !== undefined ? o["إجمالي الأوردر"] :
+                 (o["total"] !== undefined ? o["total"] :
+                 (o["totalCOD"] !== undefined ? o["totalCOD"] :
+                 (o["total_cod"] !== undefined ? o["total_cod"] :
+                 (o["cash_to_be_collected"] !== undefined ? o["cash_to_be_collected"] :
+                 o["cash"])))))))))));
+                 
+  if (rawTotal !== undefined && rawTotal !== null && rawTotal !== "") {
+    totalCOD = parseSafeNumber(rawTotal);
+  }
+
+  var prodPrice = 0;
+  var rawProd = o["سعر المنتج"] !== undefined ? o["سعر المنتج"] :
+                (o["المنتج"] !== undefined ? o["المنتج"] :
+                (o["سعر المادة"] !== undefined ? o["سعر المادة"] :
+                (o["price"] !== undefined ? o["price"] :
+                (o["prodPrice"] !== undefined ? o["prodPrice"] :
+                o["product_price"]))));
+                
+  if (rawProd !== undefined && rawProd !== null && rawProd !== "") {
+    prodPrice = parseSafeNumber(rawProd);
+  }
+
+  var status = o.status || o["الحالة"] || "";
+  var isPartial = ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].includes(status) || o.isPartial === true || o.isPartial === "true" || (o.returnSubStatus && o.returnSubStatus.indexOf("تسليم جزئي") !== -1);
+
+  if (isPartial) {
+    var partialAmt = Number(o.partialAmount !== undefined && o.partialAmount !== null ? o.partialAmount : (o.actualReceivedCash !== undefined && o.actualReceivedCash !== null ? o.actualReceivedCash : (totalCOD !== undefined && totalCOD !== null ? totalCOD : 0)));
+    var originalProdPrice = o.originalProdPrice !== undefined && o.originalProdPrice !== null ? Number(o.originalProdPrice) : (o.prodPrice || prodPrice);
+    if (originalProdPrice <= partialAmt && o.prodPrice > partialAmt) {
+      originalProdPrice = Number(o.prodPrice);
+    }
+    return {
+      prodPrice: isNaN(originalProdPrice) ? partialAmt : originalProdPrice,
+      shipPrice: isNaN(shipPrice) ? 0 : shipPrice,
+      totalCOD: isNaN(totalCOD) ? 0 : totalCOD
+    };
+  }
+
+  if (totalCOD > 0) {
+    prodPrice = totalCOD - shipPrice;
+  } else if (prodPrice > 0 && shipPrice > 0 && totalCOD === 0) {
+    totalCOD = prodPrice + shipPrice;
+  }
+
+  return {
+    prodPrice: prodPrice,
+    shipPrice: shipPrice,
+    totalCOD: totalCOD
+  };
+}
 
 interface LedgerProps {
   token: string;
   role: string;
   user: string;
   activeLedgerMode?: "supplier" | "courier";
+  orders?: any[];
 }
 
-export default function Ledger({ token, role, user, activeLedgerMode }: LedgerProps) {
+export default function Ledger({ token, role, user, activeLedgerMode, orders = [] }: LedgerProps) {
   const isSupplier = (role || "").toString().trim() === "مورد" || (role || "").toString().trim().includes("مورد");
   const isCourier = (role || "").toString().trim() === "مندوب" || (role || "").toString().trim().includes("مندوب");
   const isFinancial = (role || "").toString().trim() === "مدير" || (role || "").toString().trim() === "محاسب" || (role || "").toString().trim().includes("مدير") || (role || "").toString().trim().includes("محاسب");
@@ -47,6 +132,7 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
   const [modalSearchFilter, setModalSearchFilter] = useState<string>("");
   const [expandedDays, setExpandedDays] = useState<Record<string, boolean>>({});
   const [expandedCourierDays, setExpandedCourierDays] = useState<Record<string, boolean>>({});
+  const [timelineVisibleCount, setTimelineVisibleCount] = useState(8);
 
   const toggleDay = (dateStr: string) => {
     setExpandedDays(prev => ({ ...prev, [dateStr]: !prev[dateStr] }));
@@ -74,6 +160,12 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
   const [adjAmount, setAdjAmount] = useState("");
   const [adjDesc, setAdjDesc] = useState("");
 
+  // --- Instant Settlement States ---
+  const [closingAdjType, setClosingAdjType] = useState<"لا يوجد" | "مكافأة" | "جزاء">("لا يوجد");
+  const [closingAdjAmount, setClosingAdjAmount] = useState("");
+  const [closingAdjDesc, setClosingAdjDesc] = useState("");
+  const [settling, setSettling] = useState(false);
+
   // --- Courier Handover States ---
   const [handoverAmount, setHandoverAmount] = useState("");
   const [handoverRef, setHandoverRef] = useState("");
@@ -81,6 +173,129 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
 
   const [loading, setLoading] = useState(false);
   const [feedback, setFeedback] = useState("");
+
+  // --- Withdrawal requests states ---
+  const [withdrawalRequests, setWithdrawalRequests] = useState<any[]>([]);
+  const [loadingWithdrawals, setLoadingWithdrawals] = useState(false);
+  const [withdrawalAmount, setWithdrawalAmount] = useState("");
+  const [withdrawalMethod, setWithdrawalMethod] = useState("");
+  const [showWithdrawalModal, setShowWithdrawalModal] = useState(false);
+  const [withdrawalReason, setWithdrawalReason] = useState("");
+  const [actioningWithdrawalId, setActioningWithdrawalId] = useState<string | null>(null);
+  const [isRejecting, setIsRejecting] = useState(false);
+
+  async function fetchWithdrawalRequests() {
+    setLoadingWithdrawals(true);
+    try {
+      const res = await apiCall("getWithdrawalRequests", token);
+      if (res.ok) {
+        setWithdrawalRequests(res.requests || []);
+      }
+    } catch (err) {
+      console.error("Failed to fetch withdrawal requests", err);
+    } finally {
+      setLoadingWithdrawals(false);
+    }
+  }
+
+  async function handleRequestWithdrawal(e: React.FormEvent) {
+    e.preventDefault();
+    setFeedback("");
+    const amount = Number(withdrawalAmount);
+    if (!withdrawalAmount || isNaN(amount) || amount <= 0) {
+      setFeedback("يرجى إدخال مبلغ صحيح أكبر من الصفر.");
+      return;
+    }
+
+    if (amount > liveBalance) {
+      setFeedback(`عذراً، المبلغ المطلوب (${amount} ج.م) يتجاوز رصيدك المستحق الحالي (${liveBalance} ج.م).`);
+      return;
+    }
+
+    if (!withdrawalMethod.trim()) {
+      setFeedback("يرجى إدخال وسيلة الدفع ورقم التحويل (مثال: فودافون كاش - 010xxxxxxx).");
+      return;
+    }
+
+    setSubmittingLedger(true);
+    try {
+      const res = await apiCall("requestWithdrawal", token, {
+        supplier: isSupplier ? user : selectedSupplier,
+        amount: amount,
+        paymentMethod: withdrawalMethod
+      });
+
+      if (res.ok) {
+        setFeedback("✅ تم تقديم طلب السحب بنجاح وهو قيد المراجعة حالياً.");
+        setShowWithdrawalModal(false);
+        setWithdrawalAmount("");
+        setWithdrawalMethod("");
+        // Reload
+        await loadSupplierLedger();
+        await fetchWithdrawalRequests();
+      } else {
+        setFeedback(`❌ فشل تقديم الطلب: ${res.error || "خطأ غير معروف"}`);
+      }
+    } catch (err: any) {
+      setFeedback(`❌ حدث خطأ أثناء إرسال الطلب: ${err.message || err.toString()}`);
+    } finally {
+      setSubmittingLedger(false);
+    }
+  }
+
+  async function handleApproveWithdrawal(id: string) {
+    if (!window.confirm("هل أنت متأكد من الموافقة على طلب السحب وتحويل المبلغ؟ سيتم خصم القيمة من رصيد المورد وتسجيل قيد صرف في الخزانة.")) {
+      return;
+    }
+    setFeedback("");
+    setLoadingWithdrawals(true);
+    try {
+      const res = await apiCall("approveWithdrawal", token, {
+        id: id,
+        currentUser: user
+      });
+      if (res.ok) {
+        setFeedback(`✅ ${res.msg || "تمت الموافقة وصرف الطلب بنجاح!"}`);
+        await loadSupplierLedger();
+        await fetchWithdrawalRequests();
+      } else {
+        setFeedback(`❌ فشل الموافقة على الطلب: ${res.error || "خطأ غير معروف"}`);
+      }
+    } catch (err: any) {
+      setFeedback(`❌ حدث خطأ: ${err.message || err.toString()}`);
+    } finally {
+      setLoadingWithdrawals(false);
+    }
+  }
+
+  async function handleRejectWithdrawal(id: string, reason: string) {
+    if (!reason.trim()) {
+      alert("يرجى كتابة سبب الرفض أولاً.");
+      return;
+    }
+    setFeedback("");
+    setLoadingWithdrawals(true);
+    try {
+      const res = await apiCall("rejectWithdrawal", token, {
+        id: id,
+        reason: reason,
+        currentUser: user
+      });
+      if (res.ok) {
+        setFeedback("✅ تم رفض طلب السحب وحفظ السبب بنجاح.");
+        setIsRejecting(false);
+        setWithdrawalReason("");
+        setActioningWithdrawalId(null);
+        await fetchWithdrawalRequests();
+      } else {
+        setFeedback(`❌ فشل رفض الطلب: ${res.error || "خطأ غير معروف"}`);
+      }
+    } catch (err: any) {
+      setFeedback(`❌ حدث خطأ: ${err.message || err.toString()}`);
+    } finally {
+      setLoadingWithdrawals(false);
+    }
+  }
 
   // Populate drop-downs for Admin/Accountant
   async function fetchResourceLists() {
@@ -249,10 +464,15 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
   useEffect(() => {
     if (activeLedger === "supplier") {
       loadSupplierLedger();
+      fetchWithdrawalRequests();
     } else {
       loadCourierLedger();
     }
   }, [activeLedger, selectedSupplier, selectedCourier, periodFilter, user]);
+
+  useEffect(() => {
+    setTimelineVisibleCount(8);
+  }, [selectedSupplier, daySearchQuery]);
 
   // Submit payment to supplier (Deducted from Ledger & Cashbox)
   async function handleSupplierPayout(e: React.FormEvent) {
@@ -362,6 +582,42 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
       .finally(() => {
         window.dispatchEvent(new CustomEvent("bg-sync-end"));
       });
+  }
+
+  // New instant wallet settlement function
+  async function handleInstantWalletSettlement(targetCourier: string, totalCashWallet: number, todayEarnedCommissions: number) {
+    if (!targetCourier) return;
+    if (!confirm(`هل أنت متأكد من اعتماد تصفية الحساب وإغلاق العهدة لـ (${targetCourier})؟ \n\nسيتم ترحيل مبلغ (${totalCashWallet.toLocaleString("ar")} ج.م) كإيداع بالخزينة الرئيسية، وإثبات عمولة مستحقة لليوم بقيمة (${todayEarnedCommissions.toLocaleString("ar")} ج.م).`)) {
+      return;
+    }
+
+    setSettling(true);
+    setFeedback("");
+    try {
+      const res = await apiCall("instantCourierSettlement", token, {
+        courier: targetCourier,
+        cashAmount: totalCashWallet,
+        commissionAmount: todayEarnedCommissions,
+        adjustmentType: closingAdjType === "لا يوجد" ? "" : closingAdjType,
+        adjustmentAmount: closingAdjType === "لا يوجد" ? 0 : Number(closingAdjAmount || 0),
+        adjustmentDesc: closingAdjDesc,
+        currentUser: user
+      });
+
+      if (res && res.ok) {
+        alert(res.msg || "تم اعتماد تصفية الحساب وإغلاق العهدة اليومية للمندوب بنجاح!");
+        setClosingAdjType("لا يوجد");
+        setClosingAdjAmount("");
+        setClosingAdjDesc("");
+        window.location.reload();
+      } else {
+        alert(`⚠️ خطأ أثناء التصفية: ${res?.error || "فشل الاتصال بالخادم"}`);
+      }
+    } catch (err: any) {
+      alert(`⚠️ فشل التصفية: ${err?.toString() || "خطأ غير متوقع"}`);
+    } finally {
+      setSettling(false);
+    }
   }
 
   // Settle and pull all courier active orders to warehouse
@@ -592,6 +848,254 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
             )}
           </div>
 
+          {/* Withdrawal Requests Section */}
+          {(isSupplier || isFinancial) && (
+            <div className="bg-slate-900 border border-white/6 rounded-2xl p-4 space-y-4 shadow-sm text-right">
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 border-b border-white/5 pb-3">
+                <div className="flex items-center gap-2">
+                  <span className="p-1 px-2 bg-pink-500/10 text-pink-400 rounded-md text-[10.5px]">💸</span>
+                  <div>
+                    <h3 className="text-xs font-black text-slate-200">بوابة طلبات سحب الرصيد للموردين</h3>
+                    <p className="text-[9px] text-slate-400 mt-0.5">طلب سحب فوري أو متابعة حالة الدفعات المحولة</p>
+                  </div>
+                </div>
+                {isSupplier && (
+                  <button
+                    onClick={() => setShowWithdrawalModal(true)}
+                    className="px-4 py-2 bg-gradient-to-l from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-slate-950 font-black text-xs rounded-xl flex items-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer"
+                  >
+                    <span>➕ طلب سحب جديد</span>
+                  </button>
+                )}
+              </div>
+
+              {/* List of Withdrawal Requests */}
+              <div className="space-y-2">
+                {loadingWithdrawals ? (
+                  <div className="flex items-center justify-center py-6 gap-2 text-slate-400 text-xs">
+                    <Loader2 size={16} className="animate-spin text-amber-500" />
+                    جاري تحميل طلبات السحب...
+                  </div>
+                ) : (
+                  (() => {
+                    // Filter requests
+                    const filteredRequests = withdrawalRequests.filter(req => {
+                      if (isSupplier) {
+                        return req.supplier && req.supplier.toString().trim().toLowerCase() === user.trim().toLowerCase();
+                      }
+                      // For admin, we can show for current selected supplier or all
+                      if (selectedSupplier) {
+                        return req.supplier && req.supplier.toString().trim().toLowerCase() === selectedSupplier.trim().toLowerCase();
+                      }
+                      return true;
+                    });
+
+                    if (filteredRequests.length === 0) {
+                      return (
+                        <p className="text-[10px] text-slate-500 text-center py-4 font-bold">
+                          لا توجد طلبات سحب مسجلة حالياً.
+                        </p>
+                      );
+                    }
+
+                    return (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-right border-collapse text-xs">
+                          <thead>
+                            <tr className="border-b border-white/5 text-[10px] text-slate-400 font-bold bg-slate-950/30">
+                              <th className="p-2">رقم الطلب</th>
+                              <th className="p-2">التاريخ</th>
+                              {!isSupplier && <th className="p-2">المورد</th>}
+                              <th className="p-2">المبلغ المطلوب</th>
+                              <th className="p-2">وسيلة ورقم الدفع</th>
+                              <th className="p-2 text-center">الحالة</th>
+                              <th className="p-2">ملاحظات التحويل / الرفض</th>
+                              {isFinancial && <th className="p-2 text-center">الإجراءات</th>}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {filteredRequests.map((req, index) => {
+                              const amt = Number(req.amount || 0);
+                              return (
+                                <tr key={req.id || index} className="border-b border-white/5 hover:bg-white/1">
+                                  <td className="p-2 font-mono text-[10.5px] text-slate-400 font-bold">#{req.id}</td>
+                                  <td className="p-2 text-slate-350">{req.date ? req.date.split("T")[0] : "—"}</td>
+                                  {!isSupplier && <td className="p-2 font-black text-amber-400">{req.supplier}</td>}
+                                  <td className="p-2 font-mono font-black text-emerald-400">
+                                    {amt.toLocaleString("ar")} ج.م
+                                  </td>
+                                  <td className="p-2 font-medium text-slate-300">{req.paymentMethod || "—"}</td>
+                                  <td className="p-2 text-center">
+                                    {req.status === "معلق" ? (
+                                      <span className="inline-block px-2 py-0.5 rounded-full text-[9px] font-black bg-yellow-500/10 text-yellow-500 border border-yellow-500/25 animate-pulse">
+                                        ⏳ معلق
+                                      </span>
+                                    ) : req.status === "مقبول" ? (
+                                      <span className="inline-block px-2 py-0.5 rounded-full text-[9px] font-black bg-emerald-500/10 text-emerald-450 border border-emerald-500/25">
+                                        ✅ مقبول
+                                      </span>
+                                    ) : (
+                                      <span className="inline-block px-2 py-0.5 rounded-full text-[9px] font-black bg-red-500/10 text-red-400 border border-red-500/25">
+                                        ❌ مرفوض
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="p-2 text-slate-405 text-[10.5px] max-w-[200px] truncate" title={req.notes}>
+                                    {req.notes || "—"}
+                                  </td>
+                                  {isFinancial && (
+                                    <td className="p-2 text-center">
+                                      {req.status === "معلق" ? (
+                                        <div className="flex items-center justify-center gap-1.5">
+                                          <button
+                                            onClick={() => handleApproveWithdrawal(req.id)}
+                                            className="px-2 py-1 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-black rounded-lg text-[10px] cursor-pointer transition-all active:scale-95"
+                                            title="الموافقة والتحويل وصرف القيمة"
+                                          >
+                                            ✔ موافقة
+                                          </button>
+                                          <button
+                                            onClick={() => {
+                                              setActioningWithdrawalId(req.id);
+                                              setIsRejecting(true);
+                                              setWithdrawalReason("");
+                                            }}
+                                            className="px-2 py-1 bg-red-500 hover:bg-red-600 text-slate-950 font-black rounded-lg text-[10px] cursor-pointer transition-all active:scale-95"
+                                            title="رفض الطلب مع توضيح السبب"
+                                          >
+                                            ❌ رفض
+                                          </button>
+                                        </div>
+                                      ) : (
+                                        <span className="text-[10px] text-slate-500">—</span>
+                                      )}
+                                    </td>
+                                  )}
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  })()
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Modal for Requesting Withdrawal */}
+          {showWithdrawalModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 backdrop-blur-sm p-4 font-sans text-right">
+              <div className="w-full max-w-md bg-slate-900 border border-white/10 rounded-2xl p-6 space-y-4 shadow-2xl relative">
+                <button
+                  type="button"
+                  onClick={() => setShowWithdrawalModal(false)}
+                  className="absolute top-4 left-4 text-slate-400 hover:text-white text-xs bg-slate-950/40 hover:bg-slate-950 px-2.5 py-1 rounded-lg border border-white/5 cursor-pointer font-sans"
+                >
+                  ✕ إغلاق
+                </button>
+                <div className="space-y-1">
+                  <h3 className="text-sm font-black text-slate-200">إنشاء طلب سحب رصيد جديد</h3>
+                  <p className="text-[10px] text-slate-400">سيتم مراجعة الطلب وتحويل المبلغ المطلوب من قبل الإدارة المالية</p>
+                </div>
+
+                <form onSubmit={handleRequestWithdrawal} className="space-y-4 pt-2">
+                  <div className="space-y-1.5">
+                    <label className="block text-[10.5px] font-bold text-slate-350">الرصيد المستحق الحالي:</label>
+                    <div className="p-3 bg-slate-950 rounded-xl font-mono text-sm font-bold text-emerald-400">
+                      {Number(liveBalance || 0).toLocaleString("ar")} ج.م
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="block text-[10.5px] font-bold text-slate-350">المبلغ المطلوب سحبه (ج.م):</label>
+                    <input
+                      type="number"
+                      required
+                      min="1"
+                      max={liveBalance}
+                      value={withdrawalAmount}
+                      onChange={(e) => setWithdrawalAmount(e.target.value)}
+                      placeholder="أدخل قيمة المبلغ..."
+                      className="w-full bg-slate-950 border border-white/10 rounded-xl px-4 py-3 text-xs font-bold text-slate-200 placeholder-slate-650 focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="block text-[10.5px] font-bold text-slate-350">وسيلة ورقم الدفع (InstaPay / فودافون كاش):</label>
+                    <input
+                      type="text"
+                      required
+                      value={withdrawalMethod}
+                      onChange={(e) => setWithdrawalMethod(e.target.value)}
+                      placeholder="مثال: InstaPay: user@instapay أو محفظة 010xxxxxxx"
+                      className="w-full bg-slate-950 border border-white/10 rounded-xl px-4 py-3 text-xs font-bold text-slate-200 placeholder-slate-650 focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={submittingLedger}
+                    className="w-full py-3 bg-gradient-to-l from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-slate-950 font-black text-xs rounded-xl cursor-pointer shadow-lg hover:shadow-emerald-500/10 flex items-center justify-center gap-2"
+                  >
+                    {submittingLedger ? (
+                      <>
+                        <Loader2 size={14} className="animate-spin text-slate-950" />
+                        جاري إرسال الطلب...
+                      </>
+                    ) : (
+                      "🚀 تقديم طلب السحب"
+                    )}
+                  </button>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* Modal for Rejection Reason */}
+          {isRejecting && actioningWithdrawalId && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 backdrop-blur-sm p-4 font-sans text-right">
+              <div className="w-full max-w-md bg-slate-900 border border-white/10 rounded-2xl p-6 space-y-4 shadow-2xl relative">
+                <div className="space-y-1">
+                  <h3 className="text-sm font-black text-red-400">تأكيد رفض طلب السحب #{actioningWithdrawalId}</h3>
+                  <p className="text-[10px] text-slate-400">يرجى كتابة سبب الرفض ليتمكن المورد من معرفة التفاصيل</p>
+                </div>
+
+                <div className="space-y-3 pt-2">
+                  <textarea
+                    required
+                    value={withdrawalReason}
+                    onChange={(e) => setWithdrawalReason(e.target.value)}
+                    placeholder="اكتب سبب الرفض هنا بالتفصيل..."
+                    className="w-full min-h-[100px] bg-slate-950 border border-white/10 rounded-xl p-3 text-xs font-bold text-slate-200 placeholder-slate-650 focus:outline-none focus:border-red-500"
+                  />
+
+                  <div className="flex items-center gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => handleRejectWithdrawal(actioningWithdrawalId, withdrawalReason)}
+                      className="flex-1 py-3 bg-red-600 hover:bg-red-700 text-white font-black text-xs rounded-xl cursor-pointer font-sans"
+                    >
+                      تأكيد الرفض ✖
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsRejecting(false);
+                        setWithdrawalReason("");
+                        setActioningWithdrawalId(null);
+                      }}
+                      className="flex-1 py-3 bg-slate-950 hover:bg-slate-900 text-slate-400 font-bold text-xs rounded-xl cursor-pointer border border-white/5 font-sans"
+                    >
+                      تراجع وإلغاء
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Days Explorer Block */}
           <div className="space-y-4">
             <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-slate-900 border border-white/6 p-4 rounded-2xl shadow-sm">
@@ -642,6 +1146,8 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
                     return item.date && item.date.includes(daySearchQuery);
                   });
 
+                  const visibleTimeline = finalFiltered.slice(0, timelineVisibleCount);
+
                   if (finalFiltered.length === 0) {
                     return (
                       <div className="col-span-2 bg-slate-900/50 border border-white/4 rounded-2xl py-12 text-center text-xs text-slate-405 font-bold">
@@ -650,8 +1156,10 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
                     );
                   }
 
-                  return finalFiltered.map((item: any, idx: number) => {
-                    if (item.timelineType === "payment") {
+                  return (
+                    <>
+                      {visibleTimeline.map((item: any, idx: number) => {
+                        if (item.timelineType === "payment") {
                       const typeStr = (item.type || "").toString().trim();
                       const descStr = (item.desc || "").toString().trim();
                       
@@ -917,642 +1425,424 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
             )}
           </div>
         </div>
-      )}
+       )}
 
-      {/* --- COURIER LEDGER WORKSPACE --- (Fixes Courier Salary screen failure) */}
-      {activeLedger === "courier" && (
-        <div className="space-y-6">
-          {/* Target Courier selection detail */}
-          {isFinancial && (
-            <div className="flex items-center justify-between gap-4 bg-slate-900 border border-white/6 p-4 rounded-xl">
-              <span className="text-xs font-extrabold text-slate-400">تابع موازنة المندوب:</span>
-              <select
-                value={selectedCourier}
-                onChange={(e) => setSelectedCourier(e.target.value)}
-                className="bg-slate-950 border border-white/10 rounded-lg px-3 py-2 text-xs font-bold text-slate-200 focus:outline-none"
-              >
-                {allCouriers.map((c, idx) => (
-                  <option key={idx} value={c.name}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
+       {/* --- COURIER LEDGER WORKSPACE --- (Fixes Courier Salary screen failure) */}
+      {activeLedger === "courier" && (() => {
+        const courierName = isCourier ? user : selectedCourier;
+        const normalizedCourierName = courierName.toString().trim().toLowerCase();
 
-          {/* Timeframe Filter (day, week, month) */}
-          <div className="flex items-center gap-2 bg-slate-900 border border-white/6 p-3 rounded-xl justify-between">
-            <span className="text-xs font-bold text-slate-450 flex items-center gap-1.5">
-              <Filter size={14} />
-              تصفية الحسابات والعمولات:
-            </span>
-            <div className="flex gap-1.5 bg-slate-950 p-1 rounded-lg border border-white/4">
-              {(["day", "week", "month"] as const).map((p) => {
-                const labels = { day: "اليوم", week: "الأسبوع", month: "الشهر" };
-                return (
-                  <button
-                    key={p}
-                    onClick={() => setPeriodFilter(p)}
-                    className={`px-3 py-1 text-[10px] font-black rounded-md cursor-pointer transition-all ${
-                      periodFilter === p ? "bg-amber-600 text-slate-950" : "text-slate-400"
-                    }`}
-                  >
-                    {labels[p]}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+        const courierProfile = useMemo(() => {
+          return allCouriers.find(c => 
+            c && c.name && c.name.toString().trim().toLowerCase() === normalizedCourierName
+          ) || {
+            commission_success: 25,
+            commission_return: 10,
+            salary: 3000,
+            base_fixed_salary: 3000
+          };
+        }, [allCouriers, normalizedCourierName]);
 
-          {/* Detailed Earning Calculations (Sixth Point - Courier Ledger Sheet!) */}
-          {courierSummary && (
-            <div className="space-y-4">
-              {/* Today's Courier Financial Performance Table */}
-              <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 space-y-3">
-                <h3 className="text-xs font-black text-amber-500 border-b border-white/6 pb-2">
-                   📊 جدول المطابقة المالية للمندوب (مسترجع لحظياً من Google Sheets)
-                </h3>
-                
-                <div className="overflow-x-auto">
-                  <table className="w-full text-right text-xs border-collapse">
-                    <thead>
-                      <tr className="border-b border-white/10 text-slate-400 font-extrabold">
-                        <th className="py-2 px-3 text-right">كشف الحساب</th>
-                        <th className="py-2 px-3 text-center">البيان الميداني</th>
-                        <th className="py-2 px-3 text-left">القيمة المالية</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr className="border-b border-white/4 hover:bg-slate-950/40">
-                        <td className="py-3 px-3 font-semibold text-slate-200">الراتب الأساسي للشهر</td>
-                        <td className="py-3 px-3 text-slate-450 text-center font-bold">تعيين تعاقدي ثابت</td>
-                        <td className="py-3 px-3 text-left font-mono font-black text-slate-200">
-                          {(courierSummary.basicSalary || 0).toLocaleString("ar")} ج.م
-                        </td>
-                      </tr>
-                      <tr className="border-b border-white/4 hover:bg-slate-950/40">
-                        <td className="py-3 px-3 font-semibold text-slate-200">عدد الطلبات التي تم تسليمها اليوم</td>
-                        <td className="py-3 px-3 text-emerald-400 text-center font-bold">
-                          {(courierSummary.todayDeliveredCount || 0)} شحنة اليوم
-                        </td>
-                        <td className="py-3 px-3 text-left font-mono font-black text-emerald-400">
-                          +{(courierSummary.todayDelivCommission || 0).toLocaleString("ar")} ج.م (عمولة اليوم)
-                        </td>
-                      </tr>
-                      <tr className="border-b border-white/4 hover:bg-slate-950/40 font-bold">
-                        <td className="py-3 px-3 text-slate-300">إجمالي عمولات التوصيل (جميع الفترات)</td>
-                        <td className="py-3 px-3 text-slate-400 text-center">
-                          {(courierSummary.deliveredCount || 0)} أوردر مسلّم كلياً
-                        </td>
-                        <td className="py-3 px-3 text-left font-mono font-black text-emerald-500">
-                          +{(courierSummary.delivCommission || 0).toLocaleString("ar")} ج.م
-                        </td>
-                      </tr>
-                      <tr className="hover:bg-slate-950/40 font-black text-sm text-amber-500 bg-amber-950/10">
-                        <td className="py-3 px-3">الراتب الصافي الإجمالي المستحق</td>
-                        <td className="py-3 px-3 text-center text-xs">شامل العمولات والمكافآت والخصومات</td>
-                        <td className="py-3 px-3 text-left font-mono">
-                          {(courierSummary.netSalary || 0).toLocaleString("ar")} ج.م
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
+        const activeCourierOrders = useMemo(() => {
+          return (orders || [])
+            .filter(o => 
+              o && o.courier && o.courier.toString().trim().toLowerCase() === normalizedCourierName &&
+              o.isSettled !== true && o.isSettled !== "true" && o.is_settled !== "true"
+            )
+            .sort((a, b) => {
+              const dateA = (a.updatedAt || a.createdAt || "").toString();
+              const dateB = (b.updatedAt || b.createdAt || "").toString();
+              return dateB.localeCompare(dateA);
+            });
+        }, [orders, normalizedCourierName]);
+
+        const isDeliveredStatus = (s: string) => ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(s);
+        const isPartialStatus = (s: string) => ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي", "مرتجع جزئي بالمستودع"].includes(s);
+        const isReturnedPaidStatus = (s: string, returnShippingType?: string) =>
+          ["مرتجع والعميل دفع الشحن", "مرتجع مدفوع الشحن"].includes(s) ||
+          (s === "مرتجع" && returnShippingType === "paid");
+
+        const courierStats = useMemo(() => {
+
+          let totalDeliveredCash = 0;
+          let totalPartialCash = 0;
+          let totalReturnPaidCash = 0;
+          let deliveredCount = 0;
+          let partialCount = 0;
+          let returnPaidCount = 0;
+          let returnTotalCount = 0;
+
+          activeCourierOrders.forEach(o => {
+            if (o.status === "جاهز للاستلام من المورد") return;
+
+            const financials = getOrderFinancials(o);
+
+            if (isDeliveredStatus(o.status)) {
+              totalDeliveredCash += financials.totalCOD;
+              deliveredCount++;
+            } else if (isPartialStatus(o.status)) {
+              totalPartialCash += Number(o.actualReceivedCash || o.partialAmount || 0);
+              partialCount++;
+            } else if (isReturnedPaidStatus(o.status, o.returnShippingType)) {
+              totalReturnPaidCash += financials.shipPrice;
+              returnPaidCount++;
+            }
+
+            if (["مرتجع", "مرتجع جديد", "مرتجع جزئي", "قيد المرتجع"].includes(o.status)) {
+              returnTotalCount++;
+            }
+          });
+
+          return {
+            totalDeliveredCash,
+            totalPartialCash,
+            totalReturnPaidCash,
+            deliveredCount,
+            partialCount,
+            returnPaidCount,
+            returnTotalCount,
+            totalCashWallet: totalDeliveredCash + totalPartialCash + totalReturnPaidCash
+          };
+        }, [activeCourierOrders]);
+
+        const successCommission = Number(courierProfile.commission_success || 25);
+        const returnCommission = Number(courierProfile.commission_return || 10);
+        const todayEarnedCommissions = (courierStats.deliveredCount + courierStats.partialCount) * successCommission + (courierStats.returnPaidCount * returnCommission);
+        const totalProductivity = (courierStats.deliveredCount + courierStats.partialCount) + courierStats.returnTotalCount;
+
+        const isDeliveredState = (s: string) => ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(s);
+        const isCourierReturnState = (s: string) => ["مرتجع", "مرتجع جديد", "مرتجع جزئي", "قيد المرتجع"].includes(s);
+        const isPendingCourierState = (s: string) => ["خارج مع المندوب", "تم الإسناد", "قيد التنفيذ", "مع المندوب"].includes(s);
+
+        const courierSmartInsights = useMemo(() => {
+          const pendingDeliveries = activeCourierOrders.filter(o => isPendingCourierState(o.status)).length;
+          const urgentReturns = activeCourierOrders.filter(o => isCourierReturnState(o.status)).length;
+          const deliveredToday = activeCourierOrders.filter(o => isDeliveredState(o.status)).length;
+
+          const recommendation = urgentReturns > 0
+            ? `يوجد ${urgentReturns} مرتجع/مرتجعات تحتاج تصفية سريعة قبل الإغلاق`
+            : pendingDeliveries > 0
+              ? `لا يزال هناك ${pendingDeliveries} شحنة في المسار، راجعها قبل إغلاق الوردية`
+              : `المندوب في وضع ممتاز اليوم، ولا توجد مهام معلقة`;
+
+          return { pendingDeliveries, urgentReturns, deliveredToday, recommendation };
+        }, [activeCourierOrders]);
+
+        return (
+          <div className="space-y-6">
+            {/* Target Courier selection detail */}
+            {isFinancial && (
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-900 border border-white/6 p-4 rounded-xl shadow-lg">
+                <div className="flex items-center gap-2">
+                  <Users className="text-amber-500" size={18} />
+                  <span className="text-xs font-extrabold text-slate-300">اختر المندوب لمراجعة وتصفية الحساب اليومي:</span>
                 </div>
+                <select
+                  value={selectedCourier}
+                  onChange={(e) => setSelectedCourier(e.target.value)}
+                  className="bg-slate-950 border border-white/10 rounded-lg px-3 py-2 text-xs font-bold text-slate-200 focus:outline-none w-full md:w-64 cursor-pointer hover:border-amber-500/50 transition-colors"
+                >
+                  <option value="">-- اختر مندوباً --</option>
+                  {allCouriers.map((c, idx) => (
+                    <option key={idx} value={c.name}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
               </div>
+            )}
 
-              {/* Cumulative Daily Earnings Ledger (Live chronologically tracked table) */}
-              <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 space-y-3">
-                <div className="flex items-center justify-between border-b border-white/6 pb-2">
-                  <h3 className="text-xs font-black text-amber-500 flex items-center gap-1.5 font-sans">
-                    <Calendar size={14} />
-                    <span>📅 دفتر يومية الأرباح التراكمية (Cumulative Daily Ledger)</span>
-                  </h3>
-                  <span className="text-[9px] font-bold bg-amber-950/20 text-amber-500 border border-amber-900/40 px-2 py-0.5 rounded font-mono">
-                     محدث لـ {new Date().getFullYear()}/{String(new Date().getMonth() + 1).padStart(2, "0")}
-                  </span>
-                </div>
-                
-                <p className="text-[10px] text-slate-500 pb-1">
-                  رصد يومي مستمر للمعادلة المعتمدة: الراتب اليومي الثابت (الراتب الأساسي / أيام الشهر) + (عدد التسليمات × {courierSummary.commission_success || 25}) + (عدد المرتجعات × {courierSummary.commission_return || 10}).
-                </p>
-
-                <div className="space-y-4">
-                  {/* Action Bar for Settle / Zero Courier */}
-                  {["مدير", "محاسب"].includes(role) && (
-                    <div className="flex flex-wrap justify-start items-center gap-3">
-                      <button
-                        type="button"
-                        onClick={handleSettleCourierOrders}
-                        disabled={submittingLedger}
-                        className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-black py-2.5 px-5 rounded-xl text-xs flex items-center justify-center gap-2 cursor-pointer transition-all border border-emerald-400/20 active:scale-98 shadow-md"
-                      >
-                        <CheckCircle2 size={15} />
-                        <span>🟢 تصفية وتصفير المندوب (Settle & Zero)</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={handleCloseCourierMonth}
-                        disabled={submittingLedger}
-                        className="bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-slate-950 font-black py-2.5 px-5 rounded-xl text-xs flex items-center justify-center gap-2 cursor-pointer transition-all border border-amber-900/40 active:scale-98 shadow-md"
-                      >
-                        <Lock size={15} />
-                        <span>🔒 تقفيل كشف حساب المندوب الشهري (Close Month)</span>
-                      </button>
-                    </div>
+            {courierName ? (
+              <div className="space-y-6">
+                {/* Profile Card */}
+                <div className="bg-slate-900/60 border border-white/5 rounded-2xl p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+                  <div className="space-y-1">
+                    <h3 className="text-sm font-black text-slate-200">ملف وموازنة المندوب: {courierName}</h3>
+                    <p className="text-[10px] text-slate-400 font-medium">الراتب الأساسي للشهر: {Number(courierProfile.salary || courierProfile.base_fixed_salary || 3000).toLocaleString("ar")} ج.م · عمولة التسليم: {successCommission} ج.م · عمولة المرتجع: {returnCommission} ج.م</p>
+                  </div>
+                  {courierProfile.phone && courierProfile.phone !== "—" && (
+                    <a
+                      href={`https://wa.me/${courierProfile.phone.toString().replace(/[^\d]/g, "")}`}
+                      target="_blank"
+                      referrerPolicy="no-referrer"
+                      className="bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-400 border border-emerald-500/20 px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1.5"
+                    >
+                      💬 واتساب المندوب
+                    </a>
                   )}
+                </div>
 
-                  {/* Desktop view: Traditional table */}
-                  <div className="hidden md:block overflow-x-auto max-h-[450px] overflow-y-auto border border-white/6 rounded-xl">
-                    <table className="w-full text-right text-xs border-collapse">
-                      <thead className="sticky top-0 bg-slate-900 z-10">
-                        <tr className="border-b border-white/10 text-slate-400 font-extrabold text-[10px]">
-                          <th className="py-2.5 px-3 text-right">اليوم والتاريخ</th>
-                          <th className="py-2.5 px-3 text-center">التسليمات</th>
-                          <th className="py-2.5 px-3 text-center">المرتجعات</th>
-                          <th className="py-2.5 px-3 text-center">حصة الراتب اليومي</th>
-                          <th className="py-2.5 px-3 text-center">العمولات المكتسبة</th>
-                          <th className="py-2.5 px-3 text-center">الكاش المستحق بذمته</th>
-                          <th className="py-2.5 px-3 text-left">صافي اليوم</th>
-                          <th className="py-2.5 px-3 text-left">التراكمي المتراكم</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(!courierSummary.dailyEarnings || courierSummary.dailyEarnings.length === 0) ? (
-                          <tr>
-                            <td colSpan={8} className="py-6 text-center text-slate-500 text-xs">
-                              لا يوجد سجل حركات ورديات يومية للمندوب حالياً
-                            </td>
-                          </tr>
+                {/* Executive Dashboard for Couriers */}
+                <div className="bg-gradient-to-br from-slate-900 to-slate-950 border border-cyan-500/20 rounded-2xl p-4 space-y-3 print:hidden shadow-lg shadow-cyan-500/5">
+                  <div className="flex items-center gap-2">
+                    <ShieldAlert className="text-amber-500" size={15} />
+                    <h3 className="text-xs font-black text-slate-100">🧠 Executive Dashboard للمندوب</h3>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-right">
+                    <div className="bg-slate-950/70 border border-white/5 rounded-xl p-3">
+                      <div className="text-[10px] text-slate-400 font-black">شحنات معلقة</div>
+                      <div className="text-lg font-black text-amber-500 font-mono mt-1">{courierSmartInsights.pendingDeliveries}</div>
+                    </div>
+                    <div className="bg-slate-950/70 border border-white/5 rounded-xl p-3">
+                      <div className="text-[10px] text-slate-400 font-black">مرتجعات تحتاج تصفية</div>
+                      <div className="text-lg font-black text-red-400 font-mono mt-1">{courierSmartInsights.urgentReturns}</div>
+                    </div>
+                    <div className="bg-slate-950/70 border border-white/5 rounded-xl p-3">
+                      <div className="text-[10px] text-slate-400 font-black">تم تسليمها اليوم</div>
+                      <div className="text-lg font-black text-emerald-400 font-mono mt-1">{courierSmartInsights.deliveredToday}</div>
+                    </div>
+                  </div>
+                  <div className="text-[10px] text-slate-400 font-bold leading-relaxed">
+                    {courierSmartInsights.recommendation}
+                  </div>
+                </div>
+
+                {/* ⚡ High-Speed Agile Settlement Dashboard (Three Counters) */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {/* 💰 Counter 1: Cash Wallet */}
+                  <div className="bg-gradient-to-br from-slate-900 to-slate-950 border border-white/6 p-5 rounded-2xl relative overflow-hidden shadow-xl space-y-3 text-right">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-extrabold text-slate-400 tracking-wider">💰 عهدة المندوب الكاش الفعلي في جيبه</span>
+                      <span className="p-1.5 rounded-lg bg-amber-500/10 text-amber-500">
+                        <Wallet size={16} />
+                      </span>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-2xl font-black text-slate-100 font-mono">
+                        {courierStats.totalCashWallet.toLocaleString("ar")} <span className="text-xs font-bold text-amber-500">ج.م</span>
+                      </div>
+                      <div className="text-[9.5px] text-slate-500 leading-relaxed font-semibold">
+                        مجموع كاش أوردرات التسليم الكلي والجزئي ومصاريف شحن المرتجعات المدفوعة حالياً ميدانياً.
+                      </div>
+                    </div>
+                    <div className="border-t border-white/4 pt-2.5 grid grid-cols-3 gap-1.5 text-center">
+                      <div className="bg-slate-950/40 p-1 rounded">
+                        <div className="text-[9px] text-slate-500 font-bold">تسليم كلي</div>
+                        <div className="text-[10px] font-mono font-bold text-emerald-400 mt-0.5">{courierStats.totalDeliveredCash.toLocaleString("ar")}</div>
+                      </div>
+                      <div className="bg-slate-950/40 p-1 rounded">
+                        <div className="text-[9px] text-slate-500 font-bold">تسليم جزئي</div>
+                        <div className="text-[10px] font-mono font-bold text-emerald-400 mt-0.5">{courierStats.totalPartialCash.toLocaleString("ar")}</div>
+                      </div>
+                      <div className="bg-slate-950/40 p-1 rounded">
+                        <div className="text-[9px] text-slate-500 font-bold">مرتجع مدفوع</div>
+                        <div className="text-[10px] font-mono font-bold text-emerald-400 mt-0.5">{courierStats.totalReturnPaidCash.toLocaleString("ar")}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 🎯 Counter 2: Earned Commissions */}
+                  <div className="bg-gradient-to-br from-slate-900 to-slate-950 border border-white/6 p-5 rounded-2xl relative overflow-hidden shadow-xl space-y-3 text-right">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-extrabold text-slate-400 tracking-wider">🎯 إجمالي العمولات المستحقة اليوم</span>
+                      <span className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400">
+                        <CheckCircle2 size={16} />
+                      </span>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-2xl font-black text-emerald-400 font-mono">
+                        {todayEarnedCommissions.toLocaleString("ar")} <span className="text-xs font-bold text-emerald-500">ج.م</span>
+                      </div>
+                      <div className="text-[9.5px] text-slate-500 leading-relaxed font-semibold">
+                        عمولات التوصيل المستحقة عن وردية اليوم لجميع الأوردرات المنجزة والمسلمة جزئياً أو مرتجعاتها المدفوعة.
+                      </div>
+                    </div>
+                    <div className="border-t border-white/4 pt-2.5 grid grid-cols-2 gap-1.5 text-center">
+                      <div className="bg-slate-950/40 p-1 rounded">
+                        <div className="text-[9px] text-slate-500 font-bold">العمولة الكلية/الجزئية</div>
+                        <div className="text-[10px] font-mono font-bold text-slate-300 mt-0.5">{successCommission} ج.م</div>
+                      </div>
+                      <div className="bg-slate-950/40 p-1 rounded">
+                        <div className="text-[9px] text-slate-500 font-bold">عمولة المرتجع</div>
+                        <div className="text-[10px] font-mono font-bold text-slate-300 mt-0.5">{returnCommission} ج.م</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 📊 Counter 3: Daily Productivity */}
+                  <div className="bg-gradient-to-br from-slate-900 to-slate-950 border border-white/6 p-5 rounded-2xl relative overflow-hidden shadow-xl space-y-3 text-right">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-extrabold text-slate-400 tracking-wider">📊 إنتاجية اليوم (توصيل / مرتجع)</span>
+                      <span className="p-1.5 rounded-lg bg-cyan-500/10 text-cyan-400">
+                        <Clock size={16} />
+                      </span>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-2xl font-black text-cyan-400 font-mono">
+                        {totalProductivity} <span className="text-xs font-bold text-slate-400">أوردر منجز</span>
+                      </div>
+                      <div className="text-[9.5px] text-slate-500 leading-relaxed font-semibold">
+                        مجموع الشحنات التي تم معالجتها ميدانياً وتم تحديث حالتها من قبل المندوب اليوم.
+                      </div>
+                    </div>
+                    <div className="border-t border-white/4 pt-2.5 grid grid-cols-2 gap-1.5 text-center font-semibold">
+                      <div className="bg-slate-950/40 p-1 rounded">
+                        <div className="text-[9px] text-slate-500">ناجح / جزئي</div>
+                        <div className="text-xs font-bold text-emerald-400 mt-0.5">{(courierStats.deliveredCount + courierStats.partialCount)} شحنة</div>
+                      </div>
+                      <div className="bg-slate-950/40 p-1 rounded">
+                        <div className="text-[9px] text-slate-500">مرتجعات كلية</div>
+                        <div className="text-xs font-bold text-red-400 mt-0.5">{courierStats.returnTotalCount} شحنة</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 🛠️ Active Settlements Controls & Form */}
+                {isFinancial && (
+                  <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 space-y-4 text-right">
+                    <div className="border-b border-white/6 pb-2">
+                      <h3 className="text-xs font-black text-amber-500 flex items-center gap-1.5">
+                        <Shield size={14} />
+                        <span>اعتماد الإغلاق المالي وإثبات الذمم اليومية</span>
+                      </h3>
+                      <p className="text-[10px] text-slate-500 mt-1">يُرجى إثبات أي تعديل مالي مصاحب للتصفية وتأكيد إغلاق الوردية.</p>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+                      <div className="space-y-1">
+                        <label className="block text-[10px] text-slate-400 font-bold">نوع التسوية اليدوية المصاحبة للتصفية (اختياري)</label>
+                        <select
+                          value={closingAdjType}
+                          onChange={(e) => setClosingAdjType(e.target.value as any)}
+                          className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-lg px-3 py-2 text-xs focus:outline-none cursor-pointer"
+                        >
+                          <option value="لا يوجد">لا يوجد تسويات مرافقة</option>
+                          <option value="مكافأة">مكافأة للمندوب (+)</option>
+                          <option value="جزاء">خصم/جزاء على المندوب (-)</option>
+                        </select>
+                      </div>
+
+                      {closingAdjType !== "لا يوجد" && (
+                        <>
+                          <div className="space-y-1">
+                            <label className="block text-[10px] text-slate-400 font-bold">قيمة التسوية (ج.م)*</label>
+                            <input
+                              type="number"
+                              required
+                              value={closingAdjAmount}
+                              onChange={(e) => setClosingAdjAmount(e.target.value)}
+                              placeholder="100"
+                              className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-lg px-3 py-2 text-xs font-mono"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="block text-[10px] text-slate-400 font-bold">السبب / التفاصيل</label>
+                            <input
+                              type="text"
+                              required
+                              value={closingAdjDesc}
+                              onChange={(e) => setClosingAdjDesc(e.target.value)}
+                              placeholder="تفاصيل المكافأة أو الخصم..."
+                              className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-lg px-3 py-2 text-xs"
+                            />
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    {/* Core Action Button */}
+                    <div className="pt-3">
+                      <button
+                        type="button"
+                        disabled={settling}
+                        onClick={() => handleInstantWalletSettlement(courierName, courierStats.totalCashWallet, todayEarnedCommissions)}
+                        className="w-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black py-3 rounded-xl text-xs flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-98 shadow-md disabled:opacity-50 font-sans"
+                      >
+                        {settling ? (
+                          <>
+                            <Loader2 size={16} className="animate-spin" />
+                            <span>جاري تصفية الحساب وإغلاق العهدة بالخزنة...</span>
+                          </>
                         ) : (
-                          courierSummary.dailyEarnings.map((dItem: any, idx: number) => {
-                            const dailyCommissions = (dItem.delivered * (courierSummary.commission_success || 25)) + (dItem.returned * (courierSummary.commission_return || 10));
-                            const isToday = idx === 0;
-                            const isSettled = dItem.isSettled !== undefined ? dItem.isSettled : true;
+                          <>
+                            <CheckCircle2 size={16} />
+                            <span>✅ اعتماد تصفية الحساب وإغلاق العهدة اليومية لـ ({courierName})</span>
+                          </>
+                        )}
+                      </button>
+                      <p className="text-[9px] text-slate-500 text-center mt-2 font-semibold">
+                        * عند الضغط: سيتم ترحيل مبلغ الكاش ({courierStats.totalCashWallet.toLocaleString("ar")} ج.م) كإيداع بالخزنة، وتسجيل عمولة ({todayEarnedCommissions.toLocaleString("ar")} ج.م) بملف المندوب، وتصفير عداد اليوم.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* 📋 Active Orders List For Selected Courier */}
+                <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 space-y-4 text-right">
+                  <h3 className="text-xs font-black text-slate-350 border-b border-white/6 pb-2">
+                    📋 الشحنات النشطة بوردية المندوب حالياً ({activeCourierOrders.length} أوردر)
+                  </h3>
+                  
+                  {activeCourierOrders.length === 0 ? (
+                    <div className="text-center py-8 text-xs text-slate-500 font-bold">
+                      لا يوجد شحنات جارية مسندة للمندوب حالياً
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto border border-white/6 rounded-xl">
+                      <table className="w-full text-right text-xs border-collapse font-semibold">
+                        <thead>
+                          <tr className="bg-slate-950 border-b border-white/10 text-slate-400">
+                            <th className="py-2 px-3">كود التتبع</th>
+                            <th className="py-2 px-3">العميل</th>
+                            <th className="py-2 px-3">العنوان / المحافظة</th>
+                            <th className="py-2 px-3">الحالة الميدانية</th>
+                            <th className="py-2 px-3 text-left">قيمة الكاش المحتسب للعهدة</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {activeCourierOrders.map((o, oIdx) => {
+                            const financials = getOrderFinancials(o);
+                            let contributedCash = 0;
+                            let statusColor = "text-slate-450 bg-slate-950/40";
+                            let cashColor = "text-slate-500";
+
+                            if (isDeliveredStatus(o.status)) {
+                              contributedCash = financials.totalCOD;
+                              statusColor = "text-emerald-400 bg-emerald-950/20";
+                              cashColor = "text-emerald-400 font-black";
+                            } else if (isPartialStatus(o.status)) {
+                              contributedCash = Number(o.actualReceivedCash || o.partialAmount || 0);
+                              statusColor = "text-amber-500 bg-amber-950/20";
+                              cashColor = "text-amber-400 font-black";
+                            } else if (isReturnedPaidStatus(o.status, o.returnShippingType)) {
+                              contributedCash = financials.shipPrice;
+                              statusColor = "text-teal-400 bg-teal-950/20";
+                              cashColor = "text-teal-400 font-black";
+                            } else if (o.status === "مرتجع") {
+                              statusColor = "text-red-400 bg-red-950/20";
+                            }
 
                             return (
-                              <tr key={`c-day-row-${idx}`} className="border-b border-white/5 hover:bg-white/2">
-                                <td className="py-2.5 px-3 font-semibold text-slate-300 text-right">
-                                  {dItem.date} {isToday && <span className="text-[9px] bg-amber-500/15 text-amber-500 px-1 py-0.25 rounded mr-1">اليوم</span>}
+                              <tr key={oIdx} className="border-b border-white/5 hover:bg-slate-950/40">
+                                <td className="py-2.5 px-3 font-mono text-slate-300">{o.tracking || o.trackingId}</td>
+                                <td className="py-2.5 px-3 text-slate-200">{o.customer || o.custName || "—"}</td>
+                                <td className="py-2.5 px-3 text-slate-450">{o.province || o.custProvince || "—"}</td>
+                                <td className="py-2.5 px-3">
+                                  <span className={`inline-block px-2 py-0.5 text-[9px] rounded-md font-bold ${statusColor}`}>
+                                    {o.status}
+                                  </span>
                                 </td>
-                                <td className="py-2.5 px-3 text-center font-bold text-emerald-400">{dItem.delivered}</td>
-                                <td className="py-2.5 px-3 text-center font-bold text-amber-500">{dItem.returned}</td>
-                                <td className="py-2.5 px-3 text-center font-mono text-slate-400">{(dItem.baseEarning || 0).toFixed(2)} ج.م</td>
-                                <td className="py-2.5 px-3 text-center font-mono text-emerald-400">+{dailyCommissions.toLocaleString("ar")} ج.م</td>
-                                <td className="py-2.5 px-3 text-center font-mono font-bold text-emerald-400">
-                                  {(dItem.cashCollected || 0).toLocaleString("ar")} ج.م
-                                </td>
-                                <td className="py-2.5 px-3 text-left font-mono font-bold text-slate-100">{(dItem.total || 0).toLocaleString("ar")} ج.م</td>
-                                <td className="py-2.5 px-3 text-left font-mono font-bold text-emerald-300">
-                                  <div className="flex items-center justify-end gap-2">
-                                    <span>{(dItem.cumulative || 0).toLocaleString("ar")} ج.م</span>
-                                    <span className={`text-[9px] px-1.5 py-0.25 rounded font-black ${isSettled ? "bg-emerald-950/60 text-emerald-400 border border-emerald-900/30" : "bg-amber-950/60 text-amber-500 border border-amber-900/40"}`}>
-                                      {isSettled ? "🟢 مصفى" : "🔴 معلق"}
-                                    </span>
-                                  </div>
+                                <td className={`py-2.5 px-3 text-left font-mono ${cashColor}`}>
+                                  {contributedCash > 0 ? `+${contributedCash.toLocaleString("ar")} ج.م` : "—"}
                                 </td>
                               </tr>
                             );
-                          })
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  {/* Mobile view: Professional Collapsed Accordion Cards */}
-                  <div className="block md:hidden space-y-3">
-                    {(!courierSummary.dailyEarnings || courierSummary.dailyEarnings.length === 0) ? (
-                      <div className="py-8 bg-slate-950/40 border border-white/4 rounded-xl text-center text-slate-500 text-xs font-bold">
-                        📱 لا يوجد سجل ورديات يومية للمندوب حالياً
-                      </div>
-                    ) : (
-                      courierSummary.dailyEarnings.map((dItem: any, idx: number) => {
-                        const dailyCommissions = (dItem.delivered * (courierSummary.commission_success || 25)) + (dItem.returned * (courierSummary.commission_return || 10));
-                        const courierDateStr = dItem.date || "";
-                        const isCourierOpen = !!expandedCourierDays[courierDateStr];
-                        const isToday = idx === 0;
-                        const isSettled = dItem.isSettled !== undefined ? dItem.isSettled : true;
-
-                        return (
-                          <div
-                            key={`c-day-mobile-${idx}`}
-                            className={`border rounded-xl shadow-sm transition-all text-right overflow-hidden ${
-                              isToday
-                                ? "bg-amber-950/15 border-amber-500/30"
-                                : "bg-slate-950/60 border-white/6 hover:border-white/12"
-                            }`}
-                          >
-                            {/* Card exterior: [Date] | [Cash collected/due] | [Status: Settled/Outstanding] */}
-                            <div
-                              onClick={() => toggleCourierDay(courierDateStr)}
-                              className="p-3.5 flex items-center justify-between cursor-pointer select-none gap-3 hover:bg-slate-950 transition-colors"
-                            >
-                              <div className="flex flex-col text-right space-y-1">
-                                <span className="text-xs font-black text-slate-200 flex items-center gap-1.5">
-                                  {isToday && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>}
-                                  <span>{courierDateStr} {isToday ? "(اليوم)" : ""}</span>
-                                </span>
-                                <span className={`inline-block px-2 py-0.5 text-[9px] font-black rounded-md w-fit ${
-                                  isSettled
-                                    ? "bg-emerald-950/50 border border-emerald-900/40 text-emerald-400"
-                                    : "bg-amber-950/50 border border-amber-900/40 text-amber-500"
-                                }`}>
-                                  {isSettled ? "🟢 تم التصفية بالمستودع" : "🔴 عهدة نقدية معلقة"}
-                                </span>
-                              </div>
-
-                              <div className="flex items-center gap-2.5">
-                                <div className="text-right">
-                                  <span className="text-[9px] text-slate-450 block font-bold leading-none">الكاش الفعلي بذمته:</span>
-                                  <span className="text-xs font-mono font-black text-emerald-400 mt-1 block">
-                                    {(dItem.cashCollected || 0).toLocaleString("ar")} ج.م
-                                  </span>
-                                </div>
-                                <div className="bg-slate-900 border border-white/5 p-1 rounded-md text-slate-450">
-                                  {isCourierOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* Collapsible Details */}
-                            <div
-                              className={`transition-all duration-300 ease-in-out ${
-                                isCourierOpen ? "max-h-[600px] border-t border-white/6 p-4 bg-slate-950/90 opacity-100 space-y-3" : "max-h-0 overflow-hidden opacity-0 pointer-events-none"
-                              }`}
-                            >
-                              <div className="grid grid-cols-2 gap-3">
-                                <div className="bg-slate-900 border border-white/4 p-2.5 rounded-lg text-right">
-                                  <span className="text-[9.5px] text-slate-400 block font-bold">التسليمات الميدانية:</span>
-                                  <span className="text-xs font-black text-emerald-400 mt-0.5 block">{dItem.delivered} شحنة</span>
-                                </div>
-                                <div className="bg-slate-900 border border-white/4 p-2.5 rounded-lg text-right">
-                                  <span className="text-[9.5px] text-slate-400 block font-bold">المرتجعات المكتملة:</span>
-                                  <span className="text-xs font-black text-amber-505 mt-0.5 block">{dItem.returned} شحنة</span>
-                                </div>
-                                <div className="bg-slate-900 border border-white/4 p-2.5 rounded-lg text-right">
-                                  <span className="text-[9.5px] text-slate-400 block font-bold">صورة المعاش اليومي:</span>
-                                  <span className="text-xs font-mono font-bold text-slate-300 mt-0.5 block">{(dItem.baseEarning || 0).toFixed(2)} ج.م</span>
-                                </div>
-                                <div className="bg-slate-900 border border-white/4 p-2.5 rounded-lg text-right">
-                                  <span className="text-[9.5px] text-slate-400 block font-bold">صافي عمولات اليوم:</span>
-                                  <span className="text-xs font-mono font-black text-emerald-400 mt-0.5 block">+{dailyCommissions.toLocaleString("ar")} ج.م</span>
-                                </div>
-                                <div className="bg-slate-905 border border-emerald-500/10 p-2.5 rounded-lg col-span-2 flex justify-between items-center text-right">
-                                  <span className="text-[10px] text-slate-350 font-bold">الرصيد التراكمي المتبقي للراتب:</span>
-                                  <span className="text-sm font-mono font-black text-emerald-300">
-                                    {Number(dItem.cumulative || 0).toLocaleString("ar")} ج.م
-                                  </span>
-                                </div>
-                              </div>
-
-                              {/* Native WhatsApp Dispatcher Button for Courier Shift */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  const matched = allCouriers.find(c => c && c.name && c.name.toString().trim().toLowerCase() === selectedCourier.toString().trim().toLowerCase());
-                                  let phoneNum = "";
-                                  if (matched && matched.phone && matched.phone !== "—" && matched.phone.trim() !== "") {
-                                    phoneNum = matched.phone.toString().trim();
-                                  }
-                                  
-                                  if (!phoneNum) {
-                                    const userInput = window.prompt("⚠️ لم يتم العثور على رقم هاتف مسجل لهذا المندوب. يرجى إدخال الرقم لبدء محادثة واتساب (مثال: 01012345678):");
-                                    if (!userInput) return;
-                                    phoneNum = userInput.trim();
-                                  }
-
-                                  let cleanedPhone = phoneNum.replace(/[+\s\-]/g, "");
-                                  if (cleanedPhone.startsWith("0") && cleanedPhone.length === 11) {
-                                    cleanedPhone = "2" + cleanedPhone;
-                                  }
-
-                                  const text = `السلام عليكم يا فندم، تفاصيل تقرير وعمولة الوردية ليوم ${courierDateStr} للمندوب (${selectedCourier}):\n` +
-                                    `- 🛵 شحنات مسلَّمة اليوم: ${dItem.delivered} شحنة\n` +
-                                    `- 🔄 شحنات مرتجعة اليوم: ${dItem.returned} شحنة\n` +
-                                    `- 💵 الكاش المستحق بذمتكم للشركة: ${(dItem.cashCollected || 0).toLocaleString("ar")} ج.م\n` +
-                                    `- 💰 أرباح ومستحقات اليوم: ${dItem.total.toLocaleString("ar")} ج.م\n` +
-                                    `- 🔒 حالة الوردية والمطابقة: ${isSettled ? "مصفاة تماماً ✓" : "معلقة قيد المراجعة والمطابقة ⚠️"}\n\n` +
-                                    `شكراً لتعاملكم وتمنياتنا بالتوفيق لك.`;
-
-                                  const encodedText = encodeURIComponent(text);
-                                  const whatsappUrl = `https://api.whatsapp.com/send?phone=${cleanedPhone}&text=${encodedText}`;
-                                  window.open(whatsappUrl, "_blank");
-                                }}
-                                className="w-full bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-black py-2 px-4 rounded-xl text-[11px] flex items-center justify-center gap-2 cursor-pointer transition-all border border-emerald-400/20 active:scale-98 shadow-md"
-                              >
-                                <span>📦 إرسال كشف اليومية بالواتساب</span>
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })
-                    )}
-                  </div>
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
               </div>
-
-              <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 space-y-4">
-                <div className="text-center bg-slate-950/80 border border-white/4 py-5 rounded-xl space-y-1 relative">
-                  <div className="text-[10px] font-extrabold tracking-widest text-slate-450 uppercase">
-                    صافي مستحقات المندوب للتقفيل ({periodFilter === "day" ? "اليومي" : periodFilter === "week" ? "الأسبوعي" : "الشهري"})
-                  </div>
-                  <div className="text-3xl font-black text-amber-500">
-                    {courierSummary.netSalary.toLocaleString("ar")} <span className="text-xs">ج.م</span>
-                  </div>
-                  <div className="text-[9px] text-slate-500">
-                    الراتب الأساسي مفلتر + عمولات التسليم + عمولات المرتجعات مدفوعة الشحن + المكافآت - الجزاءات
-                  </div>
-                </div>
-
-                {/* Grid Breakdown */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  <div className="bg-slate-950 p-3 rounded-xl text-center border border-white/4">
-                    <div className="text-[18px] text-amber-400 font-black font-mono">
-                      {courierSummary.basicSalary.toLocaleString("ar")} ج
-                    </div>
-                    <div className="text-[9px] text-slate-500 font-bold mt-1">الراتب الأساسي المفترض</div>
-                  </div>
-
-                  <div className="bg-slate-950 p-3 rounded-xl text-center border border-white/4">
-                    <div className="text-[18px] text-emerald-400 font-black font-mono">
-                      {courierSummary.delivCommission.toLocaleString("ar")} ج
-                    </div>
-                    <div className="text-[9px] text-slate-500 font-bold mt-1">
-                      عمولة التسليم ({courierSummary.deliveredCount} أوردر)
-                    </div>
-                  </div>
-
-                <div className="bg-slate-950 p-3 rounded-xl text-center border border-white/4">
-                  <div className="text-[18px] text-emerald-400 font-black font-mono">
-                    {courierSummary.returnShippingCommission.toLocaleString("ar")} ج
-                  </div>
-                  <div className="text-[9px] text-slate-500 font-bold mt-1">
-                    مرتجع دفع شحن ({courierSummary.returnedPaidCount} أوردر)
-                  </div>
-                </div>
-
-                <div className="bg-slate-950 p-3 rounded-xl text-center border border-white/4">
-                  <div className="text-[18px] font-black font-mono text-cyan-400">
-                    {courierSummary.bonusesSum.toLocaleString("ar")} ج
-                  </div>
-                  <div className="text-[9px] text-slate-505 font-bold mt-1">مكافآت وتكريمات مضافة</div>
-                </div>
-
-                <div className="col-span-2 md:col-span-4 bg-red-950/15 border border-red-950/40 p-3.5 rounded-xl text-center flex items-center justify-between">
-                  <div className="text-[9px] text-red-400/80 font-bold uppercase flex items-center gap-1">
-                    <ShieldAlert size={14} />خصومات وجزاءات المندوب (مؤثرة سلباً على الراتب):
-                  </div>
-                  <span className="text-sm font-black text-red-400 font-mono">
-                    -{courierSummary.penaltiesSum.toLocaleString("ar")} ج.م
-                  </span>
-                </div>
-              </div>
-            </div>
-            </div>
-          )}
-
-          {/* --- ANTI-LOSS COD & DEFICIT TRACKER CARD --- */}
-          {courierSummary && (
-            <div className="bg-gradient-to-br from-slate-900 via-slate-900 to-slate-950 border border-white/6 rounded-2xl p-5 space-y-4">
-              <div className="border-b border-white/6 pb-2">
-                <h3 className="text-xs font-black text-rose-400 flex items-center justify-between">
-                  <span>🚨 جهاز تعقب عهدة الـ COD ومنع العجز (المطابقة اللحظية)</span>
-                  <span className="text-[10px] font-bold bg-rose-950/20 text-rose-500 border border-rose-900/40 px-2 py-0.5 rounded">
-                     نظام حماية الحصيلة 100%
-                  </span>
-                </h3>
-                <p className="text-[10px] text-slate-500 mt-1">مطابقة النقدية المستلمة في الخزنة مع المجموع المستلم مع المندوبين وتحديد الفروقات.</p>
-              </div>
-
-              {/* COD Stat Row */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div className="bg-slate-950 p-4 border border-white/4 rounded-xl space-y-1">
-                  <div className="text-[10px] font-bold text-slate-400">إجمالي النقدية المحصلة (COD)</div>
-                  <div className="text-xl font-black text-slate-200 font-mono">
-                    {Number(courierSummary.totalCollected || 0).toLocaleString("ar")} <span className="text-xs font-medium">ج.م</span>
-                  </div>
-                  <div className="text-[9px] text-slate-500">مجموع الأوردرات المسلّمة بنجاح</div>
-                </div>
-
-                <div className="bg-slate-950 p-4 border border-white/4 rounded-xl space-y-1">
-                  <div className="text-[10px] font-bold text-slate-400">ما تم إيداعه بالشركة فعلياً</div>
-                  <div className="text-xl font-black text-emerald-400 font-mono">
-                    {Number(courierSummary.totalPaidToCompany || 0).toLocaleString("ar")} <span className="text-xs font-medium">ج.م</span>
-                  </div>
-                  <div className="text-[9px] text-emerald-500">إجمالي التوريدات المسجلة بالخزنة</div>
-                </div>
-
-                 <div className={`p-4 rounded-xl space-y-1 border ${
-                  (courierSummary.deficit || 0) > 0 
-                  ? "bg-rose-950/15 border-rose-900/40" 
-                  : "bg-emerald-950/10 border-emerald-900/30"
-                }`}>
-                  <div className="text-[10px] font-bold text-slate-200">العهدة المعلقة مع المندوب (Courier Custody)</div>
-                  <div className={`text-xl font-black font-mono ${(courierSummary.deficit || 0) > 0 ? "text-rose-450" : "text-emerald-400"}`}>
-                    {Number(courierSummary.deficit || 0).toLocaleString("ar")} <span className="text-xs font-medium">ج.م</span>
-                  </div>
-                  <div className="text-[9px] text-slate-400 leading-none">
-                    {(courierSummary.deficit || 0) > 0 ? "⚠️ توجد عهدة مالية في الشارع لم تُسلم بعد للشركة" : "✅ ذمة المندوب خالية تماماً من العهدة"}
-                  </div>
-                </div>
-              </div>
-
-              {/* Handover payout form */}
-              {isFinancial && (
-                <div className="bg-slate-950 p-4 rounded-xl border border-white/4 space-y-4">
-                  <h4 className="text-[11px] font-black text-emerald-400 flex items-center gap-1.5 border-b border-white/6 pb-2">
-                     🤝 بوابة التسوية والمطابقة وجهاً لوجه لـ {selectedCourier}
-                  </h4>
-
-                  {/* Strict Settlement Verification Box */}
-                  <div className="bg-indigo-950/25 border border-indigo-500/25 p-3.5 rounded-xl space-y-3">
-                    <h5 className="text-[10px] font-black text-indigo-400 flex items-center gap-1.5 justify-between">
-                      <span>🔒 تصفية الحساب الإلكترونية الموحدة (Rider Settlement)</span>
-                      <span className="bg-indigo-950 text-[9px] text-indigo-300 font-bold px-2 py-0.5 rounded border border-indigo-950/50">تاريخ اليوم الحالي المفلتر</span>
-                    </h5>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
-                      <div className="bg-slate-950 p-2.5 rounded-lg border border-white/4 text-right">
-                        <span className="text-[9px] text-slate-400 block font-bold">1. إجمالي التحصيل الفعلي الميداني (كاش الشارع)</span>
-                        <div className="text-sm font-extrabold text-emerald-400 mt-0.5 font-mono">{(courierSummary.todayDeliveredCash || 0).toLocaleString("ar")} ج.م</div>
-                        <span className="text-[8px] text-slate-500 block">للأوردرات الناجحة صراحة "تم التسليم"</span>
-                      </div>
-                      <div className="bg-slate-950 p-2.5 rounded-lg border border-white/4 text-right">
-                        <span className="text-[9px] text-slate-400 block font-bold">2. إجمالي عمولة المندوب اليومية</span>
-                        <div className="text-sm font-extrabold text-rose-400 mt-0.5 font-mono">-{(courierSummary.todayTotalCommission || 0).toLocaleString("ar")} ج.m</div>
-                        <span className="text-[8px] text-slate-500 block">({courierSummary.todayDelivered || 0} ناجح × عمولة التوصيل) + ({courierSummary.todayReturned || 0} مرتجع × عمولة المرتجع)</span>
-                      </div>
-                      <div className="bg-indigo-950/40 p-2.5 rounded-lg border border-indigo-500/10 text-right flex flex-col justify-between">
-                        <div>
-                          <span className="text-[9px] text-indigo-300 block font-bold">3. الصافي النهائي المطلوب من المندوب</span>
-                          <div className="text-base font-black text-indigo-400 mt-0.5 font-mono">
-                            {((courierSummary.todayDeliveredCash || 0) - (courierSummary.todayTotalCommission || 0)).toLocaleString("ar")} ج.م
-                          </div>
-                        </div>
-                        <span className="text-[8px] text-indigo-450 block font-bold">التحصيل الفعلي - عمولة اليوم</span>
-                      </div>
-                    </div>
-                    
-                    <div className="bg-slate-950 border border-white/4 p-3 rounded-lg flex flex-col md:flex-row md:items-center justify-between gap-3 text-right">
-                      <div className="space-y-1">
-                        <div className="text-[9px] font-bold text-indigo-400">الصافي المطلوب توريده رسمياً للخزنة لليوم (العهدة النقدية):</div>
-                        <div className="text-[8.5px] text-slate-400 font-sans leading-relaxed">
-                          المعادلة الرياضية الوحيدة والصارمة: [إجمالي التحصيل الفعلي الميداني (كاش الشارع)] - [إجمالي عمولة المندوب اليومية] = [الصافي النهائي المطلوب من المندوب]. يُمنع منعاً باتاً إضافة ثمن بضاعة الأوردرات المرتجعة أو خلطها مع العهدة النقدية.
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <form onSubmit={handleCourierHandover} className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
-                    <div className="space-y-1">
-                      <label className="block text-[9px] text-slate-400 font-bold">المبلغ المستلم بالجنيه*</label>
-                      <input 
-                        type="number"
-                        required
-                        value={handoverAmount}
-                        onChange={(e) => setHandoverAmount(e.target.value)}
-                        placeholder="3500"
-                        className="w-full bg-slate-900 text-slate-200 border border-white/8 rounded-lg px-2.5 py-2 text-xs font-mono text-right"
-                      />
-                    </div>
-                    
-                    <div className="space-y-1">
-                      <label className="block text-[9px] text-slate-400 font-bold">رقم إيصال الاستلام (REF)*</label>
-                      <input 
-                        type="text"
-                        required
-                        value={handoverRef}
-                        onChange={(e) => setHandoverRef(e.target.value)}
-                        placeholder="REC-5502..."
-                        className="w-full bg-slate-900 text-slate-200 border border-white/8 rounded-lg px-2.5 py-2 text-xs text-right"
-                      />
-                    </div>
-
-                    <div className="space-y-1">
-                      <label className="block text-[9px] text-slate-400 font-bold">بيان إضافي (اختياري)</label>
-                      <input 
-                        type="text"
-                        value={handoverDesc}
-                        onChange={(e) => setHandoverDesc(e.target.value)}
-                        placeholder="توريد الوردية المسائية..."
-                        className="w-full bg-slate-900 text-slate-200 border border-white/8 rounded-lg px-2.5 py-2 text-xs text-right"
-                      />
-                    </div>
-
-                     <div className="md:col-span-4 grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
-                       <button
-                        type="submit"
-                        disabled={submittingLedger}
-                        className="w-full bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-black text-xs py-3 rounded-lg cursor-pointer transition-colors disabled:opacity-50"
-                      >
-                        🤝 تسوية حساب المندوب المالي وإيداع الخزنة
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleSettleCourierOrders}
-                        disabled={submittingLedger}
-                        className="w-full bg-indigo-600 hover:bg-indigo-700 text-slate-950 font-black text-xs py-3 rounded-lg cursor-pointer transition-colors disabled:opacity-50"
-                      >
-                        🔄 سحب الأوردرات للمستودع وتصفية العهدة اللوجستية
-                      </button>
-                     </div>
-                  </form>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Add Adjustments Form (Only Accountant/Admin) */}
-          {isFinancial && (
-            <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 space-y-4">
-              <h3 className="text-xs font-black text-slate-400">➕ إضافة تسوية مالية للمندوب (مكافأة أو جزاء)</h3>
-              <form onSubmit={handleCourierAdjustment} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
-                <div className="space-y-1">
-                  <label className="block text-[10px] text-slate-400 font-bold">نوع التسوية</label>
-                  <select
-                    value={adjustmentType}
-                    onChange={(e) => setAdjustmentType(e.target.value as any)}
-                    className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-lg px-3 py-2 text-xs focus:outline-none"
-                  >
-                    <option value="مكافأة">مكافأة مضافة (+)</option>
-                    <option value="جزاء">جزاء مخصوم (-)</option>
-                  </select>
-                </div>
-                <div className="space-y-1">
-                  <label className="block text-[10px] text-slate-400 font-bold">القيمة المالية (ج.م)*</label>
-                  <input
-                    type="number"
-                    required
-                    value={adjAmount}
-                    onChange={(e) => setAdjAmount(e.target.value)}
-                    placeholder="100"
-                    className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-lg px-3 py-2 text-xs"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="block text-[10px] text-slate-400 font-bold">البيان / السبب</label>
-                  <input
-                    type="text"
-                    value={adjDesc}
-                    onChange={(e) => setAdjDesc(e.target.value)}
-                    placeholder="مكافأة تميز / تأخر عن التسليم..."
-                    className="w-full bg-slate-950 text-slate-200 border border-white/8 rounded-lg px-3 py-2 text-xs"
-                  />
-                </div>
-                <button
-                  type="submit"
-                  disabled={submittingLedger}
-                  className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs py-3.5 px-4 rounded-lg cursor-pointer transition-colors disabled:opacity-50"
-                >
-                  حفظ التسوية ومزامنة الخزنة
-                </button>
-              </form>
-            </div>
-          )}
-
-          {/* Courier dynamic entries timeline log */}
-          <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 space-y-4">
-            <h3 className="text-xs font-black text-slate-400 flex items-center justify-between border-b border-white/6 pb-2">
-              <span>📊 حركات وتسويات عمولات المندوب</span>
-              <FileText size={16} className="text-slate-500" />
-            </h3>
-
-            {loading ? (
-              <div className="text-center py-6 text-xs text-slate-500 animate-pulse">جاري تحميل حركات المندوب...</div>
-            ) : courierTrs.length === 0 ? (
-              <div className="text-center py-8 text-xs text-slate-500">لا يوجد حركات مسجلة لهذا المندوب حالياً</div>
             ) : (
-              <div className="space-y-3">
-                {courierTrs.map((e: any, idx: number) => {
-                  const isPositive = e.type !== "جزاء";
-                  return (
-                    <div
-                      key={idx}
-                      className="bg-slate-950 border border-white/4 p-4 rounded-xl flex items-center justify-between hover:bg-slate-950/70"
-                    >
-                      <div className="flex items-center gap-3">
-                        <span className={`p-2 rounded-lg text-xs ${isPositive ? "text-emerald-400 bg-emerald-950/20" : "text-red-400 bg-red-950/20"}`}>
-                          {isPositive ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />}
-                        </span>
-                        <div>
-                          <div className="text-xs font-bold text-slate-200">{e.desc || e.type}</div>
-                          <div className="text-[10px] text-slate-500 mt-1 font-semibold">
-                            {e.date} {e.tracking !== "ADJUST" ? `· الأوردر ${e.tracking}` : ""}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className={`text-xs font-black font-mono ${isPositive ? "text-emerald-400" : "text-red-400"}`}>
-                        {isPositive ? "+" : "-"}
-                        {e.amount.toLocaleString("ar")} ج
-                      </div>
-                    </div>
-                  );
-                })}
+              <div className="text-center py-12 bg-slate-900 border border-white/6 rounded-2xl text-slate-500 text-xs font-bold">
+                يرجى اختيار المندوب من القائمة أعلاه لعرض كارت التقفيل اللحظي والعهدة الكاش.
               </div>
             )}
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* 🔍 Deep-Dive Daily Financial Ledger Modal */}
       {selectedDayOrdersDetail && (
@@ -1629,8 +1919,8 @@ export default function Ledger({ token, role, user, activeLedgerMode }: LedgerPr
                         );
                       })
                       .map((o: any, oIdx: number) => {
-                        const isDelivered = ["تم التسليم", "تسليم جزئي"].includes(o.status);
-                        const isReturned = (o.status || "").includes("مرتجع") || ["قيد المرتجع"].includes(o.status);
+                        const isDelivered = isDeliveredStatus(o.status) || isPartialStatus(o.status);
+                        const isReturned = isCourierReturnState(o.status) || (o.status || "").includes("مرتجع");
                         return (
                           <tr key={oIdx} className="hover:bg-slate-900/40">
                             <td className="p-3 font-mono text-slate-300 select-all">{o.trackingId}</td>

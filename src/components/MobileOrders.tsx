@@ -278,7 +278,7 @@ export default function MobileOrders({
   };
 
   return (
-    <div className="block md:hidden space-y-3.5 antialiased text-right font-sans pb-24 h-full relative" id="mobile_shipments_container">
+    <div className="block lg:hidden space-y-3.5 antialiased text-right font-sans pb-24 h-full relative" id="mobile_shipments_container">
       
       {/* 🌟 Sticky Top Header */}
       <div className="sticky top-0 z-40 bg-slate-950/95 backdrop-blur-md border-b border-white/6 px-4 py-3 flex items-center gap-2">
@@ -356,6 +356,7 @@ export default function MobileOrders({
           {(() => {
             const rawFilters = [
               { key: "all", label: "الكل" },
+              { key: "جاهز للاستلام من المورد", label: "⏳ جاهز للاستلام" },
               { key: "جديد", label: "🆕 جديد" },
               { key: "مسند", label: "📋 مسند" },
               { key: "العميل رد وجاري التسليم", label: "📞 لرد وجاري" },
@@ -526,6 +527,12 @@ export default function MobileOrders({
                         <div className="col-span-2 pt-1">
                           <span className="text-[9px] text-emerald-400 font-black block">العنوان التفصيلي للتوصيل</span>
                           <span className="font-medium text-slate-200 text-[11px] leading-relaxed block">{o.address || "غير مدرج"}</span>
+                        </div>
+                        <div className="col-span-2 border-t border-white/4 pt-1.5 mt-1 text-right">
+                          <span className="text-[9px] text-amber-500 font-black block">المندوب المسؤول</span>
+                          <span className="font-extrabold text-slate-150 text-[11px] bg-amber-550/10 text-amber-400 px-2.5 py-1 rounded-md border border-amber-500/20 inline-block mt-0.5">
+                            👤 المندوب المسؤول: {o.courier || "لم يعين بعد ⚠️"}
+                          </span>
                         </div>
                       </div>
 

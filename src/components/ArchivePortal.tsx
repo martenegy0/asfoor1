@@ -417,6 +417,11 @@ export default function ArchivePortal({ token, role, username, orders, onRefresh
 
                       {/* Status */}
                       <td className="p-3.5 text-center">
+                        {(o.status === "مرتجع بالمستودع" || o.status === "مرتجع في المستودع" || o.status === "مرتجع جزئي بالمستودع") && (o.isPartial === true || o.isPartial === "true" || Number(o.actualReceivedCash || o.partialAmount || 0) > 0) && (
+                          <div className="text-[9px] font-extrabold text-amber-400 bg-red-950/80 border border-red-500/30 px-1.5 py-0.5 rounded mb-1 inline-block animate-pulse whitespace-nowrap">
+                            ⚠️ مرتجع جزئي ({o.actualReceivedCash || o.partialAmount || 0} ج.م)
+                          </div>
+                        )}
                         <span
                           className={`inline-block px-2.5 py-1 rounded-full text-[10px] font-black ${
                             statusColors[o.status] || "bg-slate-950 text-slate-400 border border-white/5"

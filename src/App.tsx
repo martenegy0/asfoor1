@@ -11,6 +11,135 @@ import DailyClosing from "./components/DailyClosing";
 import SuppliersManagement from "./components/SuppliersManagement";
 import OpsRoom from "./components/OpsRoom";
 import ArchivePortal from "./components/ArchivePortal";
+import { StaffPermissions } from "./components/StaffPermissions";
+
+function computeDynamicCounters(rawList: any[], userRole: string, userLogin: string, cashboxBal: number) {
+  const cleanRole = (userRole || "").toString().trim();
+  const isAgent = cleanRole === "مندوب" || cleanRole.includes("مندوب");
+  const isSupplier = cleanRole === "مورد" || cleanRole.includes("مورد");
+  const isSupervisor = cleanRole === "مشرف" || cleanRole.includes("مشرف");
+
+  const todayStr = getTodayDateStr();
+
+  // 1. Strict Supplier Isolation Guardrail (Adhere to v135 established ledger)
+  if (isSupplier) {
+    const deliveredOrders = rawList.filter((o: any) => o.status === "تم التسليم" || o.status === "تم التسليم بنجاح");
+    const cumulativeCollection = deliveredOrders.reduce((sum, o) => {
+      return sum + (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
+    }, 0);
+    const todayDeliveredOrders = deliveredOrders.filter((o: any) => {
+      const delDate = o.delivDate || o.updatedAt || "";
+      return delDate.startsWith(todayStr);
+    });
+    const todayCollection = todayDeliveredOrders.reduce((sum, o) => {
+      return sum + (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
+    }, 0);
+
+    return {
+      total: rawList.length,
+      delivered: deliveredOrders.length,
+      returned: rawList.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)).length,
+      active: rawList.filter((o: any) => ["خارج مع المندوب", "تم الإسناد", "قيد التنفيذ"].includes(o.status)).length,
+      totalCOD: cumulativeCollection,
+      todayCOD: todayCollection
+    };
+  }
+
+  // 2. Courier active workload calculations (0 active workload once settled)
+  if (isAgent) {
+    const courierActiveOrders = rawList.filter((o: any) => {
+      const isS = o.isSettled === true || o.isSettled === "true" || o.is_settled === "true" || o.is_settled === true || o.isClosed === true || o.isClosed === "true";
+      return !isS;
+    });
+
+    const deliveredOrders = courierActiveOrders.filter((o: any) => o.status === "تم التسليم");
+    const cumulativeCollection = deliveredOrders.reduce((sum, o) => {
+      return sum + (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
+    }, 0);
+    const todayDeliveredOrders = deliveredOrders.filter((o: any) => {
+      const delDate = o.delivDate || o.updatedAt || "";
+      return delDate.startsWith(todayStr);
+    });
+    const todayCollection = todayDeliveredOrders.reduce((sum, o) => {
+      return sum + (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
+    }, 0);
+
+    return {
+      total: courierActiveOrders.length,
+      delivered: deliveredOrders.length,
+      returned: courierActiveOrders.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)).length,
+      active: courierActiveOrders.filter((o: any) => ["خارج مع المندوب", "تم الإسناد", "قيد التنفيذ"].includes(o.status)).length,
+      totalCOD: cumulativeCollection,
+      todayCOD: todayCollection
+    };
+  }
+
+  // 3. Admin, Supervisor, and Ops Officer roles (Smart Dynamic Operational Counters)
+  const isUploadedToday = (o: any) => {
+    return (o.createdAt && o.createdAt.startsWith(todayStr)) || (o.updatedAt && o.updatedAt.startsWith(todayStr)) || (o.orderDate && o.orderDate.startsWith(todayStr));
+  };
+  
+  const isClosedOrArchived = (o: any) => {
+    const status = o.status || "";
+    return o.isArchived || o.isClosed || o.isSettled || o.is_settled === "true" || ["مؤرشف", "تم تسليم المرتجع للمورد وتصفية حسابه", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد"].includes(status);
+  };
+
+  const activeDailyCycleOrders = rawList.filter((o: any) => {
+    return isUploadedToday(o) || !isClosedOrArchived(o);
+  });
+
+  const dailyDeliveredOrders = rawList.filter((o: any) => {
+    const status = o.status || "";
+    const isDel = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(status);
+    const dateStr = o.delivDate || o.updatedAt || "";
+    return isDel && dateStr.startsWith(todayStr);
+  });
+
+  const activeInProgressOrders = rawList.filter((o: any) => {
+    const status = o.status || "";
+    const isInField = ["قيد التنفيذ", "خارج مع المندوب", "تم الإسناد", "مسند"].includes(status);
+    return isInField && !isClosedOrArchived(o);
+  });
+
+  const activeReturnsOrders = rawList.filter((o: any) => {
+    const status = o.status || "";
+    const isRet = ["مرتجع بالمستودع", "مرتجع بالستودع", "مرتجع", "مرتجع جديد", "مرتجع جزئي بالمستودع"].includes(status);
+    const isReturnedToVendor = ["مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(status);
+    return isRet && !isReturnedToVendor && !isClosedOrArchived(o);
+  });
+
+  const todayCODCustodyOrders = rawList.filter((o: any) => {
+    const status = o.status || "";
+    const isDel = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(status);
+    const dateStr = o.delivDate || o.updatedAt || "";
+    const isToday = dateStr.startsWith(todayStr);
+    const isHeldByCourier = !o.isSettled && !o.isClosed && !o.isArchived && o.courier;
+    return isDel && isToday && isHeldByCourier;
+  });
+
+  const getCODVal = (o: any) => Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0)));
+
+  const todayCODCustodySum = todayCODCustodyOrders.reduce((sum, o) => sum + getCODVal(o), 0);
+
+  const settledVaultOrders = rawList.filter((o: any) => {
+    const status = o.status || "";
+    const isS = o.isSettled === true || o.isSettled === "true" || o.is_settled === "true" || o.is_settled === true || o.isClosed || o.isArchived;
+    const isDel = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(status);
+    return isS && isDel;
+  });
+
+  const settledVaultCash = settledVaultOrders.reduce((sum, o) => sum + getCODVal(o), 0);
+  const vaultCash = (cleanRole === "مدير" || cleanRole === "محاسب") && cashboxBal > 0 ? cashboxBal : settledVaultCash;
+
+  return {
+    total: activeDailyCycleOrders.length,
+    delivered: dailyDeliveredOrders.length,
+    returned: activeReturnsOrders.length,
+    active: activeInProgressOrders.length,
+    totalCOD: vaultCash,
+    todayCOD: todayCODCustodySum
+  };
+}
 
 export default function App() {
   const [token, setToken] = useState("");
@@ -160,6 +289,24 @@ export default function App() {
     const savedRole = localStorage.getItem("fp_role");
     const savedPerms = localStorage.getItem("fp_perms");
 
+    const cachedOrders = localStorage.getItem("fp_orders_cache");
+    if (cachedOrders) {
+      try {
+        setOrders(JSON.parse(cachedOrders));
+      } catch (e) {
+        console.error("Failed to restore orders cache", e);
+      }
+    }
+
+    const cachedCouriers = localStorage.getItem("fp_couriers_cache");
+    if (cachedCouriers) {
+      try {
+        setCouriers(JSON.parse(cachedCouriers));
+      } catch (e) {
+        console.error("Failed to restore couriers cache", e);
+      }
+    }
+
     if (savedToken && savedUser && savedRole) {
       setToken(savedToken);
       setUsername(savedUser);
@@ -287,6 +434,7 @@ export default function App() {
       const isAgent = cleanRole === "مندوب" || cleanRole.includes("مندوب");
       const isSupplier = cleanRole === "مورد" || cleanRole.includes("مورد");
       const isReturnsOfficer = cleanRole === "مسؤول مرتجعات" || cleanRole.includes("مرتجعات");
+      const isSupervisor = cleanRole === "مشرف" || cleanRole.includes("مشرف");
 
       // 1. Fetch Orders List (Stage 1: Fast initial load of active/current orders only)
       let rawOrders: any[] = [];
@@ -310,6 +458,23 @@ export default function App() {
 
       if (isAgent) {
         orderList = orderList.filter((o: any) => o.courier && o.courier.toString().trim().toLowerCase() === cleanUser);
+      } else if (isSupervisor) {
+        const staffCached = localStorage.getItem("fp_staff_permissions_cache");
+        let supervisedNames: string[] = [];
+        if (staffCached) {
+          try {
+            const list = JSON.parse(staffCached);
+            supervisedNames = list
+              .filter((item: any) => (item.supervisor_id || "").toString().trim().toLowerCase() === cleanUser)
+              .map((item: any) => (item.name || "").toString().trim().toLowerCase());
+          } catch (e) {
+            console.error("Error reading staff cache for supervisor filter", e);
+          }
+        }
+        orderList = orderList.filter((o: any) => {
+          const oCou = (o.courier || "").toString().trim().toLowerCase();
+          return oCou && supervisedNames.includes(oCou);
+        });
       } else if (isSupplier) {
         orderList = orderList.filter((o: any) => o.supplier && o.supplier.toString().trim().toLowerCase() === cleanUser);
       } else if (isReturnsOfficer) {
@@ -336,29 +501,16 @@ export default function App() {
       }
 
       setOrders(orderList);
+      localStorage.setItem("fp_orders_cache", JSON.stringify(orderList));
 
-      // Compute calculations programmatically (client-side)
-      const deliveredOrders = orderList.filter((o: any) => o.status === "تم التسليم");
-      const cumulativeCollection = deliveredOrders.reduce((sum, o) => {
-        return sum + (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
-      }, 0);
-
-      const todayStr = getTodayDateStr();
-      const todayDeliveredOrders = deliveredOrders.filter((o: any) => {
-        const delDate = o.delivDate || o.updatedAt || "";
-        return delDate.startsWith(todayStr);
-      });
-      const todayCollection = todayDeliveredOrders.reduce((sum, o) => {
-        return sum + (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
-      }, 0);
-
-      // Compute quick stats counters for header
-      setQuickTotal(orderList.length);
-      setQuickDelivered(deliveredOrders.length);
-      setQuickReturned(orderList.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length);
-      setQuickActive(orderList.filter((o: any) => o.status === "خارج مع المندوب" || o.status === "تم الإسناد").length);
-      setQuickTotalCOD(cumulativeCollection);
-      setQuickTodayCOD(todayCollection);
+      // Compute calculations programmatically (client-side) using dynamic helper
+      const stats = computeDynamicCounters(orderList, role, username, cashboxBalance);
+      setQuickTotal(stats.total);
+      setQuickDelivered(stats.delivered);
+      setQuickReturned(stats.returned);
+      setQuickActive(stats.active);
+      setQuickTotalCOD(stats.totalCOD);
+      setQuickTodayCOD(stats.todayCOD);
 
       // Stage 2: Load archived orders in background if needed (e.g. for non-Agent roles to cover full historical searches)
       if (!isAgent) {
@@ -374,6 +526,23 @@ export default function App() {
 
               if (isAgent) {
                 fullOrderList = fullOrderList.filter((o: any) => o.courier && o.courier.toString().trim().toLowerCase() === cleanUser);
+              } else if (isSupervisor) {
+                const staffCached = localStorage.getItem("fp_staff_permissions_cache");
+                let supervisedNames: string[] = [];
+                if (staffCached) {
+                  try {
+                    const list = JSON.parse(staffCached);
+                    supervisedNames = list
+                      .filter((item: any) => (item.supervisor_id || "").toString().trim().toLowerCase() === cleanUser)
+                      .map((item: any) => (item.name || "").toString().trim().toLowerCase());
+                  } catch (e) {
+                    console.error("Error reading staff cache for lazy supervisor filter", e);
+                  }
+                }
+                fullOrderList = fullOrderList.filter((o: any) => {
+                  const oCou = (o.courier || "").toString().trim().toLowerCase();
+                  return oCou && supervisedNames.includes(oCou);
+                });
               } else if (isSupplier) {
                 fullOrderList = fullOrderList.filter((o: any) => o.supplier && o.supplier.toString().trim().toLowerCase() === cleanUser);
               } else if (isReturnsOfficer) {
@@ -400,26 +569,15 @@ export default function App() {
               }
 
               setOrders(fullOrderList);
+              localStorage.setItem("fp_orders_cache", JSON.stringify(fullOrderList));
 
-              const fullDeliveredOrders = fullOrderList.filter((o: any) => o.status === "تم التسليم");
-              const fullCumulativeCollection = fullDeliveredOrders.reduce((sum, o) => {
-                return sum + (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
-              }, 0);
-
-              const fullTodayDeliveredOrders = fullDeliveredOrders.filter((o: any) => {
-                const delDate = o.delivDate || o.updatedAt || "";
-                return delDate.startsWith(todayStr);
-              });
-              const fullTodayCollection = fullTodayDeliveredOrders.reduce((sum, o) => {
-                return sum + (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
-              }, 0);
-
-              setQuickTotal(fullOrderList.length);
-              setQuickDelivered(fullDeliveredOrders.length);
-              setQuickReturned(fullOrderList.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد"].includes(o.status)).length);
-              setQuickActive(fullOrderList.filter((o: any) => o.status === "خارج مع المندوب" || o.status === "تم الإسناد").length);
-              setQuickTotalCOD(fullCumulativeCollection);
-              setQuickTodayCOD(fullTodayCollection);
+              const stats = computeDynamicCounters(fullOrderList, role, username, cashboxBalance);
+              setQuickTotal(stats.total);
+              setQuickDelivered(stats.delivered);
+              setQuickReturned(stats.returned);
+              setQuickActive(stats.active);
+              setQuickTotalCOD(stats.totalCOD);
+              setQuickTodayCOD(stats.todayCOD);
             }
           } catch (bgErr) {
             console.warn("Background full orders fetch failed:", bgErr);
@@ -443,6 +601,7 @@ export default function App() {
       const resCourier = await apiCall("getCouriers", tk);
       if (resCourier.ok) {
         setCouriers(resCourier.couriers || []);
+        localStorage.setItem("fp_couriers_cache", JSON.stringify(resCourier.couriers || []));
       }
 
       // 3. Fetch specific financial lists if permitted
@@ -673,18 +832,23 @@ export default function App() {
 
   // Role permissions definitions
   const cleanRoleState = (role || "").toString().trim();
-  const isAgentState = cleanRoleState === "مندوب" || cleanRoleState.includes("مندوب");
-  const isSupplierState = cleanRoleState === "مورد" || cleanRoleState.includes("مورد");
-  const isReturnsOfficer = cleanRoleState === "مسؤول مرتجعات" || cleanRoleState.includes("مرتجع");
-  const showDashTab = role === "مدير" || role === "مشرف";
-  const showOpsRoomTab = role === "مدير";
-  const showFinanceTabs = role === "مدير" || role === "محاسب";
-  const showUsersTab = role === "مدير";
-  const showAddInputTab = role === "مدير" || role === "مشرف" || role === "موظف عمليات" || isSupplierState;
-  const showSupplierLedgerTab = isSupplierState || role === "مدير" || role === "محاسب";
-  const showCourierLedgerTab = isAgentState || role === "مدير" || role === "محاسب";
-  const showCouriersProfileTab = role === "مدير" || role === "محاسب" || role === "مشرف";
-  const showSuppliersPageTab = role === "مدير" || role === "محاسب" || role === "مشرف";
+  const normalizeRole = (value: string) => (value || "").toString().trim();
+  const isAgentState = normalizeRole(cleanRoleState) === "مندوب" || normalizeRole(cleanRoleState).includes("مندوب");
+  const isSupplierState = normalizeRole(cleanRoleState) === "مورد" || normalizeRole(cleanRoleState).includes("مورد");
+  const isReturnsOfficer = normalizeRole(cleanRoleState) === "مسؤول مرتجعات" || normalizeRole(cleanRoleState).includes("مرتجع");
+  const isStrictAdmin = normalizeRole(cleanRoleState) === "مدير";
+  const isStrictSupervisor = normalizeRole(cleanRoleState) === "مشرف";
+  const isStrictAccountant = normalizeRole(cleanRoleState) === "محاسب";
+  const isStrictOps = normalizeRole(cleanRoleState) === "موظف عمليات" || normalizeRole(cleanRoleState).includes("عمليات");
+  const showDashTab = isStrictAdmin || isStrictSupervisor;
+  const showOpsRoomTab = isStrictAdmin;
+  const showFinanceTabs = isStrictAdmin || isStrictAccountant;
+  const showUsersTab = isStrictAdmin;
+  const showAddInputTab = isStrictAdmin || isStrictSupervisor || isStrictOps || isSupplierState;
+  const showSupplierLedgerTab = isSupplierState || isStrictAdmin || isStrictAccountant;
+  const showCourierLedgerTab = isAgentState || isStrictAdmin || isStrictAccountant;
+  const showCouriersProfileTab = isStrictAdmin || isStrictAccountant || isStrictSupervisor;
+  const showSuppliersPageTab = isStrictAdmin || isStrictAccountant || isStrictSupervisor;
 
   return (
     <div className="min-h-screen flex flex-col font-sans bg-[#040813] text-[#e2e8f0] relative select-none antialiased">
@@ -719,7 +883,7 @@ export default function App() {
           <button
             onClick={() => refreshAllData()}
             disabled={loadingOrders}
-            className="p-2 text-slate-400 hover:text-slate-200 bg-slate-950 rounded-xl border border-white/6 cursor-pointer active:scale-95 transition-all text-xs flex items-center gap-1 font-bold"
+            className="p-2 text-slate-950 bg-amber-500 hover:bg-amber-400 rounded-xl border border-amber-400/40 cursor-pointer active:scale-95 transition-all text-xs flex items-center gap-1 font-black shadow-sm"
           >
             <RefreshCw size={14} className={loadingOrders ? "animate-spin" : ""} />
             <span>تحديث</span>
@@ -728,7 +892,7 @@ export default function App() {
           {/* Master Logout cleanly redirecting */}
           <button
             onClick={handleLogout}
-            className="p-2 text-red-400 hover:text-red-300 bg-slate-950 rounded-xl border border-red-950/20 cursor-pointer active:scale-95 transition-all text-xs font-bold"
+            className="p-2 text-slate-950 bg-red-500 hover:bg-red-400 rounded-xl border border-red-500/40 cursor-pointer active:scale-95 transition-all text-xs font-black shadow-sm"
           >
             <LogOut size={14} />
           </button>
@@ -740,27 +904,39 @@ export default function App() {
         <div className="grid grid-cols-2 md:grid-cols-6 border-b border-white/6 bg-slate-950 text-center text-xs py-2 md:h-14 items-center gap-y-2 md:gap-y-0">
           <div className="border-l border-white/4 space-y-0.5 pointer-events-none">
             <div className="text-sm font-black text-amber-500 font-mono">{quickTotal}</div>
-            <div className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider">إجمالي الطلبات</div>
+            <div className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider">
+              {isSupplierState || isAgentState ? "إجمالي الطلبات" : "إجمالي الطلبات النشطة"}
+            </div>
           </div>
           <div className="border-0 md:border-l border-white/4 space-y-0.5 pointer-events-none">
             <div className="text-sm font-black text-emerald-400 font-mono">{quickDelivered}</div>
-            <div className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider">تم التسليم</div>
+            <div className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider">
+              {isSupplierState ? "تم التسليم" : "تم التسليم اليوم"}
+            </div>
           </div>
           <div className="border-l border-white/4 space-y-0.5 pointer-events-none">
             <div className="text-sm font-black text-red-500 font-mono">{quickReturned}</div>
-            <div className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider">المرتجع</div>
+            <div className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider">
+              {isSupplierState ? "المرتجع" : "المرتجع النشط بالمستودع"}
+            </div>
           </div>
           <div className="border-0 md:border-l border-white/4 space-y-0.5 pointer-events-none">
             <div className="text-sm font-black text-blue-400 font-mono">{quickActive}</div>
-            <div className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider">قيد التنفيذ</div>
+            <div className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider">
+              {isSupplierState ? "قيد التنفيذ" : "قيد التنفيذ ميدانياً"}
+            </div>
           </div>
           <div className="border-l border-white/4 space-y-0.5 pointer-events-none">
             <div className="text-sm font-black text-emerald-500 font-mono">{(quickTotalCOD || 0).toLocaleString("ar")} ج.م</div>
-            <div className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest font-black leading-none py-0.5">التحصيل المتراكم</div>
+            <div className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest font-black leading-none py-0.5">
+              {isSupplierState ? "التحصيل المتراكم" : "التحصيل المتراكم بالخزنة"}
+            </div>
           </div>
           <div className="space-y-0.5 pointer-events-none">
             <div className="text-sm font-black text-amber-400 font-mono">{(quickTodayCOD || 0).toLocaleString("ar")} ج.م</div>
-            <div className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest font-black leading-none py-0.5">تحصيل اليوم</div>
+            <div className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest font-black leading-none py-0.5">
+              {isSupplierState ? "تحصيل اليوم" : "تحصيل اليوم (حقيبة المناديب)"}
+            </div>
           </div>
         </div>
       ) : (
@@ -772,8 +948,42 @@ export default function App() {
         </div>
       )}
 
-      {/* Tabs navigation row bar */}
-      <nav className="flex bg-slate-900 border-b border-white/6 overflow-x-auto scrollbar-none scroll-smooth">
+      {/* Responsive Mobile Tab Selector & Desktop Tab Row */}
+      <div className="block md:hidden bg-slate-900 border-b border-white/6 px-4 py-3">
+        <label className="block text-[10px] font-black text-slate-400 mb-1">تصفح لوحة التحكم</label>
+        <div className="relative">
+          <select
+            value={activeTab}
+            onChange={(e) => setActiveTab(e.target.value)}
+            className="w-full bg-slate-950 border border-white/10 rounded-xl px-4 py-3 text-xs font-black text-amber-500 outline-none appearance-none"
+          >
+            <option value="orders">🚛 الشحنات</option>
+            {showDashTab && <option value="dash">📊 لوحة التحكم</option>}
+            {showOpsRoomTab && <option value="ops_room">⚡ غرفة العمليات وجدول المناديب اللحظي</option>}
+            {showAddInputTab && <option value="inputs">➕ إضافة أوردرات</option>}
+            {showSupplierLedgerTab && <option value="supplier_ledger">📖 كشف حساب الموردين</option>}
+            {showCourierLedgerTab && <option value="courier_ledger">📖 كشف حساب المناديب</option>}
+            {showFinanceTabs && (
+              <>
+                <option value="cash">💵 الخزنة</option>
+                <option value="exp">💸 المصروفات</option>
+                <option value="closing">🗓️ التقفيل اليومي</option>
+                <option value="audit">📜 سجلات التدقيق والأمان</option>
+              </>
+            )}
+            {showUsersTab && <option value="users">👥 إدارة الصلاحيات</option>}
+            {showCouriersProfileTab && <option value="couriers_profile">⚙️ ملفات المناديب المالّية</option>}
+            {showSuppliersPageTab && <option value="suppliers">👥 كشف حساب وإدارة الموردين</option>}
+            <option value="archive">🗄️ الأرشيف المركزي</option>
+          </select>
+          <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-4 text-slate-400 text-xs">
+            ▼
+          </div>
+        </div>
+      </div>
+
+      {/* Tabs navigation row bar (Desktop only) */}
+      <nav className="hidden md:flex bg-slate-900 border-b border-white/6 overflow-x-auto scrollbar-none scroll-smooth">
         <button
           onClick={() => setActiveTab("orders")}
           className={`px-5 py-4 text-xs font-black cursor-pointer transition-all border-b-2 flex items-center gap-1.5 whitespace-nowrap ${
@@ -916,7 +1126,7 @@ export default function App() {
           <button
             onClick={() => setActiveTab("suppliers")}
             className={`px-5 py-4 text-xs font-black cursor-pointer transition-all border-b-2 flex items-center gap-1.5 whitespace-nowrap ${
-              activeTab === "suppliers" ? "text-amber-500 border-amber-505 border-amber-500" : "text-slate-400 border-transparent hover:text-slate-200"
+              activeTab === "suppliers" ? "text-amber-500 border-amber-500" : "text-slate-400 border-transparent hover:text-slate-200"
             }`}
           >
             <Users size={14} />
@@ -936,7 +1146,7 @@ export default function App() {
       </nav>
 
       {/* Main Pages router contents switcher */}
-      <main className="flex-1 pb-12 overflow-y-auto">
+      <main className={`flex-1 pb-12 overflow-y-auto ${activeTab === "orders" ? "lg:overflow-hidden lg:pb-0" : ""}`}>
         {activeTab === "orders" && (
           <Orders
             token={token}
@@ -985,11 +1195,11 @@ export default function App() {
         )}
 
         {activeTab === "supplier_ledger" && showSupplierLedgerTab && (
-          <Ledger token={token} role={role} user={username} activeLedgerMode="supplier" />
+          <Ledger token={token} role={role} user={username} activeLedgerMode="supplier" orders={orders} />
         )}
 
         {activeTab === "courier_ledger" && showCourierLedgerTab && (
-          <Ledger token={token} role={role} user={username} activeLedgerMode="courier" />
+          <Ledger token={token} role={role} user={username} activeLedgerMode="courier" orders={orders} />
         )}
 
         {/* --- CASHBOX INTEGRATION (Only visible to accountant & admin per rules) --- */}
@@ -1166,82 +1376,14 @@ export default function App() {
           <DailyClosing token={token} role={role} user={username} orders={orders} />
         )}
 
-        {/* --- USERS MANAGEMENT TAB (Admin only per rules) --- */}
+        {/* --- USERS MANAGEMENT TAB (Odoo-Style RBAC & Hierarchy) --- */}
         {activeTab === "users" && showUsersTab && (
-          <div className="p-4 space-y-6 text-right">
-            <div className="flex items-center justify-between bg-slate-900 border border-white/6 p-4 rounded-xl">
-              <div>
-                <h3 className="text-xs font-black text-slate-100">👥 إدارة صلاحيات المستخدمين والمناديب</h3>
-                <p className="text-[10px] text-slate-500 mt-1">تفعيل أو إيقاف حسابات المناديب والمشرفين التابعين للشركة.</p>
-              </div>
-              <button
-                onClick={() => setAddUserModalOpen(true)}
-                className="px-3.5 py-2 bg-amber-500 text-slate-950 font-black text-xs rounded-xl cursor-pointer"
-              >
-                + إضافة مستخدم
-              </button>
-            </div>
-
-            <div className="bg-slate-900 border border-white/6 rounded-2xl p-5 space-y-3">
-              {usersList.length === 0 ? (
-                <div className="text-center py-6 text-xs text-slate-500 animate-pulse">جاري تحميل سجلات المستخدمين...</div>
-              ) : (
-                usersList.map((u) => {
-                  const isActive = u.active === "نعم";
-                  return (
-                    <div
-                      key={u.row}
-                      className="bg-slate-950 border border-white/4 p-4 rounded-xl flex items-center justify-between hover:bg-slate-950/70"
-                    >
-                      <div>
-                        <div className="text-xs font-bold text-slate-100">
-                          {u.name}{" "}
-                          <span className="text-[10px] font-bold text-amber-500 bg-amber-950/20 px-1.5 py-0.5 rounded border border-amber-900/40 font-mono">
-                            {u.role}
-                          </span>
-                        </div>
-                        <div className="text-[10px] text-slate-500 mt-1 font-semibold leading-relaxed">
-                          الصلاحية الممنوحة: {u.perms || "صلاحيات محدودة"} · البريد: {u.email || "—"}
-                        </div>
-                      </div>
-
-                      <div className="flex gap-2 items-center">
-                        {u.role === "مندوب" && (
-                          <button
-                            onClick={() => {
-                              const courierItem = couriers.find((c: any) => c.name === u.name) || {};
-                              setSelectedCourierName(u.name);
-                              setCourierPhone(courierItem.phone || "");
-                              setCourierRegion(courierItem.region || "");
-                              setCourierBaseSalary(courierItem.base_fixed_salary !== undefined ? Number(courierItem.base_fixed_salary) : Number(courierItem.salary || 3000));
-                              setCourierCommissionSuccess(courierItem.commission_success !== undefined ? Number(courierItem.commission_success) : Number(courierItem.commission || 25));
-                              setCourierCommissionReturn(courierItem.commission_return !== undefined ? Number(courierItem.commission_return) : 10);
-                              setCourierHireDate(courierItem.hire_date || "");
-                              setCourierEditModalOpen(true);
-                            }}
-                            className="px-2.5 py-1.5 rounded-lg text-[10px] font-black cursor-pointer bg-slate-900 text-slate-300 border border-white/8 hover:text-white transition-colors"
-                          >
-                            ⚙️ جدول الراتب والعمولة
-                          </button>
-                        )}
-
-                        <button
-                          onClick={() => toggleUserActivation(u.row, u.name, u.active, u.role)}
-                          className={`px-3 py-1.5 rounded-lg text-[10px] font-black cursor-pointer transition-colors ${
-                            isActive
-                              ? "bg-red-950/20 text-red-500 border border-red-900/30 hover:bg-red-950/40"
-                              : "bg-emerald-950/20 text-emerald-400 border border-emerald-900/30 hover:bg-emerald-950/40"
-                          }`}
-                        >
-                          {isActive ? "إيقاف الحساب" : "تفعيل الحساب"}
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
+          <StaffPermissions
+            token={token}
+            role={role}
+            username={username}
+            onRefreshAll={() => refreshAllData()}
+          />
         )}
 
         {/* --- COURIERS FINANCIAL PROFILES TAB (Admin/Accountant/Supervisor only) --- */}
