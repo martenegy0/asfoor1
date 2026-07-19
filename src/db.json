@@ -71,22 +71,6 @@
       "active": "نعم",
       "email": "safwat@friendplus.com",
       "perms": "متابعة حالات فقط"
-    },
-    {
-      "name": "asfor",
-      "role": "مشرف",
-      "pass": "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92",
-      "active": "نعم",
-      "email": "asfor@friendplus.com",
-      "perms": "الطلبات"
-    },
-    {
-      "name": "yassin",
-      "role": "مندوب",
-      "pass": "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92",
-      "active": "نعم",
-      "email": "yassin@friendplus.com",
-      "perms": "الطلبات"
     }
   ],
   "couriers": [
@@ -103,16 +87,6 @@
       "commission": 25,
       "salary": 3000,
       "region": "الجيزة"
-    },
-    {
-      "name": "yassin",
-      "phone": "",
-      "salary": 3000,
-      "base_fixed_salary": 3000,
-      "commission": 25,
-      "commission_success": 25,
-      "commission_return": 10,
-      "region": "—"
     }
   ],
   "suppliers": [
@@ -266,7 +240,7 @@
     {
       "tracking": "FP-1008-26",
       "createdAt": "2026-06-12 11:15",
-      "updatedAt": "2026-07-18 06:45",
+      "updatedAt": "2026-06-12 16:30",
       "supplier": "محل الأناقة",
       "customer": "كريم ممدوح شحاتة",
       "phone": "01055664422",
@@ -277,7 +251,7 @@
       "prodPrice": 400,
       "shipPrice": 60,
       "totalCOD": 460,
-      "status": "مرتجع بالمستودع",
+      "status": "مرتجع",
       "courier": "زياد",
       "notes": "رفض الاستلام لعدم مطابقة المقاس",
       "returnQueueStatus": "جاهز للتسليم للمورد"
@@ -285,7 +259,7 @@
     {
       "tracking": "FP-1009-26",
       "createdAt": "2026-06-12 11:30",
-      "updatedAt": "2026-07-18 06:44",
+      "updatedAt": "2026-06-12 17:00",
       "supplier": "محل الأناقة",
       "customer": "رشا جمال السيد",
       "phone": "01122334455",
@@ -296,7 +270,7 @@
       "prodPrice": 320,
       "shipPrice": 60,
       "totalCOD": 380,
-      "status": "مرتجع بالمستودع",
+      "status": "مرتجع",
       "courier": "محمد حمدى",
       "notes": "رفض معيب أو مكسور",
       "returnQueueStatus": "مرتجع تم تسليمه للمورد"
@@ -304,7 +278,7 @@
     {
       "tracking": "FP-1010-26",
       "createdAt": "2026-06-12 11:45",
-      "updatedAt": "2026-07-18 06:34",
+      "updatedAt": "2026-06-12 11:45",
       "supplier": "محل الأناقة",
       "customer": "عماد فتحي السويسي",
       "phone": "01555667788",
@@ -315,11 +289,10 @@
       "prodPrice": 600,
       "shipPrice": 50,
       "totalCOD": 650,
-      "status": "تم التسليم",
+      "status": "جديد",
       "courier": "",
       "notes": "الدفع كاش نقدي",
-      "returnQueueStatus": "",
-      "delivDate": "2026-07-18 06:34"
+      "returnQueueStatus": ""
     }
   ],
   "expenses": [
@@ -355,14 +328,6 @@
       "amount": 500,
       "ref": "زياد",
       "addedBy": "المحاسب أحمد"
-    },
-    {
-      "date": "2026-07-18 05:53",
-      "desc": "تسوية وتصفية كاش يومية المورد: إلكترونيات السلام عن تاريخ: 2026-06-12",
-      "type": "منصرف",
-      "amount": 0,
-      "ref": "SETTLE-2026-06-12",
-      "addedBy": "ahmed"
     }
   ],
   "statusHistory": [
@@ -386,34 +351,6 @@
       "newStatus": "مرتجع",
       "updatedBy": "محمد حمدى",
       "dateTime": "2026-06-10 11:45"
-    },
-    {
-      "tracking": "FP-1010-26",
-      "oldStatus": "جديد",
-      "newStatus": "مرتجع بالمستودع",
-      "updatedBy": "ahmed",
-      "dateTime": "2026-07-18 06:34"
-    },
-    {
-      "tracking": "FP-1010-26",
-      "oldStatus": "مرتجع بالمستودع",
-      "newStatus": "تم التسليم",
-      "updatedBy": "ahmed",
-      "dateTime": "2026-07-18 06:34"
-    },
-    {
-      "tracking": "FP-1009-26",
-      "oldStatus": "مرتجع",
-      "newStatus": "مرتجع بالمستودع",
-      "updatedBy": "ahmed",
-      "dateTime": "2026-07-18 06:44"
-    },
-    {
-      "tracking": "FP-1008-26",
-      "oldStatus": "مرتجع",
-      "newStatus": "مرتجع بالمستودع",
-      "updatedBy": "ahmed",
-      "dateTime": "2026-07-18 06:45"
     }
   ],
   "supplierLedger": [
@@ -456,14 +393,6 @@
       "tracking": "FP-1011-26",
       "amount": 230,
       "desc": "أوردر مستلم قيمته 230 ج.م"
-    },
-    {
-      "supplier": "إلكترونيات السلام",
-      "date": "2026-07-18 05:53",
-      "type": "تصفية يومية",
-      "tracking": "SETTLE-2026-06-12",
-      "amount": 0,
-      "desc": "🔐 [💵 تقفيل وتسليم كاش اليوم للمورد] - تم تصفية وقفل حساب اليوم تاريخ: 2026-06-12 بنجاح تصفية تامة✓"
     }
   ],
   "courierLedger": [
@@ -482,46 +411,11 @@
       "tracking": "FP-1007-26",
       "amount": 25,
       "desc": "عمولة تسليم الأوردر FP-1007-26"
-    },
-    {
-      "courier": "",
-      "date": "2026-07-18 06:34",
-      "type": "تسليم",
-      "tracking": "FP-1010-26",
-      "amount": 25,
-      "desc": "عمولة تسليم الأوردر جماعياً (الدفعة المجمعة): FP-1010-26"
     }
   ],
   "settings": {
     "COUNTER": 1005,
     "COMPANY": "فريند بلس",
     "VERSION": "5.1"
-  },
-  "staffPermissions": [
-    {
-      "name": "asfor",
-      "phone": "",
-      "role": "مشرف",
-      "salary": null,
-      "perm_dashboard": "false",
-      "perm_orders": "true",
-      "perm_ledger": "false",
-      "perm_expenses": "false",
-      "perm_staff": "false",
-      "supervisor_id": ""
-    },
-    {
-      "name": "yassin",
-      "phone": "",
-      "role": "مندوب",
-      "salary": null,
-      "perm_dashboard": "false",
-      "perm_orders": "true",
-      "perm_ledger": "false",
-      "perm_expenses": "false",
-      "perm_staff": "false",
-      "supervisor_id": "asfor",
-      "active": "نعم"
-    }
-  ]
+  }
 }

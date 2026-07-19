@@ -35,20 +35,6 @@ module.exports = __toCommonJS(server_exports);
 var import_express = __toESM(require("express"), 1);
 var import_path = __toESM(require("path"), 1);
 var import_fs = __toESM(require("fs"), 1);
-var import_crypto = __toESM(require("crypto"), 1);
-function hashPassword(password) {
-  if (!password) return "";
-  return import_crypto.default.createHash("sha256").update(password).digest("hex");
-}
-function verifyPassword(inputPass, storedPass) {
-  if (!storedPass) return false;
-  const cleanedStored = storedPass.trim();
-  const cleanedInput = inputPass.trim();
-  if (cleanedStored.length === 64 && /^[0-9a-fA-F]+$/.test(cleanedStored)) {
-    return hashPassword(cleanedInput) === cleanedStored;
-  }
-  return cleanedInput === cleanedStored;
-}
 var app = (0, import_express.default)();
 var PORT = 3e3;
 var DB_PATH = import_path.default.join(process.cwd(), "src", "db.json");
@@ -243,7 +229,6 @@ var DEFAULT_DB = {
   statusHistory: [],
   supplierLedger: [],
   courierLedger: [],
-  staffPermissions: [],
   settings: {
     COUNTER: 1005,
     COMPANY: "\u0641\u0631\u064A\u0646\u062F \u0628\u0644\u0633",
@@ -625,14 +610,6 @@ var sameSup = (na, nb) => {
   if (!na || !nb) return false;
   return normalizeArabic(na) === normalizeArabic(nb);
 };
-var sameCourier = (na, nb) => {
-  if (!na || !nb) return false;
-  let cleanA = normalizeArabic(na);
-  let cleanB = normalizeArabic(nb);
-  if (cleanA === normalizeArabic("\u0645\u0646\u062F\u0648\u0628 \u0639\u0635\u0641\u0648\u0631") || cleanA === normalizeArabic("\u0645\u0646\u062F\u0648\u0628_\u0639\u0635\u0641\u0648\u0631")) cleanA = normalizeArabic("\u0639\u0635\u0641\u0648\u0631");
-  if (cleanB === normalizeArabic("\u0645\u0646\u062F\u0648\u0628 \u0639\u0635\u0641\u0648\u0631") || cleanB === normalizeArabic("\u0645\u0646\u062F\u0648\u0628_\u0639\u0635\u0641\u0648\u0631")) cleanB = normalizeArabic("\u0639\u0635\u0641\u0648\u0631");
-  return cleanA === cleanB;
-};
 var isSupplierRole = (r) => {
   if (!r) return false;
   const t = r.toString().trim().toLowerCase();
@@ -813,22 +790,6 @@ function calculateSupplierBalance(db, supplierName) {
     }
     return sum + financials.prodPrice;
   }, 0);
-  const totalKeptGoodsValue = supplierOrders.reduce((sum, o) => {
-    const status = getOrderStatus(o);
-    const financials = getOrderFinancials(o);
-    const isDelivered = ["\u062A\u0645 \u0627\u0644\u062A\u0633\u0644\u064A\u0645", "\u062A\u0645 \u0627\u0644\u062A\u0633\u0644\u064A\u0645 \u0628\u0646\u062C\u0627\u062D", "\u062A\u0645 \u0627\u0644\u062A\u0633\u0644\u064A\u0645 (\u0646\u0627\u062C\u062D \u0643\u0627\u0634)"].includes(status);
-    const isPartial = o.isPartial === true || o.isPartial === "true" || ["\u062A\u0633\u0644\u064A\u0645 \u062C\u0632\u0626\u064A", "\u062A\u0633\u0644\u064A\u0645 \u062C\u0632\u0626\u064A - \u0645\u0639\u0644\u0642 \u0644\u0644\u062C\u0631\u062F", "\u0645\u0631\u062A\u062C\u0639 \u062C\u0632\u0626\u064A \u0628\u0627\u0644\u0645\u0633\u062A\u0648\u062F\u0639"].includes(status);
-    if (isDelivered) {
-      return sum + financials.prodPrice;
-    } else if (isPartial) {
-      const shipPrice = Number(o.shipPrice || financials.shipPrice || 60);
-      let soldValue = Number(o.actualReceivedCash ?? o.partialAmount ?? o["\u0627\u0644\u0645\u0628\u0644\u063A \u0627\u0644\u0645\u062D\u0635\u0644"] ?? 0);
-      if (isNaN(soldValue)) soldValue = 0;
-      const kept_goods_value = Math.max(0, soldValue - shipPrice);
-      return sum + kept_goods_value;
-    }
-    return sum;
-  }, 0);
   const adjustmentsAndPayments = rawLedger.filter(isHumanLedgedPayout);
   const paymentsValue = adjustmentsAndPayments.reduce((sum, l) => {
     const signed = getLedgerEntrySignedAmount(l);
@@ -843,12 +804,14 @@ function calculateSupplierBalance(db, supplierName) {
   }, 0);
   const outstanding = openingBalance + totalGoodsUploaded - returnsDeliveredValue + totalLedgerEffect;
   const totalOrdersCount = supplierOrders.length;
-  const deliveredOrders = supplierOrders.filter((o) => {
-    const status = getOrderStatus(o);
-    return ["\u062A\u0645 \u0627\u0644\u062A\u0633\u0644\u064A\u0645", "\u062A\u0645 \u0627\u0644\u062A\u0633\u0644\u064A\u0645 \u0628\u0646\u062C\u0627\u062D", "\u062A\u0645 \u0627\u0644\u062A\u0633\u0644\u064A\u0645 (\u0646\u0627\u062C\u062D \u0643\u0627\u0634)", "\u062A\u0633\u0644\u064A\u0645 \u062C\u0632\u0626\u064A", "\u062A\u0633\u0644\u064A\u0645 \u062C\u0632\u0626\u064A - \u0645\u0639\u0644\u0642 \u0644\u0644\u062C\u0631\u062F", "\u0645\u0631\u062A\u062C\u0639 \u062C\u0632\u0626\u064A \u0628\u0627\u0644\u0645\u0633\u062A\u0648\u062F\u0639"].includes(status);
-  });
+  const deliveredOrders = supplierOrders.filter(
+    (o) => getOrderStatus(o) === "\u062A\u0645 \u0627\u0644\u062A\u0633\u0644\u064A\u0645"
+  );
   const deliveredOrdersCount = deliveredOrders.length;
-  const deliveredOrdersValue = totalKeptGoodsValue;
+  const deliveredOrdersValue = deliveredOrders.reduce((sum, o) => {
+    const financials = getOrderFinancials(o);
+    return sum + financials.prodPrice;
+  }, 0);
   const returnsDeliveredCount = returnedOrders.length;
   const rate = totalOrdersCount ? Math.round(deliveredOrdersCount / totalOrdersCount * 100) : 0;
   return {
@@ -1410,12 +1373,7 @@ async function executeProxyRequest(gscriptUrl, payload) {
     "addDailyClosing",
     "updateCourier",
     "archiveOrder",
-    "settleCourierOrders",
-    "approveWithdrawal",
-    "rejectWithdrawal",
-    "requestWithdrawal",
-    "settleSupplierDay",
-    "addSupplierSettlement"
+    "settleCourierOrders"
   ].includes(payload.action);
   if (isWrite) {
     const nowMs2 = Date.now();
@@ -1531,7 +1489,7 @@ app.post("/api", async (req, res) => {
             const resData = await parseResponseJson(response, "getUsers");
             if (resData.ok && resData.users) {
               let user = resData.users.find(
-                (u) => u.name?.toString().trim() === name.trim() && verifyPassword(pass, u.pass?.toString() || "")
+                (u) => u.name?.toString().trim() === name.trim() && u.pass?.toString().trim() === pass.trim()
               );
               if (!user) {
                 console.log(
@@ -1913,137 +1871,6 @@ app.post("/api", async (req, res) => {
           });
           return ok(res, { msg: "\u062A\u0645 \u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062A\u0633\u0648\u064A\u0629 \u0627\u0644\u0645\u0627\u0644\u064A\u0629 \u0644\u0644\u0645\u0646\u062F\u0648\u0628 \u0628\u0646\u062C\u0627\u062D \u2713" });
         }
-        if (d.action === "requestWithdrawal") {
-          const { supplier, amount, paymentMethod, notes } = d;
-          if (!supplier || !amount) return err(res, "\u0627\u0644\u0645\u0639\u0644\u0648\u0645\u0627\u062A \u0627\u0644\u0645\u0637\u0644\u0648\u0628\u0629 \u063A\u064A\u0631 \u0643\u0627\u0645\u0644\u0629 \u0644\u0637\u0644\u0628 \u0627\u0644\u0633\u062D\u0628");
-          const db2 = readDB();
-          if (!db2.withdrawalRequests) db2.withdrawalRequests = [];
-          const newReq = {
-            id: "W-" + Date.now(),
-            supplier,
-            amount: Number(amount),
-            paymentMethod: paymentMethod || "\u063A\u064A\u0631 \u0645\u062D\u062F\u062F",
-            status: "\u0645\u0639\u0644\u0642",
-            createdAt: now(),
-            notes: notes || ""
-          };
-          db2.withdrawalRequests.push(newReq);
-          writeDB(db2);
-          executeProxyRequest(gscriptUrl, payloadToSheet).catch((syncErr) => {
-            console.error("Async Google Sheets synchronization for requestWithdrawal failed:", syncErr);
-          });
-          return ok(res, { ok: true, msg: "\u062A\u0645 \u0625\u0631\u0633\u0627\u0644 \u0637\u0644\u0628 \u0627\u0644\u0633\u062D\u0628 \u0628\u0646\u062C\u0627\u062D \u2713 \u0648\u062C\u0627\u0631\u064A \u0627\u0644\u0645\u0632\u0627\u0645\u0646\u0629", request: newReq });
-        }
-        if (d.action === "approveWithdrawal") {
-          if (!["\u0645\u062F\u064A\u0631", "\u0645\u062D\u0627\u0633\u0628"].includes(currentRole2)) {
-            return err(res, "\u0641\u0642\u0637 \u0627\u0644\u0645\u062F\u064A\u0631 \u0648\u0627\u0644\u0645\u062D\u0627\u0633\u0628 \u064A\u0645\u062A\u0644\u0643 \u0635\u0644\u0627\u062D\u064A\u0629 \u0627\u0644\u0645\u0648\u0627\u0641\u0642\u0629 \u0639\u0644\u0649 \u0637\u0644\u0628\u0627\u062A \u0627\u0644\u0633\u062D\u0628");
-          }
-          const { id } = d;
-          if (!id) return err(res, "\u0645\u0639\u0631\u0641 \u0627\u0644\u0637\u0644\u0628 \u0645\u0641\u0642\u0648\u062F");
-          const db2 = readDB();
-          if (!db2.withdrawalRequests) db2.withdrawalRequests = [];
-          const reqIdx = db2.withdrawalRequests.findIndex((r) => r.id === id);
-          if (reqIdx === -1) return err(res, "\u0644\u0645 \u064A\u062A\u0645 \u0627\u0644\u0639\u062B\u0648\u0631 \u0639\u0644\u0649 \u0637\u0644\u0628 \u0627\u0644\u0633\u062D\u0628 \u0645\u062D\u0644\u064A\u0627\u064B");
-          const req2 = db2.withdrawalRequests[reqIdx];
-          if (req2.status !== "\u0645\u0639\u0644\u0642") return err(res, "\u0647\u0630\u0627 \u0627\u0644\u0637\u0644\u0628 \u062A\u0645 \u0645\u0639\u0627\u0644\u062C\u062A\u0647 \u0645\u0633\u0628\u0642\u0627\u064B");
-          const amt = Math.abs(Number(req2.amount || 0));
-          if (!db2.supplierLedger) db2.supplierLedger = [];
-          db2.supplierLedger.push({
-            supplier: req2.supplier,
-            date: now(),
-            type: "\u062F\u0641\u0639 \u0646\u0642\u062F\u064A",
-            tracking: id,
-            amount: -amt,
-            desc: "\u0633\u062D\u0628 \u0631\u0635\u064A\u062F \u0645\u0642\u0628\u0648\u0644 (\u0645\u0639\u0631\u0641 \u0627\u0644\u0637\u0644\u0628: #" + id + ") \u0639\u0628\u0631 \u0648\u0633\u064A\u0644\u0629 \u0627\u0644\u062F\u0641\u0639: " + (req2.paymentMethod || "")
-          });
-          if (!db2.cashbox) db2.cashbox = [];
-          db2.cashbox.push({
-            date: now(),
-            desc: "\u0633\u062D\u0628 \u0631\u0635\u064A\u062F \u0645\u0642\u0628\u0648\u0644 (\u0645\u0639\u0631\u0641 \u0627\u0644\u0637\u0644\u0628: #" + id + ") \u0644\u0644\u0645\u0648\u0631\u062F: " + req2.supplier,
-            type: "\u0633\u062F\u0627\u062F \u0645\u0648\u0631\u062F",
-            amount: amt,
-            ref: id,
-            addedBy: currentUser2 || "\u0625\u062F\u0627\u0631\u0629 \u0627\u0644\u062D\u0633\u0627\u0628\u0627\u062A"
-          });
-          req2.status = "\u0645\u0642\u0628\u0648\u0644";
-          req2.notes = "\u062A\u0645 \u0627\u0644\u0645\u0648\u0627\u0641\u0642\u0629 \u0648\u0627\u0644\u062A\u062D\u0648\u064A\u0644 \u0628\u0648\u0627\u0633\u0637\u0629 " + (currentUser2 || "\u0627\u0644\u0623\u062F\u0645\u0646") + " \u0641\u064A " + now();
-          if (!db2.auditLog) db2.auditLog = [];
-          db2.auditLog.push({
-            user: currentUser2 || "\u062D\u0633\u0627\u0628\u0627\u062A",
-            type: "\u0642\u0628\u0648\u0644 \u0637\u0644\u0628 \u0633\u062D\u0628 \u0631\u0635\u064A\u062F \u0645\u0648\u0631\u062F",
-            dateTime: now(),
-            oldVal: "\u0645\u0639\u0644\u0642",
-            newVal: "\u0645\u0642\u0628\u0648\u0644 - \u062A\u0645 \u0627\u0644\u062A\u062D\u0648\u064A\u0644 \u0628\u0642\u064A\u0645\u0629 " + amt + " \u062C.\u0645 \u0644\u0644\u0645\u0648\u0631\u062F " + req2.supplier,
-            reason: "\u0645\u0648\u0627\u0641\u0642\u0629 \u0648\u0635\u0631\u0641 \u0645\u0646 \u0627\u0644\u062E\u0632\u064A\u0646\u0629"
-          });
-          writeDB(db2);
-          executeProxyRequest(gscriptUrl, payloadToSheet).catch((syncErr) => {
-            console.error("Async Google Sheets synchronization for approveWithdrawal failed:", syncErr);
-          });
-          return ok(res, { ok: true, msg: "\u062A\u0645 \u0642\u0628\u0648\u0644 \u0637\u0644\u0628 \u0627\u0644\u0633\u062D\u0628 \u0648\u062C\u0627\u0631\u064A \u0627\u0644\u0645\u0632\u0627\u0645\u0646\u0629 \u0641\u064A \u0627\u0644\u062E\u0644\u0641\u064A\u0629 \u2713" });
-        }
-        if (d.action === "rejectWithdrawal") {
-          if (!["\u0645\u062F\u064A\u0631", "\u0645\u062D\u0627\u0633\u0628"].includes(currentRole2)) {
-            return err(res, "\u0641\u0642\u0637 \u0627\u0644\u0645\u062F\u064A\u0631 \u0648\u0627\u0644\u0645\u062D\u0627\u0633\u0628 \u064A\u0645\u062A\u0644\u0643 \u0635\u0644\u0627\u062D\u064A\u0629 \u0631\u0641\u0636 \u0637\u0644\u0628\u0627\u062A \u0627\u0644\u0633\u062D\u0628");
-          }
-          const { id, reason } = d;
-          if (!id) return err(res, "\u0645\u0639\u0631\u0641 \u0627\u0644\u0637\u0644\u0628 \u0645\u0641\u0642\u0648\u062F");
-          const db2 = readDB();
-          if (!db2.withdrawalRequests) db2.withdrawalRequests = [];
-          const reqIdx = db2.withdrawalRequests.findIndex((r) => r.id === id);
-          if (reqIdx === -1) return err(res, "\u0644\u0645 \u064A\u062A\u0645 \u0627\u0644\u0639\u062B\u0648\u0631 \u0639\u0644\u0649 \u0637\u0644\u0628 \u0627\u0644\u0633\u062D\u0628 \u0645\u062D\u0644\u064A\u0627\u064B");
-          const req2 = db2.withdrawalRequests[reqIdx];
-          if (req2.status !== "\u0645\u0639\u0644\u0642") return err(res, "\u0647\u0630\u0627 \u0627\u0644\u0637\u0644\u0628 \u062A\u0645 \u0645\u0639\u0627\u0644\u062C\u062A\u0647 \u0645\u0633\u0628\u0642\u0627\u064B");
-          req2.status = "\u0645\u0631\u0641\u0648\u0636";
-          req2.notes = "\u062A\u0645 \u0627\u0644\u0631\u0641\u0636 \u0628\u0633\u0628\u0628: " + (reason || "\u063A\u064A\u0631 \u0645\u062D\u062F\u062F") + " \u0628\u0648\u0627\u0633\u0637\u0629 " + (currentUser2 || "\u0627\u0644\u0623\u062F\u0645\u0646") + " \u0641\u064A " + now();
-          if (!db2.auditLog) db2.auditLog = [];
-          db2.auditLog.push({
-            user: currentUser2 || "\u062D\u0633\u0627\u0628\u0627\u062A",
-            type: "\u0631\u0641\u0636 \u0637\u0644\u0628 \u0633\u062D\u0628 \u0631\u0635\u064A\u062F \u0645\u0648\u0631\u062F",
-            dateTime: now(),
-            oldVal: "\u0645\u0639\u0644\u0642",
-            newVal: "\u0645\u0631\u0641\u0648\u0636 \u0628\u0633\u0628\u0628: " + (reason || "\u063A\u064A\u0631 \u0645\u062D\u062F\u062F"),
-            reason: "\u0631\u0641\u0636 \u0628\u0648\u0627\u0633\u0637\u0629 \u0627\u0644\u0625\u062F\u0627\u0631\u0629"
-          });
-          writeDB(db2);
-          executeProxyRequest(gscriptUrl, payloadToSheet).catch((syncErr) => {
-            console.error("Async Google Sheets synchronization for rejectWithdrawal failed:", syncErr);
-          });
-          return ok(res, { ok: true, msg: "\u062A\u0645 \u0631\u0641\u0636 \u0637\u0644\u0628 \u0627\u0644\u0633\u062D\u0628 \u0648\u062C\u0627\u0631\u064A \u0627\u0644\u0645\u0632\u0627\u0645\u0646\u0629 \u0641\u064A \u0627\u0644\u062E\u0644\u0641\u064A\u0629 \u2713" });
-        }
-        if (d.action === "settleSupplierDay") {
-          const { supplier, dateStr } = d;
-          if (!supplier || !dateStr) return err(res, "\u0645\u0639\u0644\u0648\u0645\u0627\u062A \u062A\u0635\u0641\u064A\u0629 \u0627\u0644\u064A\u0648\u0645 \u0646\u0627\u0642\u0635\u0629");
-          const db2 = readDB();
-          if (!db2.supplierSettlements) db2.supplierSettlements = [];
-          const alreadySettled = db2.supplierSettlements.some(
-            (s) => s.supplier === supplier && s.date === dateStr
-          );
-          if (alreadySettled) {
-            return ok(res, { ok: true, msg: "\u0647\u0630\u0627 \u0627\u0644\u064A\u0648\u0645 \u0645\u0635\u0641\u0649 \u0628\u0627\u0644\u0641\u0639\u0644 \u0645\u062D\u0644\u064A\u0627\u064B" });
-          }
-          db2.supplierSettlements.push({
-            supplier,
-            date: dateStr,
-            status: "\u0645\u0635\u0641\u0649 \u0645\u0627\u0644\u064A\u0651\u0627\u064B",
-            settledAt: now(),
-            settledBy: currentUser2 || "\u0625\u062F\u0627\u0631\u0629 \u0627\u0644\u062D\u0633\u0627\u0628\u0627\u062A"
-          });
-          if (!db2.supplierLedger) db2.supplierLedger = [];
-          db2.supplierLedger.push({
-            supplier,
-            date: dateStr,
-            type: "\u062A\u0635\u0641\u064A\u0629 \u064A\u0648\u0645\u064A\u0629",
-            tracking: "SETTLE-" + dateStr,
-            amount: 0,
-            desc: "\u{1F510} [\u{1F4B5} \u062A\u0642\u0641\u064A\u0644 \u0648\u062A\u0633\u0644\u064A\u0645 \u0643\u0627\u0634 \u0627\u0644\u064A\u0648\u0645 \u0644\u0644\u0645\u0648\u0631\u062F] - \u062A\u0645 \u062A\u0635\u0641\u064A\u0629 \u0648\u0642\u0641\u0644 \u062D\u0633\u0627\u0628 \u0627\u0644\u064A\u0648\u0645 \u062A\u0627\u0631\u064A\u062E: " + dateStr + " \u0628\u0646\u062C\u0627\u062D \u062A\u0635\u0641\u064A\u0629 \u062A\u0627\u0645\u0629\u2713"
-          });
-          writeDB(db2);
-          executeProxyRequest(gscriptUrl, payloadToSheet).catch((syncErr) => {
-            console.error("Async Google Sheets synchronization for settleSupplierDay failed:", syncErr);
-          });
-          return ok(res, { ok: true, msg: "\u062A\u0645 \u062A\u0633\u062C\u064A\u0644 \u062A\u0635\u0641\u064A\u0629 \u0627\u0644\u064A\u0648\u0645 \u0644\u0644\u0645\u0648\u0631\u062F \u0628\u0646\u062C\u0627\u062D \u2713 \u0648\u062C\u0627\u0631\u064A \u0627\u0644\u0645\u0632\u0627\u0645\u0646\u0629" });
-        }
         if (d.action === "addDailyClosing") {
           const {
             date,
@@ -2198,7 +2025,7 @@ app.post("/api", async (req, res) => {
           const nowCairoStr = now();
           const todayDateStr = tod();
           const courierProfile = db2.couriers.find(
-            (c) => c.name && sameCourier(c.name, courier)
+            (c) => c.name && c.name.toString().trim().toLowerCase() === courier.toString().trim().toLowerCase()
           );
           if (!courierProfile) return err(res, "\u0627\u0644\u0645\u0646\u062F\u0648\u0628 \u063A\u064A\u0631 \u0645\u0633\u062C\u0644");
           courierProfile.last_closing_date = todayDateStr;
@@ -2206,7 +2033,7 @@ app.post("/api", async (req, res) => {
           const settledOrders = [];
           const activeOrders = [];
           db2.orders.forEach((order) => {
-            if (order.courier && sameCourier(order.courier, courier)) {
+            if (order.courier && order.courier.toString().trim().toLowerCase() === courier.toString().trim().toLowerCase()) {
               order.isSettledMonth = true;
               order.isSettled = true;
               order.is_settled = "true";
@@ -2219,27 +2046,27 @@ app.post("/api", async (req, res) => {
           db2.archivedOrders.push(...settledOrders);
           db2.orders = activeOrders;
           db2.archivedOrders.forEach((order) => {
-            if (order.courier && sameCourier(order.courier, courier)) {
+            if (order.courier && order.courier.toString().trim().toLowerCase() === courier.toString().trim().toLowerCase()) {
               order.isSettledMonth = true;
               order.isSettled = true;
               order.is_settled = "true";
             }
           });
           db2.cashbox.forEach((item) => {
-            if (item.type === "\u0627\u0633\u062A\u0644\u0627\u0645 \u0639\u0647\u062F\u0629 \u0645\u0646\u062F\u0648\u0628" && item.ref && sameCourier(item.ref, courier)) {
+            if (item.type === "\u0627\u0633\u062A\u0644\u0627\u0645 \u0639\u0647\u062F\u0629 \u0645\u0646\u062F\u0648\u0628" && item.ref && item.ref.toString().trim().toLowerCase() === courier.toString().trim().toLowerCase()) {
               item.isSettledMonth = true;
             }
           });
           if (db2.expenses) {
             db2.expenses.forEach((item) => {
-              if (item.by && sameCourier(item.by, courier)) {
+              if (item.by && item.by.toString().trim().toLowerCase() === courier.toString().trim().toLowerCase()) {
                 item.isSettledMonth = true;
               }
             });
           }
           if (db2.courierLedger) {
             db2.courierLedger.forEach((item) => {
-              if (item.courier && sameCourier(item.courier, courier)) {
+              if (item.courier && item.courier.toString().trim().toLowerCase() === courier.toString().trim().toLowerCase()) {
                 item.isSettledMonth = true;
               }
             });
@@ -2677,14 +2504,6 @@ app.post("/api", async (req, res) => {
                 return lSup && sameSup(lSup, targetSupplier);
               });
             }
-            if (d.action === "getWithdrawalRequests" && Array.isArray(resData.requests)) {
-              const isSupplier = (currentRole2 || "").toString().trim() === "\u0645\u0648\u0631\u062F" || (currentRole2 || "").toString().trim().includes("\u0645\u0648\u0631\u062F");
-              if (isSupplier) {
-                resData.requests = resData.requests.filter(
-                  (r) => sameSup(r.supplier, currentUser2)
-                );
-              }
-            }
           }
           return res.json(resData);
         } catch (proxyError) {
@@ -2706,7 +2525,7 @@ app.post("/api", async (req, res) => {
       const { name, pass } = d;
       if (!name || !pass) return err(res, "\u0627\u0643\u062A\u0628 \u0627\u0644\u0627\u0633\u0645 \u0648\u0643\u0644\u0645\u0629 \u0627\u0644\u0645\u0631\u0648\u0631");
       let user = db.users.find(
-        (u) => u.name.trim() === name.trim() && verifyPassword(pass, u.pass)
+        (u) => u.name.trim() === name.trim() && u.pass.trim() === pass.trim()
       );
       if (!user) {
         console.log(
@@ -2733,11 +2552,6 @@ app.post("/api", async (req, res) => {
     }
     const currentUser = sess.user;
     const currentRole = sess.role;
-    const strongRole = (currentRole || "").toString().trim();
-    const isStrictAdmin = strongRole === "\u0645\u062F\u064A\u0631";
-    const isStrictSupervisor = strongRole === "\u0645\u0634\u0631\u0641";
-    const isStrictCourier = strongRole === "\u0645\u0646\u062F\u0648\u0628" || strongRole.includes("\u0645\u0646\u062F\u0648\u0628");
-    const isStrictSupplier = strongRole === "\u0645\u0648\u0631\u062F" || strongRole.includes("\u0645\u0648\u0631\u062F");
     switch (d.action) {
       // ─────────────────────────────────────────────────────────────
       // GET ORDERS
@@ -2763,15 +2577,6 @@ app.post("/api", async (req, res) => {
           }
         }
         ordersList = Array.from(uniqueLocalSeen.values());
-        const isSupervisor = currentRole === "\u0645\u0634\u0631\u0641" || (currentRole || "").toString().includes("\u0645\u0634\u0631\u0641");
-        if (isSupervisor) {
-          const staffPermissionsList = db.staffPermissions || [];
-          const supervisedNames = staffPermissionsList.filter((item) => (item.supervisor_id || "").toString().trim().toLowerCase() === currentUser.trim().toLowerCase()).map((item) => (item.name || "").toString().trim().toLowerCase());
-          ordersList = ordersList.filter((o) => {
-            const oCou = (o.courier || "").toString().trim().toLowerCase();
-            return oCou && supervisedNames.includes(oCou);
-          });
-        }
         if (isAgent || isOps) {
           const todayStr = tod();
           const bypassTodayFilter = needArchived;
@@ -2902,7 +2707,7 @@ app.post("/api", async (req, res) => {
           }
         }
         const initialCourier = matchedCourier ? matchedCourier.name : "";
-        const initialStatus = o.status || (matchedCourier ? "\u0645\u064F\u0633\u0646\u062F \u062C\u062F\u064A\u062F" : "\u062C\u0627\u0647\u0632 \u0644\u0644\u0627\u0633\u062A\u0644\u0627\u0645 \u0645\u0646 \u0627\u0644\u0645\u0648\u0631\u062F");
+        const initialStatus = matchedCourier ? "\u0645\u064F\u0633\u0646\u062F \u062C\u062F\u064A\u062F" : "\u062C\u062F\u064A\u062F";
         const initialCommission = matchedCourier ? Number(matchedCourier.commission || 25) : 0;
         const newOrder = {
           tracking: id,
@@ -3049,7 +2854,7 @@ app.post("/api", async (req, res) => {
             }
           }
           const initialCourier = matchedCourier ? matchedCourier.name : "";
-          const initialStatus = item.status || (matchedCourier ? "\u0645\u064F\u0633\u0646\u062F \u062C\u062F\u064A\u062F" : "\u062C\u0627\u0647\u0632 \u0644\u0644\u0627\u0633\u062A\u0644\u0627\u0645 \u0645\u0646 \u0627\u0644\u0645\u0648\u0631\u062F");
+          const initialStatus = matchedCourier ? "\u0645\u064F\u0633\u0646\u062F \u062C\u062F\u064A\u062F" : "\u062C\u062F\u064A\u062F";
           const initialCommission = matchedCourier ? Number(matchedCourier.commission || 25) : 0;
           const newObj = {
             tracking: id,
@@ -3134,8 +2939,7 @@ app.post("/api", async (req, res) => {
           notes,
           delivDate,
           partialAmount,
-          customerConfirmed,
-          actionLogText
+          customerConfirmed
         } = d;
         if (!tracking || !rawStatus) return err(res, "\u0645\u0639\u0627\u0645\u0644\u0627\u062A \u0645\u0641\u0642\u0648\u062F\u0629");
         let status = rawStatus;
@@ -3294,6 +3098,20 @@ app.post("/api", async (req, res) => {
           if (status === "\u062A\u0645 \u062A\u0633\u0644\u064A\u0645 \u0627\u0644\u0645\u0631\u062A\u062C\u0639 \u0644\u0644\u0645\u0648\u0631\u062F") {
             order.status = "\u062A\u0645 \u062A\u0633\u0644\u064A\u0645 \u0627\u0644\u0645\u0631\u062A\u062C\u0639 \u0644\u0644\u0645\u0648\u0631\u062F";
             order.retDate = now();
+            const dupLedger = db.supplierLedger.find(
+              (l) => l.tracking === order.tracking && (l.type === "\u0645\u0631\u062A\u062C\u0639" || l.type === "\u0645\u0631\u062A\u062C\u0639 \u062A\u0645 \u062A\u0633\u0644\u064A\u0645\u0647 \u0644\u0644\u0645\u0648\u0631\u062F")
+            );
+            if (!dupLedger) {
+              const financials = getOrderFinancials(order);
+              db.supplierLedger.push({
+                supplier: order.supplier,
+                date: now(),
+                type: "\u0645\u0631\u062A\u062C\u0639 \u062A\u0645 \u062A\u0633\u0644\u064A\u0645\u0647 \u0644\u0644\u0645\u0648\u0631\u062F",
+                tracking: order.tracking,
+                amount: -Math.abs(Number(financials.prodPrice || 0)),
+                desc: `\u062E\u0635\u0645 \u0642\u064A\u0645\u0629 \u0627\u0644\u0645\u0646\u062A\u062C \u0644\u0645\u0631\u062A\u062C\u0639 \u062A\u0633\u0644\u0645\u0647 \u0627\u0644\u0645\u0648\u0631\u062F: ${order.tracking} (\u0628\u0636\u0627\u0639\u0629 \u0645\u0631\u062A\u062C\u0639\u0629 \u0628\u062F\u0648\u0646 \u0634\u062D\u0646: -${financials.prodPrice} \u062C.\u0645)`
+              });
+            }
           } else {
             order.status = status;
           }
@@ -3351,6 +3169,20 @@ app.post("/api", async (req, res) => {
               amount: commVal,
               desc: `\u0639\u0645\u0648\u0644\u0629 \u062A\u0633\u0644\u064A\u0645 \u062C\u0632\u0626\u064A \u0644\u0644\u0623\u0648\u0631\u062F\u0631: ${order.tracking} (\u0627\u0644\u0645\u0628\u0644\u063A \u0627\u0644\u0641\u0639\u0644\u064A \u0627\u0644\u0645\u0633\u062A\u0644\u0645: ${pAm} \u062C.\u0645)`
             });
+            const dupLedger = db.supplierLedger.find(
+              (l) => l.tracking === order.tracking && (l.type === "\u0623\u0648\u0631\u062F\u0631 \u0645\u0633\u062A\u0644\u0645" || l.type === "\u062A\u0633\u0644\u064A\u0645" || l.type === "\u0623\u0648\u0631\u062F\u0631 \u0645\u0633\u062A\u0644\u0645 \u062C\u0632\u0626\u064A")
+            );
+            if (!dupLedger) {
+              const supplierShare = pAm;
+              db.supplierLedger.push({
+                supplier: order.supplier,
+                date: now(),
+                type: "\u0623\u0648\u0631\u062F\u0631 \u0645\u0633\u062A\u0644\u0645 \u062C\u0632\u0626\u064A",
+                tracking: order.tracking,
+                amount: supplierShare,
+                desc: `\u062D\u0642\u0648\u0642 \u062A\u0648\u0631\u064A\u062F \u0623\u0648\u0631\u062F\u0631 \u062A\u0633\u0644\u064A\u0645 \u062C\u0632\u0626\u064A: ${order.tracking} (\u0642\u064A\u0645\u0629 \u0627\u0644\u0628\u0636\u0627\u0639\u0629 \u0627\u0644\u0645\u0628\u0627\u0639\u0629 \u0627\u0644\u0635\u0627\u0641\u064A\u0629: ${pAm} \u062C.\u0645)`
+              });
+            }
           }
           if (status === "\u0627\u0644\u0639\u0645\u064A\u0644 \u0631\u062F \u0648\u062C\u0627\u0631\u064A \u0627\u0644\u062A\u0633\u0644\u064A\u0645") {
             order.customerConfirmed = "true";
@@ -3379,17 +3211,6 @@ app.post("/api", async (req, res) => {
           }
         }
         order.updatedAt = now();
-        if (d.lat !== void 0 && d.lng !== void 0 && d.lat !== null && d.lng !== null) {
-          order.lat = Number(d.lat);
-          order.lng = Number(d.lng);
-          if (!order.geoLogs) order.geoLogs = [];
-          order.geoLogs.push({
-            dateTime: now(),
-            status,
-            lat: Number(d.lat),
-            lng: Number(d.lng)
-          });
-        }
         const isEventualArchivable = ["\u062A\u0645 \u0627\u0644\u062A\u0633\u0644\u064A\u0645", "\u0627\u0644\u062A\u0633\u0644\u064A\u0645 \u0644\u0644\u0645\u0648\u0631\u062F", "\u062A\u0645 \u062A\u0633\u0644\u064A\u0645 \u0627\u0644\u0645\u0631\u062A\u062C\u0639 \u0644\u0644\u0645\u0648\u0631\u062F", "\u062A\u0645 \u062A\u0633\u0644\u064A\u0645 \u0627\u0644\u0645\u0631\u062A\u062C\u0639 \u0644\u0644\u0645\u0648\u0631\u062F \u0648\u062A\u0635\u0641\u064A\u0629 \u062D\u0633\u0627\u0628\u0647"].includes(status);
         if (fromArchive && !isEventualArchivable) {
           const alreadyInActive = db.orders.some((o) => o.tracking === matchedTracking);
@@ -3406,14 +3227,6 @@ app.post("/api", async (req, res) => {
           updatedBy: currentUser,
           dateTime: now()
         });
-        if (actionLogText && actionLogText.toString().trim()) {
-          if (!order.actionLogs) order.actionLogs = [];
-          order.actionLogs.push({
-            dateTime: now(),
-            user: currentUser,
-            text: actionLogText.toString().trim()
-          });
-        }
         writeDB(db);
         return ok(res, {
           tracking: matchedTracking,
@@ -3670,9 +3483,7 @@ app.post("/api", async (req, res) => {
             "\u0645\u0624\u062C\u0644",
             "\u0644\u0627 \u064A\u0648\u062C\u062F \u0631\u062F",
             "\u062C\u062F\u064A\u062F",
-            "\u062E\u0627\u0631\u062C \u0645\u0639 \u0627\u0644\u0645\u0646\u062F\u0648\u0628",
-            "\u0627\u0644\u0639\u0645\u064A\u0644 \u0644\u063A\u0649 \u0627\u0644\u0623\u0648\u0631\u062F\u0631 / \u0645\u0631\u062A\u062C\u0639",
-            "\u0645\u0631\u062A\u062C\u0639"
+            "\u062E\u0627\u0631\u062C \u0645\u0639 \u0627\u0644\u0645\u0646\u062F\u0648\u0628"
           ];
           if (status && !opsAllowed.includes(status)) {
             return err(
@@ -3779,6 +3590,20 @@ app.post("/api", async (req, res) => {
                 amount: comm,
                 desc: `\u0639\u0645\u0648\u0644\u0629 \u062A\u0633\u0644\u064A\u0645 \u0627\u0644\u0623\u0648\u0631\u062F\u0631 \u062C\u0645\u0627\u0639\u064A\u0627\u064B: ${order.tracking}`
               });
+              const dupLedger = db.supplierLedger.find(
+                (l) => l.tracking === order.tracking && (l.type === "\u0623\u0648\u0631\u062F\u0631 \u0645\u0633\u062A\u0644\u0645" || l.type === "\u062A\u0633\u0644\u064A\u0645")
+              );
+              if (!dupLedger) {
+                const supplierShare = Number(order.prodPrice || 0) - Number(order.shipPrice || 0);
+                db.supplierLedger.push({
+                  supplier: order.supplier,
+                  date: now(),
+                  type: "\u0623\u0648\u0631\u062F\u0631 \u0645\u0633\u062A\u0644\u0645",
+                  tracking: order.tracking,
+                  amount: supplierShare,
+                  desc: `\u062D\u0642\u0648\u0642 \u0623\u0648\u0631\u062F\u0631 \u062A\u0645 \u062A\u0633\u0644\u064A\u0645\u0647 \u062C\u0645\u0627\u0639\u064A\u0627\u064B: ${order.tracking} (\u0633\u0639\u0631 \u0627\u0644\u0645\u0646\u062A\u062C ${order.prodPrice} - \u0634\u062D\u0646 \u0627\u0644\u0634\u0631\u0643\u0629 ${order.shipPrice})`
+                });
+              }
             }
             if (["\u0645\u0631\u062A\u062C\u0639", "\u062A\u0645 \u062A\u0633\u0644\u064A\u0645 \u0627\u0644\u0645\u0631\u062A\u062C\u0639 \u0644\u0644\u0645\u0648\u0631\u062F", "\u0627\u0644\u062A\u0633\u0644\u064A\u0645 \u0644\u0644\u0645\u0648\u0631\u062F"].includes(
               status
@@ -3786,6 +3611,19 @@ app.post("/api", async (req, res) => {
               order.retDate = now();
               if (status === "\u062A\u0645 \u062A\u0633\u0644\u064A\u0645 \u0627\u0644\u0645\u0631\u062A\u062C\u0639 \u0644\u0644\u0645\u0648\u0631\u062F" || status === "\u0627\u0644\u062A\u0633\u0644\u064A\u0645 \u0644\u0644\u0645\u0648\u0631\u062F") {
                 order.returnQueueStatus = "\u062A\u0645 \u062A\u0633\u0644\u064A\u0645 \u0627\u0644\u0645\u0631\u062A\u062C\u0639 \u0644\u0644\u0645\u0648\u0631\u062F";
+                const dupLedger = db.supplierLedger.find(
+                  (l) => l.tracking === order.tracking && (l.type === "\u0645\u0631\u062A\u062C\u0639" || l.type === "\u0645\u0631\u062A\u062C\u0639 \u062A\u0645 \u062A\u0633\u0644\u064A\u0645\u0647 \u0644\u0644\u0645\u0648\u0631\u062F")
+                );
+                if (!dupLedger) {
+                  db.supplierLedger.push({
+                    supplier: order.supplier,
+                    date: now(),
+                    type: "\u0645\u0631\u062A\u062C\u0639 \u062A\u0645 \u062A\u0633\u0644\u064A\u0645\u0647 \u0644\u0644\u0645\u0648\u0631\u062F",
+                    tracking: order.tracking,
+                    amount: -Number(order.prodPrice || 0),
+                    desc: `\u062E\u0635\u0645 \u0642\u064A\u0645\u0629 \u0627\u0644\u0645\u0646\u062A\u062C \u0644\u0645\u0631\u062A\u062C\u0639 \u062A\u0633\u0644\u0645\u0647 \u0627\u0644\u0645\u0648\u0631\u062F \u062C\u0645\u0627\u0639\u064A\u0627\u064B: ${order.tracking}`
+                  });
+                }
               }
             }
             if (!db.statusHistory) db.statusHistory = [];
@@ -3908,9 +3746,7 @@ app.post("/api", async (req, res) => {
                 "\u0645\u0624\u062C\u0644",
                 "\u0644\u0627 \u064A\u0648\u062C\u062F \u0631\u062F",
                 "\u062C\u062F\u064A\u062F",
-                "\u062E\u0627\u0631\u062C \u0645\u0639 \u0627\u0644\u0645\u0646\u062F\u0648\u0628",
-                "\u0627\u0644\u0639\u0645\u064A\u0644 \u0644\u063A\u0649 \u0627\u0644\u0623\u0648\u0631\u062F\u0631 / \u0645\u0631\u062A\u062C\u0639",
-                "\u0645\u0631\u062A\u062C\u0639"
+                "\u062E\u0627\u0631\u062C \u0645\u0639 \u0627\u0644\u0645\u0646\u062F\u0648\u0628"
               ];
               if (!opsAllowed.includes(status)) continue;
             } else if (currentRole === "\u0645\u0646\u062F\u0648\u0628") {
@@ -3944,6 +3780,20 @@ app.post("/api", async (req, res) => {
                 amount: comm,
                 desc: `\u0639\u0645\u0648\u0644\u0629 \u062A\u0633\u0644\u064A\u0645 \u0627\u0644\u0623\u0648\u0631\u062F\u0631 \u062C\u0645\u0627\u0639\u064A\u0627\u064B (\u0627\u0644\u062F\u0641\u0639\u0629 \u0627\u0644\u0645\u062C\u0645\u0639\u0629): ${order.tracking}`
               });
+              const dupLedger = db.supplierLedger.find(
+                (l) => l.tracking === order.tracking && (l.type === "\u0623\u0648\u0631\u062F\u0631 \u0645\u0633\u062A\u0644\u0645" || l.type === "\u062A\u0633\u0644\u064A\u0645")
+              );
+              if (!dupLedger) {
+                const supplierShare = Number(order.prodPrice || 0) - Number(order.shipPrice || 0);
+                db.supplierLedger.push({
+                  supplier: order.supplier,
+                  date: now(),
+                  type: "\u0623\u0648\u0631\u062F\u0631 \u0645\u0633\u062A\u0644\u0645",
+                  tracking: order.tracking,
+                  amount: supplierShare,
+                  desc: `\u062D\u0642\u0648\u0642 \u0623\u0648\u0631\u062F\u0631 \u062A\u0645 \u062A\u0633\u0644\u064A\u0645\u0647 \u062C\u0645\u0627\u0639\u064A\u0627\u064B (\u0627\u0644\u062F\u0641\u0639\u0629 \u0627\u0644\u0645\u062C\u0645\u0639\u0629): ${order.tracking} (\u0635\u0627\u0641\u064A \u0628\u0636\u0627\u0639\u0629 ${supplierShare})`
+                });
+              }
             }
             if (["\u0645\u0631\u062A\u062C\u0639", "\u062A\u0645 \u062A\u0633\u0644\u064A\u0645 \u0627\u0644\u0645\u0631\u062A\u062C\u0639 \u0644\u0644\u0645\u0648\u0631\u062F", "\u0627\u0644\u062A\u0633\u0644\u064A\u0645 \u0644\u0644\u0645\u0648\u0631\u062F"].includes(
               status
@@ -3951,6 +3801,19 @@ app.post("/api", async (req, res) => {
               order.retDate = now();
               if (status === "\u062A\u0645 \u062A\u0633\u0644\u064A\u0645 \u0627\u0644\u0645\u0631\u062A\u062C\u0639 \u0644\u0644\u0645\u0648\u0631\u062F" || status === "\u0627\u0644\u062A\u0633\u0644\u064A\u0645 \u0644\u0644\u0645\u0648\u0631\u062F") {
                 order.returnQueueStatus = "\u062A\u0645 \u062A\u0633\u0644\u064A\u0645 \u0627\u0644\u0645\u0631\u062A\u062C\u0639 \u0644\u0644\u0645\u0648\u0631\u062F";
+                const dupLedger = db.supplierLedger.find(
+                  (l) => l.tracking === order.tracking && (l.type === "\u0645\u0631\u062A\u062C\u0639" || l.type === "\u0645\u0631\u062A\u062C\u0639 \u062A\u0645 \u062A\u0633\u0644\u064A\u0645\u0647 \u0644\u0644\u0645\u0648\u0631\u062F")
+                );
+                if (!dupLedger) {
+                  db.supplierLedger.push({
+                    supplier: order.supplier,
+                    date: now(),
+                    type: "\u0645\u0631\u062A\u062C\u0639 \u062A\u0645 \u062A\u0633\u0644\u064A\u0645\u0647 \u0644\u0644\u0645\u0648\u0631\u062F",
+                    tracking: order.tracking,
+                    amount: -Number(order.prodPrice || 0),
+                    desc: `\u062E\u0635\u0645 \u0642\u064A\u0645\u0629 \u0627\u0644\u0645\u0646\u062A\u062C \u0644\u0645\u0631\u062A\u062C\u0639 \u062A\u0633\u0644\u0645\u0647 \u0627\u0644\u0645\u0648\u0631\u062F \u062C\u0645\u0627\u0639\u064A\u0627\u064B (\u0627\u0644\u062F\u0641\u0639\u0629 \u0627\u0644\u0645\u062C\u0645\u0639\u0629): ${order.tracking}`
+                  });
+                }
               }
             }
             if (!db.statusHistory) db.statusHistory = [];
@@ -4143,14 +4006,6 @@ app.post("/api", async (req, res) => {
           );
         }
         return ok(res, { logs: (db.auditLog || []).reverse() });
-      }
-      case "getWithdrawalRequests": {
-        const isSupplier = isSupplierRole(currentRole);
-        let list = db.withdrawalRequests || [];
-        if (isSupplier) {
-          list = list.filter((r) => sameSup(r.supplier, currentUser));
-        }
-        return ok(res, { requests: list });
       }
       // ─────────────────────────────────────────────────────────────
       // SUPPLIER LEDGER SYSTEM (COD calculations)
@@ -4419,186 +4274,6 @@ app.post("/api", async (req, res) => {
           successMsg = "\u062A\u0645 \u0642\u064A\u062F \u062A\u0633\u0648\u064A\u0629 \u0627\u0644\u0631\u0635\u064A\u062F \u0627\u0644\u064A\u062F\u0648\u064A \u0628\u0646\u062C\u0627\u062D \u062F\u0648\u0646 \u0644\u0645\u0633 \u0627\u0644\u062E\u0632\u0646\u0629";
         }
         return ok(res, { msg: successMsg });
-      }
-      // Instant courier daily settlement and wallet closing
-      case "instantCourierSettlement": {
-        const {
-          courier,
-          cashAmount,
-          commissionAmount,
-          adjustmentType,
-          adjustmentAmount,
-          adjustmentDesc
-        } = d;
-        if (!courier) return err(res, "\u0627\u0644\u0645\u0646\u062F\u0648\u0628 \u063A\u064A\u0631 \u0645\u062D\u062F\u062F");
-        const nowCairoStr = now();
-        const cashVal = Number(cashAmount || 0);
-        if (cashVal > 0) {
-          if (!db.cashbox) db.cashbox = [];
-          db.cashbox.push({
-            date: nowCairoStr,
-            desc: "\u062A\u0635\u0641\u064A\u0629 \u0643\u0627\u0634 \u0648\u0625\u063A\u0644\u0627\u0642 \u0627\u0644\u0639\u0647\u062F\u0629 \u0627\u0644\u064A\u0648\u0645\u064A\u0629 \u0644\u0644\u0645\u0646\u062F\u0648\u0628: " + courier,
-            type: "\u0627\u0633\u062A\u0644\u0627\u0645 \u0639\u0647\u062F\u0629 \u0645\u0646\u062F\u0648\u0628",
-            amount: cashVal,
-            ref: courier,
-            addedBy: currentUser || "\u0625\u062F\u0627\u0631\u0629 \u0627\u0644\u062D\u0633\u0627\u0628\u0627\u062A"
-          });
-        }
-        const commVal = Number(commissionAmount || 0);
-        if (commVal > 0) {
-          if (!db.courierLedger) db.courierLedger = [];
-          db.courierLedger.push({
-            courier,
-            date: nowCairoStr,
-            type: "\u0639\u0645\u0648\u0644\u0629 \u062A\u0648\u0635\u064A\u0644",
-            tracking: "\u2014",
-            amount: commVal,
-            desc: "\u0625\u062C\u0645\u0627\u0644\u064A \u0627\u0644\u0639\u0645\u0648\u0644\u0627\u062A \u0627\u0644\u0645\u0633\u062A\u062D\u0642\u0629 \u0644\u0644\u064A\u0648\u0645 \u0627\u0644\u0645\u0635\u0641\u0649"
-          });
-        }
-        const adjVal = Number(adjustmentAmount || 0);
-        if (adjVal > 0 && adjustmentType) {
-          if (!db.courierLedger) db.courierLedger = [];
-          db.courierLedger.push({
-            courier,
-            date: nowCairoStr,
-            type: adjustmentType,
-            tracking: "\u2014",
-            amount: adjustmentType === "\u062C\u0632\u0627\u0621" ? -adjVal : adjVal,
-            desc: adjustmentDesc || "\u062A\u0633\u0648\u064A\u0629 \u064A\u062F\u0648\u064A\u0629 \u0645\u0635\u0627\u062D\u0628\u0629 \u0644\u0644\u062A\u0635\u0641\u064A\u0629 \u0627\u0644\u064A\u0648\u0645\u064A\u0629 - " + adjustmentType
-          });
-          if (adjustmentType === "\u0645\u0643\u0627\u0641\u0623\u0629") {
-            if (!db.cashbox) db.cashbox = [];
-            db.cashbox.push({
-              date: nowCairoStr,
-              desc: "\u0645\u0643\u0627\u0641\u0623\u0629 \u0645\u0646\u0635\u0631\u0641\u0629 \u0644\u0644\u0645\u0646\u062F\u0648\u0628 \u0645\u0635\u0627\u062D\u0628\u0629 \u0644\u0644\u062A\u0635\u0641\u064A\u0629 \u0627\u0644\u064A\u0648\u0645\u064A\u0629: " + courier + " - " + (adjustmentDesc || ""),
-              type: "\u0635\u0631\u0641",
-              amount: adjVal,
-              ref: "BONUS",
-              addedBy: currentUser || "\u0625\u062F\u0627\u0631\u0629 \u0627\u0644\u062D\u0633\u0627\u0628\u0627\u062A"
-            });
-          } else if (adjustmentType === "\u062C\u0632\u0627\u0621") {
-            if (!db.cashbox) db.cashbox = [];
-            db.cashbox.push({
-              date: nowCairoStr,
-              desc: "\u062A\u0633\u0648\u064A\u0629 \u062E\u0635\u0645/\u062C\u0632\u0627\u0621 \u0645\u0633\u062A\u0642\u0637\u0639 \u0645\u0635\u0627\u062D\u0628 \u0644\u0644\u062A\u0635\u0641\u064A\u0629 \u0627\u0644\u064A\u0648\u0645\u064A\u0629 \u0644\u0644\u0645\u0646\u062F\u0648\u0628: " + courier + " - " + (adjustmentDesc || ""),
-              type: "\u0627\u0633\u062A\u0644\u0627\u0645 \u0639\u0647\u062F\u0629 \u0645\u0646\u062F\u0648\u0628",
-              amount: adjVal,
-              ref: "PENALTY",
-              addedBy: currentUser || "\u0625\u062F\u0627\u0631\u0629 \u0627\u0644\u062D\u0633\u0627\u0628\u0627\u062A"
-            });
-          }
-        }
-        let settledCount = 0;
-        const settledOrders = [];
-        const activeOrders = [];
-        if (!db.archivedOrders) db.archivedOrders = [];
-        db.orders.forEach((order) => {
-          if (order.courier && order.courier.toString().trim().toLowerCase() === courier.toString().trim().toLowerCase()) {
-            const oldStatus = order.status;
-            order.lastCourier = order.courier;
-            order.lastCommission = order.commission;
-            let nextStatus = oldStatus;
-            if (oldStatus === "\u0645\u0631\u062A\u062C\u0639" || oldStatus === "\u0645\u0631\u062A\u062C\u0639 \u062C\u062F\u064A\u062F") {
-              nextStatus = "\u0645\u0631\u062A\u062C\u0639 \u0628\u0627\u0644\u0645\u0633\u062A\u0648\u062F\u0639";
-              order.courierSignature = `${order.courier} (\u062A\u0648\u0642\u064A\u0639 \u062A\u0635\u0641\u064A\u0629 \u0627\u0644\u0645\u0631\u062A\u062C\u0639 \u0627\u0644\u0645\u064A\u062F\u0627\u0646\u064A \u270D\uFE0F)`;
-            } else if (oldStatus === "\u062A\u0633\u0644\u064A\u0645 \u062C\u0632\u0626\u064A" || oldStatus === "\u0645\u0631\u062A\u062C\u0639 \u062C\u0632\u0626\u064A" || oldStatus === "\u062A\u0633\u0644\u064A\u0645 \u062C\u0632\u0626\u064A - \u0645\u0639\u0644\u0642 \u0644\u0644\u062C\u0631\u062F") {
-              nextStatus = "\u0645\u0631\u062A\u062C\u0639 \u062C\u0632\u0626\u064A \u0628\u0627\u0644\u0645\u0633\u062A\u0648\u062F\u0639";
-              order.returnReason = "\u0645\u0631\u062A\u062C\u0639 \u062C\u0632\u0626\u064A \u0645\u062A\u0628\u0642\u064A";
-              order.returnSubStatus = "\u0628\u0636\u0627\u0639\u0629 \u0645\u062A\u0628\u0642\u064A\u0629 \u0645\u0646 \u062A\u0633\u0644\u064A\u0645 \u062C\u0632\u0626\u064A";
-              order.courierSignature = `${order.courier} (\u062A\u0648\u0642\u064A\u0639 \u062A\u0635\u0641\u064A\u0629 \u0627\u0644\u0645\u0631\u062A\u062C\u0639 \u0627\u0644\u062C\u0632\u0626\u064A \u270D\uFE0F)`;
-            } else if (oldStatus === "\u0645\u0624\u062C\u0644" || oldStatus === "Delayed" || oldStatus === "\u0645\u0624\u062C\u0644 \u0645\u0646 \u0627\u0644\u0645\u0646\u062F\u0648\u0628" || oldStatus === "\u0645\u0624\u062C\u0644 \u0628\u0646\u0627\u0621\u064B \u0639\u0644\u0649 \u0637\u0644\u0628 \u0627\u0644\u0639\u0645\u064A\u0644") {
-              nextStatus = "\u0645\u0624\u062C\u0644 \u0628\u0627\u0644\u0645\u0633\u062A\u0648\u062F\u0639";
-              order.courierSignature = `${order.courier} (\u062A\u0648\u0642\u064A\u0639 \u062A\u0635\u0641\u064A\u0629 \u0627\u0644\u0645\u0624\u062C\u0644 \u270D\uFE0F)`;
-            } else if (oldStatus === "\u0644\u0627 \u064A\u0648\u062C\u062F \u0631\u062F" || oldStatus === "\u0627\u0644\u0639\u0645\u064A\u0644 \u0644\u0627 \u064A\u0631\u062F" || oldStatus === "No Answer" || oldStatus === "\u0627\u0644\u0639\u0645\u064A\u0644 \u0644\u0645 \u064A\u0642\u0645 \u0628\u0627\u0644\u0631\u062F") {
-              nextStatus = "\u0644\u0627 \u064A\u0648\u062C\u062F \u0631\u062F \u0628\u0627\u0644\u0645\u0633\u062A\u0648\u062F\u0639";
-              order.courierSignature = `${order.courier} (\u062A\u0648\u0642\u064A\u0639 \u062A\u0635\u0641\u064A\u0629 \u0639\u062F\u0645 \u0627\u0644\u0631\u062F \u270D\uFE0F)`;
-            }
-            order.status = nextStatus;
-            const isSuccessfullyClosed = [
-              "\u062A\u0645 \u0627\u0644\u062A\u0633\u0644\u064A\u0645",
-              "\u062A\u0645 \u0627\u0644\u062A\u0633\u0644\u064A\u0645 \u0628\u0646\u062C\u0627\u062D",
-              "\u062A\u0645 \u0627\u0644\u062A\u0633\u0644\u064A\u0645 (\u0646\u0627\u062C\u062D \u0643\u0627\u0634)",
-              "\u062A\u0633\u0644\u064A\u0645 \u062C\u0632\u0626\u064A",
-              "\u062A\u0633\u0644\u064A\u0645 \u062C\u0632\u0626\u064A - \u0645\u0639\u0644\u0642 \u0644\u0644\u062C\u0631\u062F",
-              "\u0645\u0631\u062A\u062C\u0639 \u062C\u0632\u0626\u064A"
-            ].includes(oldStatus);
-            const shouldArchive = [
-              "\u062A\u0645 \u0627\u0644\u062A\u0633\u0644\u064A\u0645",
-              "\u062A\u0645 \u0627\u0644\u062A\u0633\u0644\u064A\u0645 \u0628\u0646\u062C\u0627\u062D",
-              "\u062A\u0645 \u0627\u0644\u062A\u0633\u0644\u064A\u0645 (\u0646\u0627\u062C\u062D \u0643\u0627\u0634)",
-              "\u0627\u0644\u062A\u0633\u0644\u064A\u0645 \u0644\u0644\u0645\u0648\u0631\u062F",
-              "\u062A\u0645 \u062A\u0633\u0644\u064A\u0645 \u0627\u0644\u0645\u0631\u062A\u062C\u0639 \u0644\u0644\u0645\u0648\u0631\u062F"
-            ].includes(nextStatus);
-            if (isSuccessfullyClosed) {
-              order.isSettled = true;
-              order.is_settled = "true";
-              if (!shouldArchive) {
-                order.courier = "";
-                order.commission = 0;
-              }
-            } else {
-              order.courier = "";
-              order.commission = 0;
-              order.isSettled = false;
-              order.is_settled = "false";
-            }
-            order.updatedAt = nowCairoStr;
-            if (!db.statusHistory) db.statusHistory = [];
-            db.statusHistory.push({
-              tracking: order.tracking,
-              oldStatus,
-              newStatus: order.status,
-              updatedBy: currentUser || "\u0625\u062F\u0627\u0631\u0629",
-              dateTime: nowCairoStr
-            });
-            if (shouldArchive) {
-              settledOrders.push(order);
-            } else {
-              activeOrders.push(order);
-            }
-            settledCount++;
-          } else {
-            activeOrders.push(order);
-          }
-        });
-        db.archivedOrders.push(...settledOrders);
-        db.orders = activeOrders;
-        if (!db.auditLog) db.auditLog = [];
-        db.auditLog.push({
-          user: currentUser || "\u0625\u062F\u0627\u0631\u0629 \u0627\u0644\u062D\u0633\u0627\u0628\u0627\u062A",
-          type: "\u062A\u0635\u0641\u064A\u0629 \u0639\u0647\u062F\u0629 \u064A\u0648\u0645\u064A\u0629 \u0641\u0648\u0631\u064A\u0629",
-          dateTime: nowCairoStr,
-          oldVal: "\u0639\u0627\u0645\u0644: " + courier,
-          newVal: "\u0643\u0627\u0634: " + cashVal + " | \u0639\u0645\u0648\u0644\u0629: " + commVal,
-          reason: "\u0627\u0639\u062A\u0645\u0627\u062F \u062A\u0635\u0641\u064A\u0629 \u0627\u0644\u062D\u0633\u0627\u0628 \u0648\u0625\u063A\u0644\u0627\u0642 \u0627\u0644\u0639\u0647\u062F\u0629 \u0627\u0644\u064A\u0648\u0645\u064A\u0629"
-        });
-        writeDB(db);
-        let scriptUrl2 = (process.env.GOOGLE_SCRIPT_URL || "").trim();
-        if (scriptUrl2.startsWith('"') && scriptUrl2.endsWith('"')) {
-          scriptUrl2 = scriptUrl2.substring(1, scriptUrl2.length - 1).trim();
-        } else if (scriptUrl2.startsWith("'") && scriptUrl2.endsWith("'")) {
-          scriptUrl2 = scriptUrl2.substring(1, scriptUrl2.length - 1).trim();
-        }
-        if (isGoogleScriptHealthy && scriptUrl2 && scriptUrl2.startsWith("http")) {
-          executeProxyRequest(scriptUrl2, {
-            action: "instantCourierSettlement",
-            token: "14014",
-            courier,
-            cashAmount: cashVal,
-            commissionAmount: commVal,
-            adjustmentType,
-            adjustmentAmount,
-            adjustmentDesc,
-            currentUser
-          }).catch((err2) => {
-            console.error("Async sheets write failure for instantCourierSettlement:", err2);
-          });
-        }
-        return ok(res, {
-          settled: settledCount,
-          msg: "\u2705 \u062A\u0645 \u0627\u0639\u062A\u0645\u0627\u062F \u062A\u0635\u0641\u064A\u0629 \u0627\u0644\u062D\u0633\u0627\u0628 \u0648\u0625\u063A\u0644\u0627\u0642 \u0627\u0644\u0639\u0647\u062F\u0629 \u0627\u0644\u064A\u0648\u0645\u064A\u0629 \u0644\u0644\u0645\u0646\u062F\u0648\u0628 \u0628\u0646\u062C\u0627\u062D! \u062A\u0645 \u0625\u064A\u062F\u0627\u0639 \u0645\u0628\u0644\u063A " + cashVal + " \u062C.\u0645 \u0628\u0627\u0644\u062E\u0632\u0646\u0629 \u0643\u0623\u062B\u0631 \u0641\u0648\u0631\u064A\u060C \u0648\u062A\u0635\u0641\u064A\u0631 \u0627\u0644\u0639\u062F\u0627\u062F \u0644\u0644\u064A\u0648\u0645 \u0627\u0644\u062C\u062F\u064A\u062F."
-        });
       }
       // Overnight face-to-face settlement action
       case "settleCourierOrders": {
@@ -5474,7 +5149,7 @@ app.post("/api", async (req, res) => {
         const newUserObj = {
           name: name.trim(),
           role,
-          pass: hashPassword(pass.trim()),
+          pass: pass.trim(),
           active: "\u0646\u0639\u0645",
           email: email || "",
           perms: getPermissionsForRole(role)
@@ -5505,36 +5180,6 @@ app.post("/api", async (req, res) => {
           msg: "\u062A\u0645 \u0625\u0646\u0634\u0627\u0621 \u0627\u0644\u062D\u0633\u0627\u0628 \u0648\u0625\u0639\u062F\u0627\u062F \u0627\u0644\u0635\u0644\u0627\u062D\u064A\u0627\u062A \u0648\u0627\u0644\u0645\u0644\u0641 \u0627\u0644\u0645\u0627\u0644\u064A \u0628\u0646\u062C\u0627\u062D"
         });
       }
-      case "toggleStaffStatus": {
-        if (currentRole !== "\u0645\u062F\u064A\u0631") {
-          return err(res, "\u0635\u0644\u0627\u062D\u064A\u0629 \u062D\u0635\u0631\u064A\u0629 \u0644\u0645\u062F\u064A\u0631 \u0627\u0644\u0646\u0638\u0627\u0645");
-        }
-        const staffName = (d.staffName || "").toString().trim();
-        const active = (d.active || "\u0646\u0639\u0645").toString().trim();
-        if (!staffName) return err(res, "\u0627\u0633\u0645 \u0627\u0644\u0645\u0648\u0638\u0641 \u0645\u0641\u0642\u0648\u062F");
-        const staffEntry = db.staffPermissions.find((item) => item.name.toString().trim() === staffName);
-        if (staffEntry) {
-          staffEntry.active = active;
-        }
-        const userEntry = db.users.find((item) => item.name.toString().trim() === staffName);
-        if (userEntry) {
-          userEntry.active = active;
-        }
-        writeDB(db);
-        return ok(res, { msg: active === "\u0646\u0639\u0645" ? "\u062A\u0645 \u062A\u0641\u0639\u064A\u0644 \u0627\u0644\u0645\u0648\u0638\u0641 \u0628\u0646\u062C\u0627\u062D" : "\u062A\u0645 \u0625\u064A\u0642\u0627\u0641 \u0627\u0644\u0645\u0648\u0638\u0641 \u0628\u0646\u062C\u0627\u062D" });
-      }
-      case "deleteStaff": {
-        if (currentRole !== "\u0645\u062F\u064A\u0631") {
-          return err(res, "\u0635\u0644\u0627\u062D\u064A\u0629 \u062D\u0635\u0631\u064A\u0629 \u0644\u0645\u062F\u064A\u0631 \u0627\u0644\u0646\u0638\u0627\u0645");
-        }
-        const staffName = (d.staffName || "").toString().trim();
-        if (!staffName) return err(res, "\u0627\u0633\u0645 \u0627\u0644\u0645\u0648\u0638\u0641 \u0645\u0641\u0642\u0648\u062F");
-        db.staffPermissions = (db.staffPermissions || []).filter((item) => item.name.toString().trim() !== staffName);
-        db.users = (db.users || []).filter((item) => item.name.toString().trim() !== staffName);
-        db.couriers = (db.couriers || []).filter((item) => item.name.toString().trim() !== staffName);
-        writeDB(db);
-        return ok(res, { msg: "\u062A\u0645 \u062D\u0630\u0641 \u0627\u0644\u0645\u0648\u0638\u0641 \u0628\u0646\u062C\u0627\u062D" });
-      }
       case "updateUser": {
         if (currentRole !== "\u0645\u062F\u064A\u0631") {
           return err(res, "\u0635\u0644\u0627\u062D\u064A\u0629 \u062D\u0635\u0631\u064A\u0629 \u0644\u0645\u062F\u064A\u0631 \u0627\u0644\u0646\u0638\u0627\u0645");
@@ -5550,85 +5195,6 @@ app.post("/api", async (req, res) => {
         target.perms = perms !== void 0 ? perms : target.perms;
         writeDB(db);
         return ok(res, { msg: "\u062A\u0645 \u062A\u062D\u062F\u064A\u062B \u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645 \u0628\u0646\u062C\u0627\u062D" });
-      }
-      case "getStaffPermissions": {
-        const list = db.staffPermissions || [];
-        const isAdmin = currentRole === "\u0645\u062F\u064A\u0631";
-        const safeList = list.map((item) => {
-          const copy = { ...item };
-          if (!isAdmin) {
-            copy.salary = null;
-          }
-          return copy;
-        });
-        return ok(res, { staff: safeList });
-      }
-      case "saveStaffPermissions": {
-        if (currentRole !== "\u0645\u062F\u064A\u0631") {
-          return err(res, "\u0635\u0644\u0627\u062D\u064A\u0629 \u062D\u0635\u0631\u064A\u0629 \u0644\u0645\u062F\u064A\u0631 \u0627\u0644\u0646\u0638\u0627\u0645");
-        }
-        const staff = d.staff || {};
-        if (!staff.name) return err(res, "\u0627\u0633\u0645 \u0627\u0644\u0645\u0648\u0638\u0641 \u0645\u0641\u0642\u0648\u062F");
-        if (!db.staffPermissions) {
-          db.staffPermissions = [];
-        }
-        const idx = db.staffPermissions.findIndex((item) => item.name.toString().trim() === staff.name.toString().trim());
-        if (idx === -1) {
-          db.staffPermissions.push(staff);
-        } else {
-          db.staffPermissions[idx] = { ...db.staffPermissions[idx], ...staff };
-        }
-        let uIdx = db.users.findIndex((item) => item.name.toString().trim() === staff.name.toString().trim());
-        const getPermissionsStringForStaff = (s) => {
-          const p = [];
-          if (s.perm_dashboard === "true" || s.perm_dashboard === true) p.push("\u0644\u0648\u062D\u0629 \u0627\u0644\u0642\u064A\u0627\u062F\u0629");
-          if (s.perm_orders === "true" || s.perm_orders === true) p.push("\u0627\u0644\u0637\u0644\u0628\u0627\u062A");
-          if (s.perm_ledger === "true" || s.perm_ledger === true) p.push("\u0627\u0644\u062D\u0633\u0627\u0628\u0627\u062A");
-          if (s.perm_expenses === "true" || s.perm_expenses === true) p.push("\u0627\u0644\u0645\u0635\u0627\u0631\u064A\u0641");
-          if (s.perm_staff === "true" || s.perm_staff === true) p.push("\u0627\u0644\u0645\u0648\u0638\u0641\u064A\u0646");
-          return p.join(" \xB7 ") || "\u0635\u0644\u0627\u062D\u064A\u0627\u062A \u0623\u0633\u0627\u0633\u064A\u0629";
-        };
-        const userObj = {
-          name: staff.name.trim(),
-          role: staff.role,
-          pass: hashPassword(d.pass || "123456"),
-          active: staff.active || "\u0646\u0639\u0645",
-          email: staff.name.trim() + "@friendplus.com",
-          perms: getPermissionsStringForStaff(staff)
-        };
-        if (uIdx === -1) {
-          db.users.push(userObj);
-        } else {
-          db.users[uIdx].role = staff.role;
-          db.users[uIdx].active = staff.active || db.users[uIdx].active || "\u0646\u0639\u0645";
-          db.users[uIdx].perms = getPermissionsStringForStaff(staff);
-          if (d.pass) {
-            db.users[uIdx].pass = hashPassword(d.pass);
-          }
-        }
-        const roleLower = (staff.role || "").toString().toLowerCase();
-        if (roleLower === "\u0645\u0646\u062F\u0648\u0628" || roleLower.includes("\u0645\u0646\u062F\u0648\u0628")) {
-          let cIdx = db.couriers.findIndex((item) => item.name.toString().trim() === staff.name.toString().trim());
-          const courierObj = {
-            name: staff.name.trim(),
-            phone: staff.phone || "",
-            salary: Number(staff.salary) || 3e3,
-            base_fixed_salary: Number(staff.salary) || 3e3,
-            commission: 25,
-            commission_success: 25,
-            commission_return: 10,
-            region: "\u2014"
-          };
-          if (cIdx === -1) {
-            db.couriers.push(courierObj);
-          } else {
-            db.couriers[cIdx].phone = staff.phone || db.couriers[cIdx].phone;
-            db.couriers[cIdx].salary = Number(staff.salary) || db.couriers[cIdx].salary;
-            db.couriers[cIdx].base_fixed_salary = Number(staff.salary) || db.couriers[cIdx].base_fixed_salary;
-          }
-        }
-        writeDB(db);
-        return ok(res, { msg: "\u062A\u0645 \u062D\u0641\u0638 \u0648\u062A\u062D\u062F\u064A\u062B \u0628\u064A\u0627\u0646\u0627\u062A \u0648\u0635\u0644\u0627\u062D\u064A\u0627\u062A \u0627\u0644\u0645\u0648\u0638\u0641 \u0628\u0646\u062C\u0627\u062D" });
       }
       // ─────────────────────────────────────────────────────────────
       // PHONE NUMBER PRE-SCREEN CONTROLS
@@ -5650,19 +5216,9 @@ app.post("/api", async (req, res) => {
       // RESOURCE MANAGEMENT / STATIC ARRAYS
       // ─────────────────────────────────────────────────────────────
       case "getCouriers": {
-        let activeUsersCouriers = db.users.filter(
+        const activeUsersCouriers = db.users.filter(
           (u) => ((u.role || "").toString().trim() === "\u0645\u0646\u062F\u0648\u0628" || (u.role || "").toString().trim().indexOf("\u0645\u0646\u062F\u0648\u0628") > -1 || (u.name || "").toString().trim() === "\u0639\u0635\u0641\u0648\u0631") && u.active !== "\u0644\u0627"
         );
-        const isAdmin = currentRole === "\u0645\u062F\u064A\u0631";
-        const isSupervisor = currentRole === "\u0645\u0634\u0631\u0641" || (currentRole || "").toString().includes("\u0645\u0634\u0631\u0641");
-        if (isSupervisor) {
-          const staffPermissionsList = db.staffPermissions || [];
-          const supervisedNames = staffPermissionsList.filter((item) => (item.supervisor_id || "").toString().trim().toLowerCase() === currentUser.trim().toLowerCase()).map((item) => (item.name || "").toString().trim().toLowerCase());
-          activeUsersCouriers = activeUsersCouriers.filter((u) => {
-            const uName = (u.name || "").toString().trim().toLowerCase();
-            return supervisedNames.includes(uName);
-          });
-        }
         const list = activeUsersCouriers.map((u) => {
           const profile = db.couriers.find(
             (c) => c.name.toString().trim() === u.name.toString().trim()
@@ -5671,9 +5227,9 @@ app.post("/api", async (req, res) => {
             name: u.name,
             phone: profile.phone || "\u2014",
             commission: profile.commission !== void 0 ? profile.commission : 25,
-            salary: isAdmin ? profile.salary !== void 0 ? profile.salary : 3e3 : null,
+            salary: profile.salary !== void 0 ? profile.salary : 3e3,
             region: profile.region || "\u2014",
-            base_fixed_salary: isAdmin ? profile.base_fixed_salary !== void 0 ? profile.base_fixed_salary : profile.salary || 3e3 : null,
+            base_fixed_salary: profile.base_fixed_salary !== void 0 ? profile.base_fixed_salary : profile.salary || 3e3,
             commission_success: profile.commission_success !== void 0 ? profile.commission_success : profile.commission || 25,
             commission_return: profile.commission_return !== void 0 ? profile.commission_return : 10,
             hire_date: profile.hire_date || "",
@@ -5699,7 +5255,7 @@ app.post("/api", async (req, res) => {
           return err(res, "\u0627\u0633\u0645 \u0627\u0644\u0645\u0646\u062F\u0648\u0628 \u0645\u0637\u0644\u0648\u0628 \u0644\u062A\u062D\u062F\u064A\u062B \u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u0645\u0644\u0641 \u0627\u0644\u0645\u0627\u0644\u064A");
         const trimmedName = name.toString().trim();
         let courier = db.couriers.find(
-          (c) => c.name && sameCourier(c.name, trimmedName)
+          (c) => c.name && c.name.toString().trim().toLowerCase() === trimmedName.toLowerCase()
         );
         if (!courier) {
           courier = {

@@ -1,55 +1,10 @@
 import express, { Request, Response } from "express";
 import path from "path";
 import fs from "fs";
-import crypto from "crypto";
-
-function hashPassword(password: string): string {
-  if (!password) return "";
-  return crypto.createHash("sha256").update(password).digest("hex");
-}
-
-function verifyPassword(inputPass: string, storedPass: string): boolean {
-  if (!storedPass) return false;
-  const cleanedStored = storedPass.trim();
-  const cleanedInput = inputPass.trim();
-  // If stored is 64-character hex, it is a SHA-256 hash
-  if (cleanedStored.length === 64 && /^[0-9a-fA-F]+$/.test(cleanedStored)) {
-    return hashPassword(cleanedInput) === cleanedStored;
-  }
-  // Otherwise it's plaintext
-  return cleanedInput === cleanedStored;
-}
 
 const app = express();
 const PORT = 3000;
 const DB_PATH = path.join(process.cwd(), "src", "db.json");
-
-const STRICT_ROLE_ACTIONS: Record<string, string[]> = {
-  مدير: ["dashboard", "orders", "ledger", "expenses", "staff", "all"],
-  مشرف: ["dashboard", "orders", "ledger"],
-  محاسب: ["dashboard", "ledger", "expenses"],
-  "موظف عمليات": ["dashboard", "orders"],
-  "مسؤول مرتجعات": ["dashboard", "orders", "ledger"],
-  مندوب: ["orders"],
-  مورد: ["orders", "ledger"],
-  زائر: []
-};
-
-function getStrictRoleActions(role: string): string[] {
-  const clean = (role || "").toString().trim();
-  if (!clean) return [];
-  const direct = STRICT_ROLE_ACTIONS[clean];
-  if (direct) return [...direct];
-  if (clean.includes("مندوب")) return [...STRICT_ROLE_ACTIONS["مندوب"]];
-  if (clean.includes("مورد")) return [...STRICT_ROLE_ACTIONS["مورد"]];
-  if (clean.includes("مرتجع")) return [...STRICT_ROLE_ACTIONS["مسؤول مرتجعات"]];
-  return [];
-}
-
-function hasStrictAction(role: string, action: string): boolean {
-  const actions = getStrictRoleActions(role);
-  return actions.includes(action) || actions.includes("all");
-}
 
 // Default Fallback Database to ensure successful startup & login under environments like Vercel with read-only/missing storage
 const DEFAULT_DB = {
@@ -243,7 +198,6 @@ const DEFAULT_DB = {
   statusHistory: [],
   supplierLedger: [],
   courierLedger: [],
-  staffPermissions: [],
   settings: {
     COUNTER: 1005,
     COMPANY: "فريند بلس",
@@ -708,15 +662,6 @@ const sameSup = (na: string, nb: string): boolean => {
   return normalizeArabic(na) === normalizeArabic(nb);
 };
 
-const sameCourier = (na: string, nb: string): boolean => {
-  if (!na || !nb) return false;
-  let cleanA = normalizeArabic(na);
-  let cleanB = normalizeArabic(nb);
-  if (cleanA === normalizeArabic("مندوب عصفور") || cleanA === normalizeArabic("مندوب_عصفور")) cleanA = normalizeArabic("عصفور");
-  if (cleanB === normalizeArabic("مندوب عصفور") || cleanB === normalizeArabic("مندوب_عصفور")) cleanB = normalizeArabic("عصفور");
-  return cleanA === cleanB;
-};
-
 const isSupplierRole = (r: string): boolean => {
   if (!r) return false;
   const t = r.toString().trim().toLowerCase();
@@ -994,25 +939,6 @@ function calculateSupplierBalance(db: any, supplierName: string) {
     return sum + financials.prodPrice;
   }, 0);
 
-  // 3. Kept goods value (strict rule for outstanding calculation)
-  const totalKeptGoodsValue = supplierOrders.reduce((sum: number, o: any) => {
-    const status = getOrderStatus(o);
-    const financials = getOrderFinancials(o);
-    const isDelivered = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(status);
-    const isPartial = o.isPartial === true || o.isPartial === "true" || ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].includes(status);
-    
-    if (isDelivered) {
-      return sum + financials.prodPrice;
-    } else if (isPartial) {
-      const shipPrice = Number(o.shipPrice || financials.shipPrice || 60);
-      let soldValue = Number(o.actualReceivedCash ?? o.partialAmount ?? o["المبلغ المحصل"] ?? 0);
-      if (isNaN(soldValue)) soldValue = 0;
-      const kept_goods_value = Math.max(0, soldValue - shipPrice);
-      return sum + kept_goods_value;
-    }
-    return sum;
-  }, 0);
-
   const adjustmentsAndPayments = rawLedger.filter(isHumanLedgedPayout);
 
   // Calculate net cash paid (all entries that are negative signed amounts)
@@ -1038,12 +964,14 @@ function calculateSupplierBalance(db: any, supplierName: string) {
     totalLedgerEffect;
 
   const totalOrdersCount = supplierOrders.length;
-  const deliveredOrders = supplierOrders.filter((o: any) => {
-    const status = getOrderStatus(o);
-    return ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)", "تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي بالمستودع"].includes(status);
-  });
+  const deliveredOrders = supplierOrders.filter(
+    (o: any) => getOrderStatus(o) === "تم التسليم",
+  );
   const deliveredOrdersCount = deliveredOrders.length;
-  const deliveredOrdersValue = totalKeptGoodsValue;
+  const deliveredOrdersValue = deliveredOrders.reduce((sum: number, o: any) => {
+    const financials = getOrderFinancials(o);
+    return sum + financials.prodPrice;
+  }, 0);
 
   const returnsDeliveredCount = returnedOrders.length;
   const rate = totalOrdersCount
@@ -1782,11 +1710,6 @@ async function executeProxyRequest(
     "updateCourier",
     "archiveOrder",
     "settleCourierOrders",
-    "approveWithdrawal",
-    "rejectWithdrawal",
-    "requestWithdrawal",
-    "settleSupplierDay",
-    "addSupplierSettlement",
   ].includes(payload.action);
 
   if (isWrite) {
@@ -1929,7 +1852,7 @@ app.post("/api", async (req: Request, res: Response) => {
               let user = resData.users.find(
                 (u: any) =>
                   u.name?.toString().trim() === name.trim() &&
-                  verifyPassword(pass, u.pass?.toString() || ""),
+                  u.pass?.toString().trim() === pass.trim(),
               );
 
               // Allow any name (e.g. ahmed) in preview to automatically log in as 'مدير' with 'كاملة' perms if not found in sheets
@@ -2404,173 +2327,6 @@ app.post("/api", async (req: Request, res: Response) => {
           return ok(res, { msg: "تم تسجيل التسوية المالية للمندوب بنجاح ✓" });
         }
 
-        if (d.action === "requestWithdrawal") {
-          const { supplier, amount, paymentMethod, notes } = d;
-          if (!supplier || !amount) return err(res, "المعلومات المطلوبة غير كاملة لطلب السحب");
-
-          const db = readDB();
-          if (!db.withdrawalRequests) db.withdrawalRequests = [];
-          
-          const newReq = {
-            id: "W-" + Date.now(),
-            supplier,
-            amount: Number(amount),
-            paymentMethod: paymentMethod || "غير محدد",
-            status: "معلق",
-            createdAt: now(),
-            notes: notes || ""
-          };
-          db.withdrawalRequests.push(newReq);
-          writeDB(db);
-
-          executeProxyRequest(gscriptUrl, payloadToSheet).catch((syncErr) => {
-            console.error("Async Google Sheets synchronization for requestWithdrawal failed:", syncErr);
-          });
-
-          return ok(res, { ok: true, msg: "تم إرسال طلب السحب بنجاح ✓ وجاري المزامنة", request: newReq });
-        }
-
-        if (d.action === "approveWithdrawal") {
-          if (!["مدير", "محاسب"].includes(currentRole)) {
-            return err(res, "فقط المدير والمحاسب يمتلك صلاحية الموافقة على طلبات السحب");
-          }
-          const { id } = d;
-          if (!id) return err(res, "معرف الطلب مفقود");
-
-          const db = readDB();
-          if (!db.withdrawalRequests) db.withdrawalRequests = [];
-          const reqIdx = db.withdrawalRequests.findIndex((r: any) => r.id === id);
-          if (reqIdx === -1) return err(res, "لم يتم العثور على طلب السحب محلياً");
-
-          const req = db.withdrawalRequests[reqIdx];
-          if (req.status !== "معلق") return err(res, "هذا الطلب تم معالجته مسبقاً");
-
-          const amt = Math.abs(Number(req.amount || 0));
-
-          // Deduct from supplier ledger
-          if (!db.supplierLedger) db.supplierLedger = [];
-          db.supplierLedger.push({
-            supplier: req.supplier,
-            date: now(),
-            type: "دفع نقدي",
-            tracking: id,
-            amount: -amt,
-            desc: "سحب رصيد مقبول (معرف الطلب: #" + id + ") عبر وسيلة الدفع: " + (req.paymentMethod || "")
-          });
-
-          // Add to cashbox
-          if (!db.cashbox) db.cashbox = [];
-          db.cashbox.push({
-            date: now(),
-            desc: "سحب رصيد مقبول (معرف الطلب: #" + id + ") للمورد: " + req.supplier,
-            type: "سداد مورد",
-            amount: amt,
-            ref: id,
-            addedBy: currentUser || "إدارة الحسابات"
-          });
-
-          // Update request status
-          req.status = "مقبول";
-          req.notes = "تم الموافقة والتحويل بواسطة " + (currentUser || "الأدمن") + " في " + now();
-
-          // Add audit log
-          if (!db.auditLog) db.auditLog = [];
-          db.auditLog.push({
-            user: currentUser || "حسابات",
-            type: "قبول طلب سحب رصيد مورد",
-            dateTime: now(),
-            oldVal: "معلق",
-            newVal: "مقبول - تم التحويل بقيمة " + amt + " ج.م للمورد " + req.supplier,
-            reason: "موافقة وصرف من الخزينة"
-          });
-
-          writeDB(db);
-
-          executeProxyRequest(gscriptUrl, payloadToSheet).catch((syncErr) => {
-            console.error("Async Google Sheets synchronization for approveWithdrawal failed:", syncErr);
-          });
-
-          return ok(res, { ok: true, msg: "تم قبول طلب السحب وجاري المزامنة في الخلفية ✓" });
-        }
-
-        if (d.action === "rejectWithdrawal") {
-          if (!["مدير", "محاسب"].includes(currentRole)) {
-            return err(res, "فقط المدير والمحاسب يمتلك صلاحية رفض طلبات السحب");
-          }
-          const { id, reason } = d;
-          if (!id) return err(res, "معرف الطلب مفقود");
-
-          const db = readDB();
-          if (!db.withdrawalRequests) db.withdrawalRequests = [];
-          const reqIdx = db.withdrawalRequests.findIndex((r: any) => r.id === id);
-          if (reqIdx === -1) return err(res, "لم يتم العثور على طلب السحب محلياً");
-
-          const req = db.withdrawalRequests[reqIdx];
-          if (req.status !== "معلق") return err(res, "هذا الطلب تم معالجته مسبقاً");
-
-          req.status = "مرفوض";
-          req.notes = "تم الرفض بسبب: " + (reason || "غير محدد") + " بواسطة " + (currentUser || "الأدمن") + " في " + now();
-
-          if (!db.auditLog) db.auditLog = [];
-          db.auditLog.push({
-            user: currentUser || "حسابات",
-            type: "رفض طلب سحب رصيد مورد",
-            dateTime: now(),
-            oldVal: "معلق",
-            newVal: "مرفوض بسبب: " + (reason || "غير محدد"),
-            reason: "رفض بواسطة الإدارة"
-          });
-
-          writeDB(db);
-
-          executeProxyRequest(gscriptUrl, payloadToSheet).catch((syncErr) => {
-            console.error("Async Google Sheets synchronization for rejectWithdrawal failed:", syncErr);
-          });
-
-          return ok(res, { ok: true, msg: "تم رفض طلب السحب وجاري المزامنة في الخلفية ✓" });
-        }
-
-        if (d.action === "settleSupplierDay") {
-          const { supplier, dateStr } = d;
-          if (!supplier || !dateStr) return err(res, "معلومات تصفية اليوم ناقصة");
-
-          const db = readDB();
-          if (!db.supplierSettlements) db.supplierSettlements = [];
-          
-          const alreadySettled = db.supplierSettlements.some(
-            (s: any) => s.supplier === supplier && s.date === dateStr
-          );
-          if (alreadySettled) {
-            return ok(res, { ok: true, msg: "هذا اليوم مصفى بالفعل محلياً" });
-          }
-
-          db.supplierSettlements.push({
-            supplier,
-            date: dateStr,
-            status: "مصفى ماليّاً",
-            settledAt: now(),
-            settledBy: currentUser || "إدارة الحسابات"
-          });
-
-          if (!db.supplierLedger) db.supplierLedger = [];
-          db.supplierLedger.push({
-            supplier,
-            date: dateStr,
-            type: "تصفية يومية",
-            tracking: "SETTLE-" + dateStr,
-            amount: 0,
-            desc: "🔐 [💵 تقفيل وتسليم كاش اليوم للمورد] - تم تصفية وقفل حساب اليوم تاريخ: " + dateStr + " بنجاح تصفية تامة✓"
-          });
-
-          writeDB(db);
-
-          executeProxyRequest(gscriptUrl, payloadToSheet).catch((syncErr) => {
-            console.error("Async Google Sheets synchronization for settleSupplierDay failed:", syncErr);
-          });
-
-          return ok(res, { ok: true, msg: "تم تسجيل تصفية اليوم للمورد بنجاح ✓ وجاري المزامنة" });
-        }
-
         if (d.action === "addDailyClosing") {
           const {
             date,
@@ -2789,7 +2545,8 @@ app.post("/api", async (req: Request, res: Response) => {
           const courierProfile = db.couriers.find(
             (c: any) =>
               c.name &&
-              sameCourier(c.name, courier)
+              c.name.toString().trim().toLowerCase() ===
+                courier.toString().trim().toLowerCase()
           );
           if (!courierProfile) return err(res, "المندوب غير مسجل");
 
@@ -2805,7 +2562,8 @@ app.post("/api", async (req: Request, res: Response) => {
           db.orders.forEach((order: any) => {
             if (
               order.courier &&
-              sameCourier(order.courier, courier)
+              order.courier.toString().trim().toLowerCase() ===
+                courier.toString().trim().toLowerCase()
             ) {
               order.isSettledMonth = true;
               order.isSettled = true;
@@ -2824,7 +2582,8 @@ app.post("/api", async (req: Request, res: Response) => {
           db.archivedOrders.forEach((order: any) => {
             if (
               order.courier &&
-              sameCourier(order.courier, courier)
+              order.courier.toString().trim().toLowerCase() ===
+                courier.toString().trim().toLowerCase()
             ) {
               order.isSettledMonth = true;
               order.isSettled = true;
@@ -2837,7 +2596,8 @@ app.post("/api", async (req: Request, res: Response) => {
             if (
               item.type === "استلام عهدة مندوب" &&
               item.ref &&
-              sameCourier(item.ref, courier)
+              item.ref.toString().trim().toLowerCase() ===
+                courier.toString().trim().toLowerCase()
             ) {
               item.isSettledMonth = true;
             }
@@ -2848,7 +2608,8 @@ app.post("/api", async (req: Request, res: Response) => {
             db.expenses.forEach((item: any) => {
               if (
                 item.by &&
-                sameCourier(item.by, courier)
+                item.by.toString().trim().toLowerCase() ===
+                  courier.toString().trim().toLowerCase()
               ) {
                 item.isSettledMonth = true;
               }
@@ -2860,7 +2621,8 @@ app.post("/api", async (req: Request, res: Response) => {
             db.courierLedger.forEach((item: any) => {
               if (
                 item.courier &&
-                sameCourier(item.courier, courier)
+                item.courier.toString().trim().toLowerCase() ===
+                  courier.toString().trim().toLowerCase()
               ) {
                 item.isSettledMonth = true;
               }
@@ -3450,20 +3212,6 @@ app.post("/api", async (req: Request, res: Response) => {
                 return lSup && sameSup(lSup, targetSupplier);
               });
             }
-
-            if (
-              d.action === "getWithdrawalRequests" &&
-              Array.isArray(resData.requests)
-            ) {
-              const isSupplier =
-                (currentRole || "").toString().trim() === "مورد" ||
-                (currentRole || "").toString().trim().includes("مورد");
-              if (isSupplier) {
-                resData.requests = resData.requests.filter((r: any) =>
-                  sameSup(r.supplier, currentUser)
-                );
-              }
-            }
           }
 
           return res.json(resData);
@@ -3490,7 +3238,7 @@ app.post("/api", async (req: Request, res: Response) => {
       if (!name || !pass) return err(res, "اكتب الاسم وكلمة المرور");
       let user = db.users.find(
         (u: any) =>
-          u.name.trim() === name.trim() && verifyPassword(pass, u.pass),
+          u.name.trim() === name.trim() && u.pass.trim() === pass.trim(),
       );
 
       // Allow name in preview bypass
@@ -3524,11 +3272,7 @@ app.post("/api", async (req: Request, res: Response) => {
 
     const currentUser = sess.user;
     const currentRole = sess.role;
-        const strongRole = (currentRole || "").toString().trim();
-        const isStrictAdmin = strongRole === "مدير";
-        const isStrictSupervisor = strongRole === "مشرف";
-        const isStrictCourier = strongRole === "مندوب" || strongRole.includes("مندوب");
-        const isStrictSupplier = strongRole === "مورد" || strongRole.includes("مورد");
+
     switch (d.action) {
       // ─────────────────────────────────────────────────────────────
       // GET ORDERS
@@ -3567,18 +3311,6 @@ app.post("/api", async (req: Request, res: Response) => {
           }
         }
         ordersList = Array.from(uniqueLocalSeen.values());
-
-        const isSupervisor = currentRole === "مشرف" || (currentRole || "").toString().includes("مشرف");
-        if (isSupervisor) {
-          const staffPermissionsList = db.staffPermissions || [];
-          const supervisedNames = staffPermissionsList
-            .filter((item: any) => (item.supervisor_id || "").toString().trim().toLowerCase() === currentUser.trim().toLowerCase())
-            .map((item: any) => (item.name || "").toString().trim().toLowerCase());
-          ordersList = ordersList.filter((o: any) => {
-            const oCou = (o.courier || "").toString().trim().toLowerCase();
-            return oCou && supervisedNames.includes(oCou);
-          });
-        }
 
         // Apply role filter
         if (isAgent || isOps) {
@@ -3770,7 +3502,7 @@ app.post("/api", async (req: Request, res: Response) => {
         }
 
         const initialCourier = matchedCourier ? matchedCourier.name : "";
-        const initialStatus = o.status || (matchedCourier ? "مُسند جديد" : "جاهز للاستلام من المورد");
+        const initialStatus = matchedCourier ? "مُسند جديد" : "جديد";
         const initialCommission = matchedCourier ? Number(matchedCourier.commission || 25) : 0;
 
         const newOrder = {
@@ -3995,7 +3727,7 @@ app.post("/api", async (req: Request, res: Response) => {
           }
 
           const initialCourier = matchedCourier ? matchedCourier.name : "";
-          const initialStatus = item.status || (matchedCourier ? "مُسند جديد" : "جاهز للاستلام من المورد");
+          const initialStatus = matchedCourier ? "مُسند جديد" : "جديد";
           const initialCommission = matchedCourier ? Number(matchedCourier.commission || 25) : 0;
 
           const newObj = {
@@ -4091,7 +3823,6 @@ app.post("/api", async (req: Request, res: Response) => {
           delivDate,
           partialAmount,
           customerConfirmed,
-          actionLogText,
         } = d;
         if (!tracking || !rawStatus) return err(res, "معاملات مفقودة");
         let status = rawStatus;
@@ -4303,6 +4034,24 @@ app.post("/api", async (req: Request, res: Response) => {
           if (status === "تم تسليم المرتجع للمورد") {
             order.status = "تم تسليم المرتجع للمورد";
             order.retDate = now();
+
+            // Deduct the net price (product price without shipping) from the supplier ledger
+            const dupLedger = db.supplierLedger.find(
+              (l: any) =>
+                l.tracking === order.tracking &&
+                (l.type === "مرتجع" || l.type === "مرتجع تم تسليمه للمورد"),
+            );
+            if (!dupLedger) {
+              const financials = getOrderFinancials(order);
+              db.supplierLedger.push({
+                supplier: order.supplier,
+                date: now(),
+                type: "مرتجع تم تسليمه للمورد",
+                tracking: order.tracking,
+                amount: -Math.abs(Number(financials.prodPrice || 0)),
+                desc: `خصم قيمة المنتج لمرتجع تسلمه المورد: ${order.tracking} (بضاعة مرتجعة بدون شحن: -${financials.prodPrice} ج.م)`,
+              });
+            }
           } else {
             order.status = status;
           }
@@ -4383,7 +4132,25 @@ app.post("/api", async (req: Request, res: Response) => {
               desc: `عمولة تسليم جزئي للأوردر: ${order.tracking} (المبلغ الفعلي المستلم: ${pAm} ج.م)`,
             });
 
-            // Stopped automatic supplier ledger credit as supplier account relies strictly on dynamic formula calculation
+            // Credit the Supplier Ledger based on updated sold product price (WITHOUT subtracting shipping fees)
+            const dupLedger = db.supplierLedger.find(
+              (l: any) =>
+                l.tracking === order.tracking &&
+                (l.type === "أوردر مستلم" ||
+                  l.type === "تسليم" ||
+                  l.type === "أوردر مستلم جزئي"),
+            );
+            if (!dupLedger) {
+              const supplierShare = pAm;
+              db.supplierLedger.push({
+                supplier: order.supplier,
+                date: now(),
+                type: "أوردر مستلم جزئي",
+                tracking: order.tracking,
+                amount: supplierShare,
+                desc: `حقوق توريد أوردر تسليم جزئي: ${order.tracking} (قيمة البضاعة المباعة الصافية: ${pAm} ج.م)`,
+              });
+            }
           }
 
           if (status === "العميل رد وجاري التسليم") {
@@ -4427,18 +4194,6 @@ app.post("/api", async (req: Request, res: Response) => {
 
         order.updatedAt = now();
 
-        if (d.lat !== undefined && d.lng !== undefined && d.lat !== null && d.lng !== null) {
-          order.lat = Number(d.lat);
-          order.lng = Number(d.lng);
-          if (!order.geoLogs) order.geoLogs = [];
-          order.geoLogs.push({
-            dateTime: now(),
-            status: status,
-            lat: Number(d.lat),
-            lng: Number(d.lng)
-          });
-        }
-
         // منطق ترحيل البضائع الصارم والاسترجاع:
         // إذا كان الأوردر في الأرشيف وتغيرت حالته إلى حالة نشطة غير صالحة للأرشفة،
         // فيتم إرجاعه للشحنات النشطة فوراً لضمان عدم ضياع عهدة البضائع ومنع ارتداد الحالة، ثم حذفه نهائياً من شيت الأرشيف.
@@ -4460,15 +4215,6 @@ app.post("/api", async (req: Request, res: Response) => {
           updatedBy: currentUser,
           dateTime: now(),
         });
-
-        if (actionLogText && actionLogText.toString().trim()) {
-          if (!order.actionLogs) order.actionLogs = [];
-          order.actionLogs.push({
-            dateTime: now(),
-            user: currentUser,
-            text: actionLogText.toString().trim()
-          });
-        }
 
         writeDB(db);
         return ok(res, {
@@ -4793,8 +4539,6 @@ app.post("/api", async (req: Request, res: Response) => {
             "لا يوجد رد",
             "جديد",
             "خارج مع المندوب",
-            "العميل لغى الأوردر / مرتجع",
-            "مرتجع",
           ];
           if (status && !opsAllowed.includes(status)) {
             return err(
@@ -4927,6 +4671,24 @@ app.post("/api", async (req: Request, res: Response) => {
 
               // Held under Courier Custody (العهدة المعلقة مع المندوب) - No automatic central cashbox entry on bulk delivery.
 
+              // Credit Supplier Ledger if not already done
+              const dupLedger = db.supplierLedger.find(
+                (l: any) =>
+                  l.tracking === order.tracking &&
+                  (l.type === "أوردر مستلم" || l.type === "تسليم"),
+              );
+              if (!dupLedger) {
+                const supplierShare =
+                  Number(order.prodPrice || 0) - Number(order.shipPrice || 0);
+                db.supplierLedger.push({
+                  supplier: order.supplier,
+                  date: now(),
+                  type: "أوردر مستلم",
+                  tracking: order.tracking,
+                  amount: supplierShare,
+                  desc: `حقوق أوردر تم تسليمه جماعياً: ${order.tracking} (سعر المنتج ${order.prodPrice} - شحن الشركة ${order.shipPrice})`,
+                });
+              }
             }
 
             if (
@@ -4940,6 +4702,21 @@ app.post("/api", async (req: Request, res: Response) => {
                 status === "التسليم للمورد"
               ) {
                 order.returnQueueStatus = "تم تسليم المرتجع للمورد";
+                const dupLedger = db.supplierLedger.find(
+                  (l: any) =>
+                    l.tracking === order.tracking &&
+                    (l.type === "مرتجع" || l.type === "مرتجع تم تسليمه للمورد"),
+                );
+                if (!dupLedger) {
+                  db.supplierLedger.push({
+                    supplier: order.supplier,
+                    date: now(),
+                    type: "مرتجع تم تسليمه للمورد",
+                    tracking: order.tracking,
+                    amount: -Number(order.prodPrice || 0),
+                    desc: `خصم قيمة المنتج لمرتجع تسلمه المورد جماعياً: ${order.tracking}`,
+                  });
+                }
               }
             }
 
@@ -5091,8 +4868,6 @@ app.post("/api", async (req: Request, res: Response) => {
                 "لا يوجد رد",
                 "جديد",
                 "خارج مع المندوب",
-                "العميل لغى الأوردر / مرتجع",
-                "مرتجع",
               ];
               if (!opsAllowed.includes(status)) continue;
             } else if (currentRole === "مندوب") {
@@ -5138,6 +4913,24 @@ app.post("/api", async (req: Request, res: Response) => {
 
               // Held under Courier Custody (العهدة المعلقة مع المندوب) - No automatic central cashbox entry on bulk delivery.
 
+              // Credit Supplier Ledger if not already done
+              const dupLedger = db.supplierLedger.find(
+                (l: any) =>
+                  l.tracking === order.tracking &&
+                  (l.type === "أوردر مستلم" || l.type === "تسليم"),
+              );
+              if (!dupLedger) {
+                const supplierShare =
+                  Number(order.prodPrice || 0) - Number(order.shipPrice || 0);
+                db.supplierLedger.push({
+                  supplier: order.supplier,
+                  date: now(),
+                  type: "أوردر مستلم",
+                  tracking: order.tracking,
+                  amount: supplierShare,
+                  desc: `حقوق أوردر تم تسليمه جماعياً (الدفعة المجمعة): ${order.tracking} (صافي بضاعة ${supplierShare})`,
+                });
+              }
             }
 
             if (
@@ -5151,6 +4944,21 @@ app.post("/api", async (req: Request, res: Response) => {
                 status === "التسليم للمورد"
               ) {
                 order.returnQueueStatus = "تم تسليم المرتجع للمورد";
+                const dupLedger = db.supplierLedger.find(
+                  (l: any) =>
+                    l.tracking === order.tracking &&
+                    (l.type === "مرتجع" || l.type === "مرتجع تم تسليمه للمورد"),
+                );
+                if (!dupLedger) {
+                  db.supplierLedger.push({
+                    supplier: order.supplier,
+                    date: now(),
+                    type: "مرتجع تم تسليمه للمورد",
+                    tracking: order.tracking,
+                    amount: -Number(order.prodPrice || 0),
+                    desc: `خصم قيمة المنتج لمرتجع تسلمه المورد جماعياً (الدفعة المجمعة): ${order.tracking}`,
+                  });
+                }
               }
             }
 
@@ -5405,15 +5213,6 @@ app.post("/api", async (req: Request, res: Response) => {
           );
         }
         return ok(res, { logs: (db.auditLog || []).reverse() });
-      }
-
-      case "getWithdrawalRequests": {
-        const isSupplier = isSupplierRole(currentRole);
-        let list = db.withdrawalRequests || [];
-        if (isSupplier) {
-          list = list.filter((r: any) => sameSup(r.supplier, currentUser));
-        }
-        return ok(res, { requests: list });
       }
 
       // ─────────────────────────────────────────────────────────────
@@ -5753,237 +5552,6 @@ app.post("/api", async (req: Request, res: Response) => {
         }
 
         return ok(res, { msg: successMsg });
-      }
-
-      // Instant courier daily settlement and wallet closing
-      case "instantCourierSettlement": {
-        const {
-          courier,
-          cashAmount,
-          commissionAmount,
-          adjustmentType,
-          adjustmentAmount,
-          adjustmentDesc,
-        } = d;
-
-        if (!courier) return err(res, "المندوب غير محدد");
-
-        const nowCairoStr = now();
-
-        // 1. If cashAmount > 0, record deposit in cashbox (Main Treasury)
-        const cashVal = Number(cashAmount || 0);
-        if (cashVal > 0) {
-          if (!db.cashbox) db.cashbox = [];
-          db.cashbox.push({
-            date: nowCairoStr,
-            desc: "تصفية كاش وإغلاق العهدة اليومية للمندوب: " + courier,
-            type: "استلام عهدة مندوب",
-            amount: cashVal,
-            ref: courier,
-            addedBy: currentUser || "إدارة الحسابات",
-          });
-        }
-
-        // 2. Record commissions earned in courierLedger as a positive entry
-        const commVal = Number(commissionAmount || 0);
-        if (commVal > 0) {
-          if (!db.courierLedger) db.courierLedger = [];
-          db.courierLedger.push({
-            courier: courier,
-            date: nowCairoStr,
-            type: "عمولة توصيل",
-            tracking: "—",
-            amount: commVal,
-            desc: "إجمالي العمولات المستحقة لليوم المصفى",
-          });
-        }
-
-        // 3. Record adjustment if adjustmentAmount > 0
-        const adjVal = Number(adjustmentAmount || 0);
-        if (adjVal > 0 && adjustmentType) {
-          if (!db.courierLedger) db.courierLedger = [];
-          db.courierLedger.push({
-            courier: courier,
-            date: nowCairoStr,
-            type: adjustmentType,
-            tracking: "—",
-            amount: adjustmentType === "جزاء" ? -adjVal : adjVal,
-            desc: adjustmentDesc || ("تسوية يدوية مصاحبة للتصفية اليومية - " + adjustmentType),
-          });
-
-          if (adjustmentType === "مكافأة") {
-            if (!db.cashbox) db.cashbox = [];
-            db.cashbox.push({
-              date: nowCairoStr,
-              desc: "مكافأة منصرفة للمندوب مصاحبة للتصفية اليومية: " + courier + " - " + (adjustmentDesc || ""),
-              type: "صرف",
-              amount: adjVal,
-              ref: "BONUS",
-              addedBy: currentUser || "إدارة الحسابات",
-            });
-          } else if (adjustmentType === "جزاء") {
-            if (!db.cashbox) db.cashbox = [];
-            db.cashbox.push({
-              date: nowCairoStr,
-              desc: "تسوية خصم/جزاء مستقطع مصاحب للتصفية اليومية للمندوب: " + courier + " - " + (adjustmentDesc || ""),
-              type: "استلام عهدة مندوب",
-              amount: adjVal,
-              ref: "PENALTY",
-              addedBy: currentUser || "إدارة الحسابات",
-            });
-          }
-        }
-
-        // 4. Now perform logical status settlement and archiving of active orders
-        let settledCount = 0;
-        const settledOrders: any[] = [];
-        const activeOrders: any[] = [];
-        if (!db.archivedOrders) db.archivedOrders = [];
-
-        db.orders.forEach((order: any) => {
-          if (
-            order.courier &&
-            order.courier.toString().trim().toLowerCase() ===
-              courier.toString().trim().toLowerCase()
-          ) {
-            const oldStatus = order.status;
-            order.lastCourier = order.courier;
-            order.lastCommission = order.commission;
-
-            let nextStatus = oldStatus;
-            if (oldStatus === "مرتجع" || oldStatus === "مرتجع جديد") {
-              nextStatus = "مرتجع بالمستودع";
-              order.courierSignature = `${order.courier} (توقيع تصفية المرتجع الميداني ✍️)`;
-            } else if (
-              oldStatus === "تسليم جزئي" ||
-              oldStatus === "مرتجع جزئي" ||
-              oldStatus === "تسليم جزئي - معلق للجرد"
-            ) {
-              nextStatus = "مرتجع جزئي بالمستودع";
-              order.returnReason = "مرتجع جزئي متبقي";
-              order.returnSubStatus = "بضاعة متبقية من تسليم جزئي";
-              order.courierSignature = `${order.courier} (توقيع تصفية المرتجع الجزئي ✍️)`;
-            } else if (
-              oldStatus === "مؤجل" ||
-              oldStatus === "Delayed" ||
-              oldStatus === "مؤجل من المندوب" ||
-              oldStatus === "مؤجل بناءً على طلب العميل"
-            ) {
-              nextStatus = "مؤجل بالمستودع";
-              order.courierSignature = `${order.courier} (توقيع تصفية المؤجل ✍️)`;
-            } else if (
-              oldStatus === "لا يوجد رد" ||
-              oldStatus === "العميل لا يرد" ||
-              oldStatus === "No Answer" ||
-              oldStatus === "العميل لم يقم بالرد"
-            ) {
-              nextStatus = "لا يوجد رد بالمستودع";
-              order.courierSignature = `${order.courier} (توقيع تصفية عدم الرد ✍️)`;
-            }
-
-            order.status = nextStatus;
-
-            const isSuccessfullyClosed = [
-              "تم التسليم",
-              "تم التسليم بنجاح",
-              "تم التسليم (ناجح كاش)",
-              "تسليم جزئي",
-              "تسليم جزئي - معلق للجرد",
-              "مرتجع جزئي"
-            ].includes(oldStatus);
-
-            const shouldArchive = [
-              "تم التسليم",
-              "تم التسليم بنجاح",
-              "تم التسليم (ناجح كاش)",
-              "التسليم للمورد",
-              "تم تسليم المرتجع للمورد"
-            ].includes(nextStatus);
-
-            if (isSuccessfullyClosed) {
-              order.isSettled = true;
-              order.is_settled = "true";
-              if (!shouldArchive) {
-                order.courier = "";
-                order.commission = 0;
-              }
-            } else {
-              order.courier = "";
-              order.commission = 0;
-              order.isSettled = false;
-              order.is_settled = "false";
-            }
-
-            order.updatedAt = nowCairoStr;
-
-            if (!db.statusHistory) db.statusHistory = [];
-            db.statusHistory.push({
-              tracking: order.tracking,
-              oldStatus: oldStatus,
-              newStatus: order.status,
-              updatedBy: currentUser || "إدارة",
-              dateTime: nowCairoStr,
-            });
-
-            if (shouldArchive) {
-              settledOrders.push(order);
-            } else {
-              activeOrders.push(order);
-            }
-            settledCount++;
-          } else {
-            activeOrders.push(order);
-          }
-        });
-
-        db.archivedOrders.push(...settledOrders);
-        db.orders = activeOrders;
-
-        // Write audit log entry
-        if (!db.auditLog) db.auditLog = [];
-        db.auditLog.push({
-          user: currentUser || "إدارة الحسابات",
-          type: "تصفية عهدة يومية فورية",
-          dateTime: nowCairoStr,
-          oldVal: "عامل: " + courier,
-          newVal: "كاش: " + cashVal + " | عمولة: " + commVal,
-          reason: "اعتماد تصفية الحساب وإغلاق العهدة اليومية"
-        });
-
-        writeDB(db);
-
-        // 🌐 Modern Google Sheets Integration Proxy Gateway
-        let scriptUrl = (process.env.GOOGLE_SCRIPT_URL || "").trim();
-        if (scriptUrl.startsWith('"') && scriptUrl.endsWith('"')) {
-          scriptUrl = scriptUrl.substring(1, scriptUrl.length - 1).trim();
-        } else if (scriptUrl.startsWith("'") && scriptUrl.endsWith("'")) {
-          scriptUrl = scriptUrl.substring(1, scriptUrl.length - 1).trim();
-        }
-
-        if (
-          isGoogleScriptHealthy &&
-          scriptUrl &&
-          scriptUrl.startsWith("http")
-        ) {
-          executeProxyRequest(scriptUrl, {
-            action: "instantCourierSettlement",
-            token: "14014",
-            courier,
-            cashAmount: cashVal,
-            commissionAmount: commVal,
-            adjustmentType,
-            adjustmentAmount,
-            adjustmentDesc,
-            currentUser,
-          }).catch((err) => {
-            console.error("Async sheets write failure for instantCourierSettlement:", err);
-          });
-        }
-
-        return ok(res, {
-          settled: settledCount,
-          msg: "✅ تم اعتماد تصفية الحساب وإغلاق العهدة اليومية للمندوب بنجاح! تم إيداع مبلغ " + cashVal + " ج.م بالخزنة كأثر فوري، وتصفير العداد لليوم الجديد."
-        });
       }
 
       // Overnight face-to-face settlement action
@@ -7208,7 +6776,7 @@ app.post("/api", async (req: Request, res: Response) => {
         const newUserObj = {
           name: name.trim(),
           role: role,
-          pass: hashPassword(pass.trim()),
+          pass: pass.trim(),
           active: "نعم",
           email: email || "",
           perms: getPermissionsForRole(role),
@@ -7246,40 +6814,6 @@ app.post("/api", async (req: Request, res: Response) => {
         });
       }
 
-      case "toggleStaff":
-      case "toggleStaffStatus": {
-        if (currentRole !== "مدير") {
-          return err(res, "صلاحية حصرية لمدير النظام");
-        }
-        const staffName = (d.staffName || "").toString().trim();
-        const active = (d.active || "نعم").toString().trim();
-        if (!staffName) return err(res, "اسم الموظف مفقود");
-        const staffEntry = db.staffPermissions.find((item: any) => item.name.toString().trim() === staffName);
-        if (staffEntry) {
-          staffEntry.active = active;
-        }
-        const userEntry = db.users.find((item: any) => item.name.toString().trim() === staffName);
-        if (userEntry) {
-          userEntry.active = active;
-        }
-        writeDB(db);
-        return ok(res, { msg: active === "نعم" ? "تم تفعيل الموظف بنجاح" : "تم إيقاف الموظف بنجاح" });
-      }
-
-      case "deleteStaffMember":
-      case "deleteStaff": {
-        if (currentRole !== "مدير") {
-          return err(res, "صلاحية حصرية لمدير النظام");
-        }
-        const staffName = (d.staffName || "").toString().trim();
-        if (!staffName) return err(res, "اسم الموظف مفقود");
-        db.staffPermissions = (db.staffPermissions || []).filter((item: any) => item.name.toString().trim() !== staffName);
-        db.users = (db.users || []).filter((item: any) => item.name.toString().trim() !== staffName);
-        db.couriers = (db.couriers || []).filter((item: any) => item.name.toString().trim() !== staffName);
-        writeDB(db);
-        return ok(res, { msg: "تم حذف الموظف بنجاح" });
-      }
-
       case "updateUser": {
         if (currentRole !== "مدير") {
           return err(res, "صلاحية حصرية لمدير النظام");
@@ -7299,100 +6833,6 @@ app.post("/api", async (req: Request, res: Response) => {
 
         writeDB(db);
         return ok(res, { msg: "تم تحديث بيانات المستخدم بنجاح" });
-      }
-
-      case "getStaffPermissions": {
-        const list = db.staffPermissions || [];
-        const isAdmin = currentRole === "مدير";
-        
-        // Salary protection
-        const safeList = list.map((item: any) => {
-          const copy = { ...item };
-          if (!isAdmin) {
-            copy.salary = null;
-          }
-          return copy;
-        });
-        return ok(res, { staff: safeList });
-      }
-
-      case "saveStaff":
-      case "saveStaffPermissions": {
-        if (currentRole !== "مدير") {
-          return err(res, "صلاحية حصرية لمدير النظام");
-        }
-        const staff = d.staff || {};
-        if (!staff.name) return err(res, "اسم الموظف مفقود");
-        
-        if (!db.staffPermissions) {
-          db.staffPermissions = [];
-        }
-        
-        const idx = db.staffPermissions.findIndex((item: any) => item.name.toString().trim() === staff.name.toString().trim());
-        if (idx === -1) {
-          db.staffPermissions.push(staff);
-        } else {
-          db.staffPermissions[idx] = { ...db.staffPermissions[idx], ...staff };
-        }
-        
-        // Make sure they have a matching login user in db.users
-        let uIdx = db.users.findIndex((item: any) => item.name.toString().trim() === staff.name.toString().trim());
-        
-        const getPermissionsStringForStaff = (s: any) => {
-          const p = [];
-          if (s.perm_dashboard === "true" || s.perm_dashboard === true) p.push("لوحة القيادة");
-          if (s.perm_orders === "true" || s.perm_orders === true) p.push("الطلبات");
-          if (s.perm_ledger === "true" || s.perm_ledger === true) p.push("الحسابات");
-          if (s.perm_expenses === "true" || s.perm_expenses === true) p.push("المصاريف");
-          if (s.perm_staff === "true" || s.perm_staff === true) p.push("الموظفين");
-          return p.join(" · ") || "صلاحيات أساسية";
-        };
-        
-        const userObj = {
-          name: staff.name.trim(),
-          role: staff.role,
-          pass: hashPassword(d.pass || "123456"),
-          active: staff.active || "نعم",
-          email: staff.name.trim() + "@friendplus.com",
-          perms: getPermissionsStringForStaff(staff)
-        };
-        
-        if (uIdx === -1) {
-          db.users.push(userObj);
-        } else {
-          db.users[uIdx].role = staff.role;
-          db.users[uIdx].active = staff.active || db.users[uIdx].active || "نعم";
-          db.users[uIdx].perms = getPermissionsStringForStaff(staff);
-          if (d.pass) {
-            db.users[uIdx].pass = hashPassword(d.pass);
-          }
-        }
-        
-        // Also update or create courier profile if the role is "مندوب"
-        const roleLower = (staff.role || "").toString().toLowerCase();
-        if (roleLower === "مندوب" || roleLower.includes("مندوب")) {
-          let cIdx = db.couriers.findIndex((item: any) => item.name.toString().trim() === staff.name.toString().trim());
-          const courierObj = {
-            name: staff.name.trim(),
-            phone: staff.phone || "",
-            salary: Number(staff.salary) || 3000,
-            base_fixed_salary: Number(staff.salary) || 3000,
-            commission: 25,
-            commission_success: 25,
-            commission_return: 10,
-            region: "—"
-          };
-          if (cIdx === -1) {
-            db.couriers.push(courierObj);
-          } else {
-            db.couriers[cIdx].phone = staff.phone || db.couriers[cIdx].phone;
-            db.couriers[cIdx].salary = Number(staff.salary) || db.couriers[cIdx].salary;
-            db.couriers[cIdx].base_fixed_salary = Number(staff.salary) || db.couriers[cIdx].base_fixed_salary;
-          }
-        }
-        
-        writeDB(db);
-        return ok(res, { msg: "تم حفظ وتحديث بيانات وصلاحيات الموظف بنجاح" });
       }
 
       // ─────────────────────────────────────────────────────────────
@@ -7421,28 +6861,13 @@ app.post("/api", async (req: Request, res: Response) => {
       // RESOURCE MANAGEMENT / STATIC ARRAYS
       // ─────────────────────────────────────────────────────────────
       case "getCouriers": {
-        let activeUsersCouriers = db.users.filter(
+        const activeUsersCouriers = db.users.filter(
           (u: any) =>
             ((u.role || "").toString().trim() === "مندوب" ||
               (u.role || "").toString().trim().indexOf("مندوب") > -1 ||
               (u.name || "").toString().trim() === "عصفور") &&
             u.active !== "لا",
         );
-
-        const isAdmin = currentRole === "مدير";
-        const isSupervisor = currentRole === "مشرف" || (currentRole || "").toString().includes("مشرف");
-
-        if (isSupervisor) {
-          const staffPermissionsList = db.staffPermissions || [];
-          const supervisedNames = staffPermissionsList
-            .filter((item: any) => (item.supervisor_id || "").toString().trim().toLowerCase() === currentUser.trim().toLowerCase())
-            .map((item: any) => (item.name || "").toString().trim().toLowerCase());
-          activeUsersCouriers = activeUsersCouriers.filter((u: any) => {
-            const uName = (u.name || "").toString().trim().toLowerCase();
-            return supervisedNames.includes(uName);
-          });
-        }
-
         const list = activeUsersCouriers.map((u: any) => {
           const profile =
             db.couriers.find(
@@ -7453,13 +6878,12 @@ app.post("/api", async (req: Request, res: Response) => {
             phone: profile.phone || "—",
             commission:
               profile.commission !== undefined ? profile.commission : 25,
-            salary: isAdmin ? (profile.salary !== undefined ? profile.salary : 3000) : null,
+            salary: profile.salary !== undefined ? profile.salary : 3000,
             region: profile.region || "—",
-            base_fixed_salary: isAdmin ? (
+            base_fixed_salary:
               profile.base_fixed_salary !== undefined
                 ? profile.base_fixed_salary
-                : profile.salary || 3000
-            ) : null,
+                : profile.salary || 3000,
             commission_success:
               profile.commission_success !== undefined
                 ? profile.commission_success
@@ -7495,7 +6919,8 @@ app.post("/api", async (req: Request, res: Response) => {
         let courier = db.couriers.find(
           (c: any) =>
             c.name &&
-            sameCourier(c.name, trimmedName),
+            c.name.toString().trim().toLowerCase() ===
+              trimmedName.toLowerCase(),
         );
 
         if (!courier) {

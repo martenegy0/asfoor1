@@ -33,13 +33,6 @@ export default function Inputs({ token, role, user, onSuccess }: InputsProps) {
   const [excelData, setExcelData] = useState<any[]>([]);
   const [bulkSupplier, setBulkSupplier] = useState(isSupplier ? user : "");
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [mappingModal, setMappingModal] = useState<{
-    isOpen: boolean;
-    headers: string[];
-    rows: any[][];
-    mappings: { [key: string]: string };
-    encoding: "utf-8" | "windows-1256";
-  } | null>(null);
 
   const [suppliersList, setSuppliersList] = useState<any[]>(() => {
     try {
@@ -177,34 +170,6 @@ export default function Inputs({ token, role, user, onSuccess }: InputsProps) {
   }
 
   // --- CSV / Excel parser client routine ---
-  const FIELD_SYNONYMS: { [key: string]: string[] } = {
-    customer: ["اسم العميل", "العميل", "اسم المستلم", "المستلم", "الاسم", "customer", "customer_name", "client"],
-    phone: ["الهاتف", "رقم الهاتف", "التليفون", "رقم التليفون", "تليفون", "هاتف", "موبايل", "رقم الموبايل", "phone", "mobile", "tel"],
-    address: ["العنوان", "العنوان بالتفصيل", "عنوان", "عنوان المستلم", "address", "details_address"],
-    gov: ["المحافظة", "المحافظه", "مقاولة المحافظة", "gov", "governorate", "city"],
-    region: ["المنطقة", "المنطقه", "الحي", "region", "area", "zone"],
-    totalCOD: ["المطلوب تحصيله", "التحصيل", "المطلوب", "إجمالي الكود", "الإجمالي", "الاجمالي", "إجمالي الأوردر", "قيمة الأوردر", "المبلغ", "السعر الكلي", "كود", "total", "totalcod", "total_cod", "cash", "amount"],
-    prodPrice: ["سعر المنتج", "المنتج", "سعر البضاعة", "البضاعة", "سعر المادة", "price", "prodprice", "product_price"],
-    shipPrice: ["سعر الشحن", "الشحن", "تكلفة الشحن", "مصاريف الشحن", "shipping", "shipprice", "ship_price"],
-    prodType: ["نوع المنتج", "المنتج", "الصنف", "صنف", "الأصناف", "المحتويات", "المحتوى", "product", "prodtype", "type"],
-    notes: ["ملاحظات", "الملاحظات", "ملاحظة", "notes", "note", "comment"],
-    supplier: ["المورد", "اسم المورد", "مورد", "merchant", "supplier", "vendor"]
-  };
-
-  const TARGET_FIELDS = [
-    { key: "customer", label: "اسم العميل / المستلم", required: true },
-    { key: "phone", label: "رقم الهاتف", required: true },
-    { key: "address", label: "العنوان بالتفصيل", required: true },
-    { key: "gov", label: "المحافظة", required: false, default: "القاهرة" },
-    { key: "region", label: "المنطقة / الحي", required: false },
-    { key: "totalCOD", label: "المطلوب تحصيله (COD)", required: false },
-    { key: "prodPrice", label: "سعر المنتج (حق المورد)", required: false },
-    { key: "shipPrice", label: "سعر الشحن للشركة", required: false, default: "65" },
-    { key: "prodType", label: "نوع المنتج / الصنف", required: false },
-    { key: "notes", label: "ملاحظات الشحنة", required: false },
-    { key: "supplier", label: "اسم المورد", required: false }
-  ];
-
   function handleFileRead(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -227,126 +192,96 @@ export default function Inputs({ token, role, user, onSuccess }: InputsProps) {
         }
 
         // Clean and prepare headers
-        const rawHeaders = (rows[0] || []).map((h: any) => h ? h.toString().trim() : "");
-        const cleanHeaders = rawHeaders.map(h => h.toLowerCase().trim());
-        const initialMappings: { [key: string]: string } = {};
+        const headers = (rows[0] || []).map((h: any) => h ? h.toString().toLowerCase().trim() : "");
+        const list: any[] = [];
 
-        Object.keys(FIELD_SYNONYMS).forEach((fieldKey) => {
-          const synonyms = FIELD_SYNONYMS[fieldKey];
-          const foundIdx = cleanHeaders.findIndex(header => 
-            synonyms.some(syn => header === syn.toLowerCase().trim() || header.includes(syn.toLowerCase().trim()))
-          );
-          if (foundIdx !== -1) {
-            initialMappings[fieldKey] = rawHeaders[foundIdx];
-          } else {
-            initialMappings[fieldKey] = "";
+        // Loop over second row onwards
+        for (let i = 1; i < rows.length; i++) {
+          const rowData = rows[i];
+          if (!rowData || rowData.length === 0) continue;
+
+          // Check if at least one column is filled (to skip empty rows)
+          const isRowEmpty = rowData.every((val: any) => val === undefined || val === null || val.toString().trim() === "");
+          if (isRowEmpty) continue;
+
+          const getValue = (names: string[], fallbackIdx: number): string => {
+            for (const name of names) {
+              const idx = headers.indexOf(name.toLowerCase().trim());
+              if (idx !== -1 && rowData[idx] !== undefined && rowData[idx] !== null) {
+                return rowData[idx].toString().trim();
+              }
+            }
+            if (fallbackIdx >= 0 && fallbackIdx < rowData.length && rowData[fallbackIdx] !== undefined && rowData[fallbackIdx] !== null) {
+              return rowData[fallbackIdx].toString().trim();
+            }
+            return "";
+          };
+
+          // Smart Extraction Logic for prices:
+          // 1. Resolve shipping fees (default to 65)
+          let resolvedShip = 65;
+          const shipMatch = getValue(["سعر الشحن", "الشحن", "تكلفة الشحن", "مصاريف الشحن", "shipping", "shipprice", "ship_price"], -1);
+          if (shipMatch && !isNaN(Number(shipMatch))) {
+            resolvedShip = Number(shipMatch);
           }
-        });
 
-        setMappingModal({
-          isOpen: true,
-          headers: rawHeaders,
-          rows: rows.slice(1),
-          mappings: initialMappings,
-          encoding: "utf-8"
-        });
-        
+          // 2. Resolve total COD / cash to be collected
+          let resolvedTotal = 0;
+          const totalMatch = getValue(["المطلوب تحصيله", "التحصيل", "المطلوب", "إجمالي الكود", "الإجمالي", "الاجمالي", "إجمالي الأوردر", "total", "totalcod", "total_cod", "cash_to_be_collected", "cash"], -1);
+          if (totalMatch && !isNaN(Number(totalMatch))) {
+            resolvedTotal = Number(totalMatch);
+          }
+
+          // 3. Resolve product price
+          let resolvedProd = 0;
+          const prodMatch = getValue(["سعر المنتج", "المنتج", "سعر المادة", "price", "prodprice", "product_price"], 5);
+          if (prodMatch && !isNaN(Number(prodMatch))) {
+            resolvedProd = Number(prodMatch);
+          }
+
+          // 4. Do smart math equations to construct values
+          if (resolvedTotal > 0) {
+            if (resolvedProd === 0) {
+              resolvedProd = resolvedTotal - resolvedShip;
+            } else if (resolvedShip === 65 && resolvedTotal > resolvedProd) {
+              resolvedShip = resolvedTotal - resolvedProd;
+            }
+          } else {
+            resolvedTotal = resolvedProd + resolvedShip;
+          }
+
+          const customerVal = getValue(["اسم العميل", "العميل", "اسم المستلم", "customer"], 0);
+          const phoneVal = getValue(["التليفون", "رقم التليفون", "تليفون", "الهاتف", "phone"], 1);
+          const addressVal = getValue(["العنوان", "العنوان بالتفصيل", "عنوان", "address"], 2);
+          const govVal = getValue(["المحافظة", "مقاولة المحافظة", "المحافظه", "gov"], 3) || "القاهرة";
+          const regionVal = getValue(["المنطقة", "المنطقه", "region"], 4);
+          const prodTypeVal = getValue(["نوع المنتج", "المنتج", "الصنف", "صنف", "الأصناف", "المحتويات", "المحتوى", "product", "prodtype", "type"], -1);
+          const notesVal = getValue(["ملاحظات", "الملاحظات", "notes"], -1);
+          const supplierVal = getValue(["المورد", "اسم المورد", "مورد", "merchant", "supplier"], 6);
+
+          if (!customerVal && !phoneVal) continue;
+
+          list.push({
+            customer: customerVal,
+            phone: phoneVal,
+            address: addressVal,
+            gov: govVal,
+            region: regionVal,
+            prodPrice: resolvedProd,
+            shipPrice: resolvedShip,
+            totalCOD: resolvedTotal,
+            prodType: prodTypeVal,
+            notes: notesVal,
+            supplier: supplierVal
+          });
+        }
+
+        setExcelData(list);
       } catch (err: any) {
         alert("حدث خطأ أثناء قراءة ومعالجة شيت الإكسيل: " + (err.message || err));
       }
     };
     r.readAsArrayBuffer(file);
-  }
-
-  function confirmExcelMapping() {
-    if (!mappingModal) return;
-    const { rows, headers, mappings } = mappingModal;
-    
-    if (!mappings.customer) {
-      alert("⚠️ حقل 'اسم العميل / المستلم' مطلوب للمطابقة!");
-      return;
-    }
-    if (!mappings.phone) {
-      alert("⚠️ حقل 'رقم الهاتف' مطلوب للمطابقة!");
-      return;
-    }
-
-    const list: any[] = [];
-    
-    for (let i = 0; i < rows.length; i++) {
-      const rowData = rows[i];
-      if (!rowData || rowData.length === 0) continue;
-
-      // Check if at least one column is filled (to skip empty rows)
-      const isRowEmpty = rowData.every((val: any) => val === undefined || val === null || val.toString().trim() === "");
-      if (isRowEmpty) continue;
-
-      const getValueByHeader = (headerName: string): string => {
-        if (!headerName) return "";
-        const idx = headers.indexOf(headerName);
-        if (idx !== -1 && rowData[idx] !== undefined && rowData[idx] !== null) {
-          return rowData[idx].toString().trim();
-        }
-        return "";
-      };
-
-      const customerVal = getValueByHeader(mappings.customer);
-      const phoneVal = getValueByHeader(mappings.phone);
-      const addressVal = getValueByHeader(mappings.address);
-      const govVal = getValueByHeader(mappings.gov) || "القاهرة";
-      const regionVal = getValueByHeader(mappings.region);
-      const prodTypeVal = getValueByHeader(mappings.prodType) || "منتج عام";
-      const notesVal = getValueByHeader(mappings.notes);
-      const supplierVal = getValueByHeader(mappings.supplier);
-
-      let resolvedShip = 65;
-      const shipMatch = getValueByHeader(mappings.shipPrice);
-      if (shipMatch && !isNaN(Number(shipMatch))) {
-        resolvedShip = Number(shipMatch);
-      }
-
-      let resolvedTotal = 0;
-      const totalMatch = getValueByHeader(mappings.totalCOD);
-      if (totalMatch && !isNaN(Number(totalMatch))) {
-        resolvedTotal = Number(totalMatch);
-      }
-
-      let resolvedProd = 0;
-      const prodMatch = getValueByHeader(mappings.prodPrice);
-      if (prodMatch && !isNaN(Number(prodMatch))) {
-        resolvedProd = Number(prodMatch);
-      }
-
-      if (resolvedTotal > 0) {
-        if (resolvedProd === 0) {
-          resolvedProd = resolvedTotal - resolvedShip;
-        } else if (resolvedShip === 65 && resolvedTotal > resolvedProd) {
-          resolvedShip = resolvedTotal - resolvedProd;
-        }
-      } else {
-        resolvedTotal = resolvedProd + resolvedShip;
-      }
-
-      if (!customerVal && !phoneVal) continue;
-
-      list.push({
-        customer: customerVal,
-        phone: phoneVal,
-        address: addressVal,
-        gov: govVal,
-        region: regionVal,
-        prodPrice: resolvedProd,
-        shipPrice: resolvedShip,
-        totalCOD: resolvedTotal,
-        prodType: prodTypeVal,
-        notes: notesVal,
-        supplier: supplierVal,
-        status: "جاهز للاستلام من المورد"
-      });
-    }
-
-    setExcelData(list);
-    setMappingModal(null);
   }
 
   async function submitBulkExcel() {
@@ -356,6 +291,7 @@ export default function Inputs({ token, role, user, onSuccess }: InputsProps) {
       return;
     }
 
+    // Check if any row doesn't specify a merchant/supplier
     const hasRowsWithoutMerchant = excelData.some(item => !item.supplier || !item.supplier.trim());
 
     if (!isSupplier && hasRowsWithoutMerchant && !bulkSupplier.trim()) {
@@ -758,144 +694,6 @@ export default function Inputs({ token, role, user, onSuccess }: InputsProps) {
               onChange={handleCameraScan}
               className="hidden"
             />
-          </div>
-        </div>
-      )}
-
-      {/* --- Smart Column Mapping Overlay Modal --- */}
-      {mappingModal && mappingModal.isOpen && (
-        <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto">
-          <div className="bg-slate-900 border border-white/10 rounded-2xl p-6 max-w-4xl w-full space-y-6 text-right font-sans shadow-2xl my-8">
-            <div className="flex items-center justify-between border-b border-white/6 pb-4">
-              <div className="flex items-center gap-2">
-                <Layers className="text-amber-500 animate-pulse" size={20} />
-                <h3 className="text-base font-black text-slate-100">مطابقة وتنسيق أعمدة شيت الاستيراد</h3>
-              </div>
-              <button
-                onClick={() => setMappingModal(null)}
-                className="text-slate-400 hover:text-slate-200 text-xs font-bold bg-white/5 hover:bg-white/10 px-3 py-1.5 rounded-lg transition-all"
-              >
-                إغلاق ✕
-              </button>
-            </div>
-
-            <div className="bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs p-3.5 rounded-xl leading-relaxed">
-              💡 لقد قمنا بمطابقة الأعمدة تلقائياً بناءً على الكلمات المفتاحية الذكية. يرجى مراجعة وتعديل أي عمود إذا لزم الأمر، ثم اضغط على زر الحفظ بالأسفل لبدء الرفع المباشر.
-            </div>
-
-            {/* Grid of mappings */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {TARGET_FIELDS.map((field) => {
-                const currentMapped = mappingModal.mappings[field.key] || "";
-                return (
-                  <div key={field.key} className="space-y-1.5 bg-slate-950 p-3 rounded-xl border border-white/4">
-                    <label className="block text-[10px] font-black text-slate-400">
-                      {field.label} {field.required && <span className="text-red-500">*</span>}
-                    </label>
-                    <select
-                      value={currentMapped}
-                      onChange={(e) => {
-                        const nextVal = e.target.value;
-                        setMappingModal({
-                          ...mappingModal,
-                          mappings: {
-                            ...mappingModal.mappings,
-                            [field.key]: nextVal
-                          }
-                        });
-                      }}
-                      className="w-full bg-slate-900 text-slate-200 border border-white/8 rounded-lg px-3 py-2 text-xs text-right focus:border-amber-500/30 outline-none"
-                    >
-                      <option value="">-- غير محدد / فارغ --</option>
-                      {mappingModal.headers.map((h, hIdx) => (
-                        <option key={hIdx} value={h}>
-                          {h}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Encoding configuration */}
-            <div className="bg-slate-950 p-4 rounded-xl border border-white/4 space-y-2 text-right">
-              <span className="text-[10px] font-black text-slate-400 block">حل مشاكل الحروف الهيروغليفية وترميز الملف</span>
-              <div className="flex flex-wrap items-center gap-4">
-                <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-300">
-                  <input
-                    type="radio"
-                    name="excel-encoding"
-                    checked={mappingModal.encoding === "utf-8"}
-                    onChange={() => setMappingModal({ ...mappingModal, encoding: "utf-8" })}
-                    className="accent-amber-500"
-                  />
-                  <span>ترميز عالمي قياسي (UTF-8) - ممتاز لمعظم الملفات الحديثة</span>
-                </label>
-                <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-300">
-                  <input
-                    type="radio"
-                    name="excel-encoding"
-                    checked={mappingModal.encoding === "windows-1256"}
-                    onChange={() => setMappingModal({ ...mappingModal, encoding: "windows-1256" })}
-                    className="accent-amber-500"
-                  />
-                  <span>ترميز الحروف العربية (Windows-1256) - لحل الحروف المعكوسة أو الهيروغليفية في بعض الأنظمة القديمة</span>
-                </label>
-              </div>
-            </div>
-
-            {/* Live Preview Table */}
-            <div className="space-y-2">
-              <span className="text-[10px] font-black text-slate-450 block">معاينة حية للمطابقة الحالية (أول 3 أسطر بالملف)</span>
-              <div className="border border-white/6 rounded-xl overflow-hidden bg-slate-950 max-h-48 overflow-y-auto">
-                <table className="w-full text-xs text-right border-collapse">
-                  <thead>
-                    <tr className="bg-slate-900/60 border-b border-white/6 text-slate-400 font-bold">
-                      <th className="p-2 border-l border-white/4">العميل</th>
-                      <th className="p-2 border-l border-white/4">الهاتف</th>
-                      <th className="p-2 border-l border-white/4">العنوان</th>
-                      <th className="p-2 border-l border-white/4">COD</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {mappingModal.rows.slice(0, 3).map((row, rIdx) => {
-                      const getPreviewVal = (fieldKey: string) => {
-                        const hName = mappingModal.mappings[fieldKey];
-                        if (!hName) return "-";
-                        const idx = mappingModal.headers.indexOf(hName);
-                        if (idx === -1) return "-";
-                        return row[idx] !== undefined && row[idx] !== null ? row[idx].toString() : "-";
-                      };
-                      return (
-                        <tr key={rIdx} className="border-b border-white/4 hover:bg-white/2 text-slate-300">
-                          <td className="p-2 border-l border-white/4 font-semibold">{getPreviewVal("customer")}</td>
-                          <td className="p-2 border-l border-white/4 font-mono">{getPreviewVal("phone")}</td>
-                          <td className="p-2 border-l border-white/4 text-slate-400">{getPreviewVal("address")} ({getPreviewVal("gov")})</td>
-                          <td className="p-2 border-l border-white/4 text-amber-400 font-bold">{getPreviewVal("totalCOD")} ج.م</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Footer Buttons */}
-            <div className="flex gap-2.5 pt-2 border-t border-white/6 justify-end">
-              <button
-                onClick={confirmExcelMapping}
-                className="px-6 py-3 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black rounded-xl text-xs flex items-center gap-1.5 transition-transform active:scale-[0.98] cursor-pointer"
-              >
-                <span>تأكيد ومطابقة البيانات</span>
-              </button>
-              <button
-                onClick={() => setMappingModal(null)}
-                className="px-6 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl text-xs cursor-pointer"
-              >
-                إلغاء
-              </button>
-            </div>
           </div>
         </div>
       )}
