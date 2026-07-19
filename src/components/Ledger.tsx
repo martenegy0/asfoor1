@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { PlusCircle, Wallet, FileText, ArrowUpRight, ArrowDownRight, Calendar, Filter, Users, ShieldAlert, Search, Eye, CheckCircle2, Clock, Loader2, ArrowLeft, Check, Shield, ChevronDown, ChevronUp, Lock } from "lucide-react";
 import { apiCall } from "../utils";
 
@@ -132,7 +132,6 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
   const [modalSearchFilter, setModalSearchFilter] = useState<string>("");
   const [expandedDays, setExpandedDays] = useState<Record<string, boolean>>({});
   const [expandedCourierDays, setExpandedCourierDays] = useState<Record<string, boolean>>({});
-  const [timelineVisibleCount, setTimelineVisibleCount] = useState(8);
 
   const toggleDay = (dateStr: string) => {
     setExpandedDays(prev => ({ ...prev, [dateStr]: !prev[dateStr] }));
@@ -469,10 +468,6 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
       loadCourierLedger();
     }
   }, [activeLedger, selectedSupplier, selectedCourier, periodFilter, user]);
-
-  useEffect(() => {
-    setTimelineVisibleCount(8);
-  }, [selectedSupplier, daySearchQuery]);
 
   // Submit payment to supplier (Deducted from Ledger & Cashbox)
   async function handleSupplierPayout(e: React.FormEvent) {
@@ -1146,8 +1141,6 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
                     return item.date && item.date.includes(daySearchQuery);
                   });
 
-                  const visibleTimeline = finalFiltered.slice(0, timelineVisibleCount);
-
                   if (finalFiltered.length === 0) {
                     return (
                       <div className="col-span-2 bg-slate-900/50 border border-white/4 rounded-2xl py-12 text-center text-xs text-slate-405 font-bold">
@@ -1156,10 +1149,8 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
                     );
                   }
 
-                  return (
-                    <>
-                      {visibleTimeline.map((item: any, idx: number) => {
-                        if (item.timelineType === "payment") {
+                  return finalFiltered.map((item: any, idx: number) => {
+                    if (item.timelineType === "payment") {
                       const typeStr = (item.type || "").toString().trim();
                       const descStr = (item.desc || "").toString().trim();
                       
@@ -1430,103 +1421,70 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
        {/* --- COURIER LEDGER WORKSPACE --- (Fixes Courier Salary screen failure) */}
       {activeLedger === "courier" && (() => {
         const courierName = isCourier ? user : selectedCourier;
-        const normalizedCourierName = courierName.toString().trim().toLowerCase();
 
-        const courierProfile = useMemo(() => {
-          return allCouriers.find(c => 
-            c && c.name && c.name.toString().trim().toLowerCase() === normalizedCourierName
-          ) || {
-            commission_success: 25,
-            commission_return: 10,
-            salary: 3000,
-            base_fixed_salary: 3000
-          };
-        }, [allCouriers, normalizedCourierName]);
+        // Find courier profile details from allCouriers list:
+        const courierProfile = allCouriers.find(c => 
+          c && c.name && c.name.toString().trim().toLowerCase() === courierName.toString().trim().toLowerCase()
+        ) || {
+          commission_success: 25,
+          commission_return: 10,
+          salary: 3000,
+          base_fixed_salary: 3000
+        };
 
-        const activeCourierOrders = useMemo(() => {
-          return (orders || [])
-            .filter(o => 
-              o && o.courier && o.courier.toString().trim().toLowerCase() === normalizedCourierName &&
-              o.isSettled !== true && o.isSettled !== "true" && o.is_settled !== "true"
-            )
-            .sort((a, b) => {
-              const dateA = (a.updatedAt || a.createdAt || "").toString();
-              const dateB = (b.updatedAt || b.createdAt || "").toString();
-              return dateB.localeCompare(dateA);
-            });
-        }, [orders, normalizedCourierName]);
+        // Filter active orders assigned to this courier:
+        const activeCourierOrders = (orders || []).filter(o => 
+          o && o.courier && o.courier.toString().trim().toLowerCase() === courierName.toString().trim().toLowerCase() &&
+          o.isSettled !== true && o.isSettled !== "true" && o.is_settled !== "true"
+        );
 
-        const isDeliveredStatus = (s: string) => ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(s);
-        const isPartialStatus = (s: string) => ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي", "مرتجع جزئي بالمستودع"].includes(s);
-        const isReturnedPaidStatus = (s: string, returnShippingType?: string) =>
-          ["مرتجع والعميل دفع الشحن", "مرتجع مدفوع الشحن"].includes(s) ||
+        // Status-based categories:
+        const isDelivered = (s: string) => ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(s);
+        const isPartial = (s: string) => ["تسليم جزئي", "تسليم جزئي - معلق للجرد", "مرتجع جزئي", "مرتجع جزئي بالمستودع"].includes(s);
+        const isReturnedPaid = (s: string, returnShippingType?: string) => 
+          ["مرتجع والعميل دفع الشحن", "مرتجع مدفوع الشحن"].includes(s) || 
           (s === "مرتجع" && returnShippingType === "paid");
 
-        const courierStats = useMemo(() => {
+        // Sum calculations in 100% frontend cache:
+        let totalDeliveredCash = 0;
+        let totalPartialCash = 0;
+        let totalReturnPaidCash = 0;
 
-          let totalDeliveredCash = 0;
-          let totalPartialCash = 0;
-          let totalReturnPaidCash = 0;
-          let deliveredCount = 0;
-          let partialCount = 0;
-          let returnPaidCount = 0;
-          let returnTotalCount = 0;
+        let deliveredCount = 0;
+        let partialCount = 0;
+        let returnPaidCount = 0;
+        let returnTotalCount = 0;
 
-          activeCourierOrders.forEach(o => {
-            if (o.status === "جاهز للاستلام من المورد") return;
+        activeCourierOrders.forEach(o => {
+          // Skip unactivated orders ['جاهز للاستلام من المورد'] per rule (v72)
+          if (o.status === "جاهز للاستلام من المورد") return;
 
-            const financials = getOrderFinancials(o);
+          const financials = getOrderFinancials(o);
+          
+          if (isDelivered(o.status)) {
+            totalDeliveredCash += financials.totalCOD;
+            deliveredCount++;
+          } else if (isPartial(o.status)) {
+            totalPartialCash += Number(o.actualReceivedCash || o.partialAmount || 0);
+            partialCount++;
+          } else if (isReturnedPaid(o.status, o.returnShippingType)) {
+            totalReturnPaidCash += financials.shipPrice;
+            returnPaidCount++;
+          }
 
-            if (isDeliveredStatus(o.status)) {
-              totalDeliveredCash += financials.totalCOD;
-              deliveredCount++;
-            } else if (isPartialStatus(o.status)) {
-              totalPartialCash += Number(o.actualReceivedCash || o.partialAmount || 0);
-              partialCount++;
-            } else if (isReturnedPaidStatus(o.status, o.returnShippingType)) {
-              totalReturnPaidCash += financials.shipPrice;
-              returnPaidCount++;
-            }
+          if (["مرتجع", "مرتجع جديد", "مرتجع جزئي", "قيد المرتجع"].includes(o.status)) {
+            returnTotalCount++;
+          }
+        });
 
-            if (["مرتجع", "مرتجع جديد", "مرتجع جزئي", "قيد المرتجع"].includes(o.status)) {
-              returnTotalCount++;
-            }
-          });
-
-          return {
-            totalDeliveredCash,
-            totalPartialCash,
-            totalReturnPaidCash,
-            deliveredCount,
-            partialCount,
-            returnPaidCount,
-            returnTotalCount,
-            totalCashWallet: totalDeliveredCash + totalPartialCash + totalReturnPaidCash
-          };
-        }, [activeCourierOrders]);
+        const totalCashWallet = totalDeliveredCash + totalPartialCash + totalReturnPaidCash;
 
         const successCommission = Number(courierProfile.commission_success || 25);
         const returnCommission = Number(courierProfile.commission_return || 10);
-        const todayEarnedCommissions = (courierStats.deliveredCount + courierStats.partialCount) * successCommission + (courierStats.returnPaidCount * returnCommission);
-        const totalProductivity = (courierStats.deliveredCount + courierStats.partialCount) + courierStats.returnTotalCount;
-
-        const isDeliveredState = (s: string) => ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(s);
-        const isCourierReturnState = (s: string) => ["مرتجع", "مرتجع جديد", "مرتجع جزئي", "قيد المرتجع"].includes(s);
-        const isPendingCourierState = (s: string) => ["خارج مع المندوب", "تم الإسناد", "قيد التنفيذ", "مع المندوب"].includes(s);
-
-        const courierSmartInsights = useMemo(() => {
-          const pendingDeliveries = activeCourierOrders.filter(o => isPendingCourierState(o.status)).length;
-          const urgentReturns = activeCourierOrders.filter(o => isCourierReturnState(o.status)).length;
-          const deliveredToday = activeCourierOrders.filter(o => isDeliveredState(o.status)).length;
-
-          const recommendation = urgentReturns > 0
-            ? `يوجد ${urgentReturns} مرتجع/مرتجعات تحتاج تصفية سريعة قبل الإغلاق`
-            : pendingDeliveries > 0
-              ? `لا يزال هناك ${pendingDeliveries} شحنة في المسار، راجعها قبل إغلاق الوردية`
-              : `المندوب في وضع ممتاز اليوم، ولا توجد مهام معلقة`;
-
-          return { pendingDeliveries, urgentReturns, deliveredToday, recommendation };
-        }, [activeCourierOrders]);
+        
+        // Strike (fixed commission) x (delivered + partial) + (returned paid x return commission):
+        const todayEarnedCommissions = (deliveredCount + partialCount) * successCommission + (returnPaidCount * returnCommission);
+        const totalProductivity = (deliveredCount + partialCount) + returnTotalCount;
 
         return (
           <div className="space-y-6">
@@ -1572,31 +1530,6 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
                   )}
                 </div>
 
-                {/* Executive Dashboard for Couriers */}
-                <div className="bg-gradient-to-br from-slate-900 to-slate-950 border border-cyan-500/20 rounded-2xl p-4 space-y-3 print:hidden shadow-lg shadow-cyan-500/5">
-                  <div className="flex items-center gap-2">
-                    <ShieldAlert className="text-amber-500" size={15} />
-                    <h3 className="text-xs font-black text-slate-100">🧠 Executive Dashboard للمندوب</h3>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-right">
-                    <div className="bg-slate-950/70 border border-white/5 rounded-xl p-3">
-                      <div className="text-[10px] text-slate-400 font-black">شحنات معلقة</div>
-                      <div className="text-lg font-black text-amber-500 font-mono mt-1">{courierSmartInsights.pendingDeliveries}</div>
-                    </div>
-                    <div className="bg-slate-950/70 border border-white/5 rounded-xl p-3">
-                      <div className="text-[10px] text-slate-400 font-black">مرتجعات تحتاج تصفية</div>
-                      <div className="text-lg font-black text-red-400 font-mono mt-1">{courierSmartInsights.urgentReturns}</div>
-                    </div>
-                    <div className="bg-slate-950/70 border border-white/5 rounded-xl p-3">
-                      <div className="text-[10px] text-slate-400 font-black">تم تسليمها اليوم</div>
-                      <div className="text-lg font-black text-emerald-400 font-mono mt-1">{courierSmartInsights.deliveredToday}</div>
-                    </div>
-                  </div>
-                  <div className="text-[10px] text-slate-400 font-bold leading-relaxed">
-                    {courierSmartInsights.recommendation}
-                  </div>
-                </div>
-
                 {/* ⚡ High-Speed Agile Settlement Dashboard (Three Counters) */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   {/* 💰 Counter 1: Cash Wallet */}
@@ -1609,7 +1542,7 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
                     </div>
                     <div className="space-y-1">
                       <div className="text-2xl font-black text-slate-100 font-mono">
-                        {courierStats.totalCashWallet.toLocaleString("ar")} <span className="text-xs font-bold text-amber-500">ج.م</span>
+                        {totalCashWallet.toLocaleString("ar")} <span className="text-xs font-bold text-amber-500">ج.م</span>
                       </div>
                       <div className="text-[9.5px] text-slate-500 leading-relaxed font-semibold">
                         مجموع كاش أوردرات التسليم الكلي والجزئي ومصاريف شحن المرتجعات المدفوعة حالياً ميدانياً.
@@ -1618,15 +1551,15 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
                     <div className="border-t border-white/4 pt-2.5 grid grid-cols-3 gap-1.5 text-center">
                       <div className="bg-slate-950/40 p-1 rounded">
                         <div className="text-[9px] text-slate-500 font-bold">تسليم كلي</div>
-                        <div className="text-[10px] font-mono font-bold text-emerald-400 mt-0.5">{courierStats.totalDeliveredCash.toLocaleString("ar")}</div>
+                        <div className="text-[10px] font-mono font-bold text-emerald-400 mt-0.5">{totalDeliveredCash.toLocaleString("ar")}</div>
                       </div>
                       <div className="bg-slate-950/40 p-1 rounded">
                         <div className="text-[9px] text-slate-500 font-bold">تسليم جزئي</div>
-                        <div className="text-[10px] font-mono font-bold text-emerald-400 mt-0.5">{courierStats.totalPartialCash.toLocaleString("ar")}</div>
+                        <div className="text-[10px] font-mono font-bold text-emerald-400 mt-0.5">{totalPartialCash.toLocaleString("ar")}</div>
                       </div>
                       <div className="bg-slate-950/40 p-1 rounded">
                         <div className="text-[9px] text-slate-500 font-bold">مرتجع مدفوع</div>
-                        <div className="text-[10px] font-mono font-bold text-emerald-400 mt-0.5">{courierStats.totalReturnPaidCash.toLocaleString("ar")}</div>
+                        <div className="text-[10px] font-mono font-bold text-emerald-400 mt-0.5">{totalReturnPaidCash.toLocaleString("ar")}</div>
                       </div>
                     </div>
                   </div>
@@ -1678,11 +1611,11 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
                     <div className="border-t border-white/4 pt-2.5 grid grid-cols-2 gap-1.5 text-center font-semibold">
                       <div className="bg-slate-950/40 p-1 rounded">
                         <div className="text-[9px] text-slate-500">ناجح / جزئي</div>
-                        <div className="text-xs font-bold text-emerald-400 mt-0.5">{(courierStats.deliveredCount + courierStats.partialCount)} شحنة</div>
+                        <div className="text-xs font-bold text-emerald-400 mt-0.5">{(deliveredCount + partialCount)} شحنة</div>
                       </div>
                       <div className="bg-slate-950/40 p-1 rounded">
                         <div className="text-[9px] text-slate-500">مرتجعات كلية</div>
-                        <div className="text-xs font-bold text-red-400 mt-0.5">{courierStats.returnTotalCount} شحنة</div>
+                        <div className="text-xs font-bold text-red-400 mt-0.5">{returnTotalCount} شحنة</div>
                       </div>
                     </div>
                   </div>
@@ -1746,7 +1679,7 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
                       <button
                         type="button"
                         disabled={settling}
-                        onClick={() => handleInstantWalletSettlement(courierName, courierStats.totalCashWallet, todayEarnedCommissions)}
+                        onClick={() => handleInstantWalletSettlement(courierName, totalCashWallet, todayEarnedCommissions)}
                         className="w-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black py-3 rounded-xl text-xs flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-98 shadow-md disabled:opacity-50 font-sans"
                       >
                         {settling ? (
@@ -1762,7 +1695,7 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
                         )}
                       </button>
                       <p className="text-[9px] text-slate-500 text-center mt-2 font-semibold">
-                        * عند الضغط: سيتم ترحيل مبلغ الكاش ({courierStats.totalCashWallet.toLocaleString("ar")} ج.م) كإيداع بالخزنة، وتسجيل عمولة ({todayEarnedCommissions.toLocaleString("ar")} ج.م) بملف المندوب، وتصفير عداد اليوم.
+                        * عند الضغط: سيتم ترحيل مبلغ الكاش ({totalCashWallet.toLocaleString("ar")} ج.م) كإيداع بالخزنة، وتسجيل عمولة ({todayEarnedCommissions.toLocaleString("ar")} ج.م) بملف المندوب، وتصفير عداد اليوم.
                       </p>
                     </div>
                   </div>
@@ -1797,15 +1730,15 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
                             let statusColor = "text-slate-450 bg-slate-950/40";
                             let cashColor = "text-slate-500";
 
-                            if (isDeliveredStatus(o.status)) {
+                            if (isDelivered(o.status)) {
                               contributedCash = financials.totalCOD;
                               statusColor = "text-emerald-400 bg-emerald-950/20";
                               cashColor = "text-emerald-400 font-black";
-                            } else if (isPartialStatus(o.status)) {
+                            } else if (isPartial(o.status)) {
                               contributedCash = Number(o.actualReceivedCash || o.partialAmount || 0);
                               statusColor = "text-amber-500 bg-amber-950/20";
                               cashColor = "text-amber-400 font-black";
-                            } else if (isReturnedPaidStatus(o.status, o.returnShippingType)) {
+                            } else if (isReturnedPaid(o.status, o.returnShippingType)) {
                               contributedCash = financials.shipPrice;
                               statusColor = "text-teal-400 bg-teal-950/20";
                               cashColor = "text-teal-400 font-black";
@@ -1919,8 +1852,8 @@ export default function Ledger({ token, role, user, activeLedgerMode, orders = [
                         );
                       })
                       .map((o: any, oIdx: number) => {
-                        const isDelivered = isDeliveredStatus(o.status) || isPartialStatus(o.status);
-                        const isReturned = isCourierReturnState(o.status) || (o.status || "").includes("مرتجع");
+                        const isDelivered = ["تم التسليم", "تسليم جزئي"].includes(o.status);
+                        const isReturned = (o.status || "").includes("مرتجع") || ["قيد المرتجع"].includes(o.status);
                         return (
                           <tr key={oIdx} className="hover:bg-slate-900/40">
                             <td className="p-3 font-mono text-slate-300 select-all">{o.trackingId}</td>

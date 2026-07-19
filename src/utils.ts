@@ -88,24 +88,9 @@ export function validatePhone(ph: string): { valid: boolean; msg: string } {
   return { valid: true, msg: "" };
 }
 
-function normalizeApiAction(action: string): string {
-  const clean = (action || "").toString().trim();
-  if (!clean) return clean;
-
-  const aliases: Record<string, string> = {
-    saveStaff: "saveStaffPermissions",
-    saveStaffMember: "saveStaffPermissions",
-    toggleStaff: "toggleStaffStatus",
-    deleteStaffMember: "deleteStaff"
-  };
-
-  return aliases[clean] || clean;
-}
-
 // Unified API caller for the react fullstack container environment
 export async function apiCall(action: string, token: string, extraParams: any = {}, retries = 3): Promise<any> {
-  const normalizedAction = normalizeApiAction(action);
-  const payload = { action: normalizedAction, token, ...extraParams };
+  const payload = { action, token, ...extraParams };
   
   for (let i = 0; i <= retries; i++) {
     try {
