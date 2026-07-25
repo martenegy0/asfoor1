@@ -11,7 +11,96 @@ import DailyClosing from "./components/DailyClosing";
 import SuppliersManagement from "./components/SuppliersManagement";
 import OpsRoom from "./components/OpsRoom";
 import ArchivePortal from "./components/ArchivePortal";
+import DailySummary from "./components/DailySummary";
 import { StaffPermissions } from "./components/StaffPermissions";
+
+const DELIVERED_STATUSES = new Set(["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"]);
+const SUPPLIER_RETURN_STATUSES = new Set(["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"]);
+const ACTIVE_ORDER_STATUSES = new Set(["خارج مع المندوب", "تم الإسناد", "قيد التنفيذ"]);
+const RETURN_EXCLUDE_SETTLED_STATUSES = new Set([
+  "مرتجع بالمستودع",
+  "مرتجع بالستودع",
+  "مرتجع",
+  "مرتجع جديد",
+  "مرتجع جزئي بالمستودع"
+]);
+const RETURNED_TO_VENDOR_STATUSES = new Set([
+  "مرتجع تم تسليمه للمورد",
+  "تم تسليم المرتجع للمورد",
+  "تم تسليم المرتجع للمورد وتصفية حسابه"
+]);
+const IN_PROGRESS_STATUSES = new Set(["قيد التنفيذ", "خارج مع المندوب", "تم الإسناد", "مسند"]);
+const CLOSED_OR_ARCHIVED_STATUSES = new Set([
+  "مؤرشف",
+  "تم تسليم المرتجع للمورد وتصفية حسابه",
+  "مرتجع تم تسليمه للمورد",
+  "تم تسليم المرتجع للمورد"
+]);
+
+function filterOrdersForRole(orderList: any[], activeRole: string, activeUser: string) {
+  const cleanRole = (activeRole || "").toString().trim();
+  const cleanUser = (activeUser || "").toString().trim().toLowerCase();
+  const isAgent = cleanRole === "مندوب" || cleanRole.includes("مندوب");
+  const isSupplier = cleanRole === "مورد" || cleanRole.includes("مورد");
+  const isReturnsOfficer = cleanRole === "مسؤول مرتجعات" || cleanRole.includes("مرتجعات");
+  const isSupervisor = cleanRole === "مشرف" || cleanRole.includes("مشرف");
+
+  if (!Array.isArray(orderList)) {
+    return [];
+  }
+
+  if (isAgent) {
+    return orderList.filter((o: any) => (o.courier || "").toString().trim().toLowerCase() === cleanUser);
+  }
+
+  if (isSupervisor) {
+    const staffCached = localStorage.getItem("fp_staff_permissions_cache");
+    let supervisedNames: string[] = [];
+    if (staffCached) {
+      try {
+        const list = JSON.parse(staffCached);
+        supervisedNames = list
+          .filter((item: any) => (item.supervisor_id || "").toString().trim().toLowerCase() === cleanUser)
+          .map((item: any) => (item.name || "").toString().trim().toLowerCase());
+      } catch (e) {
+        console.error("Error reading staff cache for supervisor filter", e);
+      }
+    }
+    return orderList.filter((o: any) => {
+      const oCou = (o.courier || "").toString().trim().toLowerCase();
+      return oCou && supervisedNames.includes(oCou);
+    });
+  }
+
+  if (isSupplier) {
+    return orderList.filter((o: any) => (o.supplier || "").toString().trim().toLowerCase() === cleanUser);
+  }
+
+  if (isReturnsOfficer) {
+    return orderList.filter((o: any) => {
+      const status = (o.status || "").toString();
+      return (
+        [
+          "مرتجع",
+          "مرتجع بالمستودع",
+          "مرتجع جديد",
+          "مرتجع جاري تسليمه للمكتب",
+          "جاري الرجوع للمورد",
+          "تم تسليم المرتجع للمورد",
+          "جاهز للتسليم للمورد",
+          "مرتجع تم تسليمه للمورد",
+          "تم تسليم المرتجع للمورد وتصفية حسابه",
+          "مرتجع جزئي بالمستودع",
+          "قيد المرتجع",
+          "التسليم للمورد",
+          "جاري تجهيز المرتجع"
+        ].includes(status) || o.returnQueueStatus || status.includes("مرتجع") || status.includes("للمورد")
+      );
+    });
+  }
+
+  return orderList;
+}
 
 function computeDynamicCounters(rawList: any[], userRole: string, userLogin: string, cashboxBal: number) {
   const cleanRole = (userRole || "").toString().trim();
@@ -21,123 +110,136 @@ function computeDynamicCounters(rawList: any[], userRole: string, userLogin: str
 
   const todayStr = getTodayDateStr();
 
-  // 1. Strict Supplier Isolation Guardrail (Adhere to v135 established ledger)
-  if (isSupplier) {
-    const deliveredOrders = rawList.filter((o: any) => o.status === "تم التسليم" || o.status === "تم التسليم بنجاح");
-    const cumulativeCollection = deliveredOrders.reduce((sum, o) => {
-      return sum + (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
-    }, 0);
-    const todayDeliveredOrders = deliveredOrders.filter((o: any) => {
-      const delDate = o.delivDate || o.updatedAt || "";
-      return delDate.startsWith(todayStr);
-    });
-    const todayCollection = todayDeliveredOrders.reduce((sum, o) => {
-      return sum + (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
-    }, 0);
-
-    return {
-      total: rawList.length,
-      delivered: deliveredOrders.length,
-      returned: rawList.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)).length,
-      active: rawList.filter((o: any) => ["خارج مع المندوب", "تم الإسناد", "قيد التنفيذ"].includes(o.status)).length,
-      totalCOD: cumulativeCollection,
-      todayCOD: todayCollection
-    };
-  }
-
-  // 2. Courier active workload calculations (0 active workload once settled)
-  if (isAgent) {
-    const courierActiveOrders = rawList.filter((o: any) => {
-      const isS = o.isSettled === true || o.isSettled === "true" || o.is_settled === "true" || o.is_settled === true || o.isClosed === true || o.isClosed === "true";
-      return !isS;
-    });
-
-    const deliveredOrders = courierActiveOrders.filter((o: any) => o.status === "تم التسليم");
-    const cumulativeCollection = deliveredOrders.reduce((sum, o) => {
-      return sum + (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
-    }, 0);
-    const todayDeliveredOrders = deliveredOrders.filter((o: any) => {
-      const delDate = o.delivDate || o.updatedAt || "";
-      return delDate.startsWith(todayStr);
-    });
-    const todayCollection = todayDeliveredOrders.reduce((sum, o) => {
-      return sum + (Number(o.prodPrice || 0) + Number(o.shipPrice || 0));
-    }, 0);
-
-    return {
-      total: courierActiveOrders.length,
-      delivered: deliveredOrders.length,
-      returned: courierActiveOrders.filter((o: any) => ["مرتجع", "التسليم للمورد", "تم تسليم المرتجع للمورد", "مرتجع تم تسليمه للمورد"].includes(o.status)).length,
-      active: courierActiveOrders.filter((o: any) => ["خارج مع المندوب", "تم الإسناد", "قيد التنفيذ"].includes(o.status)).length,
-      totalCOD: cumulativeCollection,
-      todayCOD: todayCollection
-    };
-  }
-
-  // 3. Admin, Supervisor, and Ops Officer roles (Smart Dynamic Operational Counters)
-  const isUploadedToday = (o: any) => {
-    return (o.createdAt && o.createdAt.startsWith(todayStr)) || (o.updatedAt && o.updatedAt.startsWith(todayStr)) || (o.orderDate && o.orderDate.startsWith(todayStr));
+  const normalizeCOD = (o: any) => Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0)));
+  const statusOf = (o: any) => (o.status || "").toString();
+  const isToday = (o: any) => {
+    const dateStr = (o.delivDate || o.updatedAt || "").toString();
+    return dateStr.startsWith(todayStr);
   };
-  
   const isClosedOrArchived = (o: any) => {
-    const status = o.status || "";
-    return o.isArchived || o.isClosed || o.isSettled || o.is_settled === "true" || ["مؤرشف", "تم تسليم المرتجع للمورد وتصفية حسابه", "مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد"].includes(status);
+    const status = statusOf(o);
+    return !!o.isArchived || !!o.isClosed || o.isSettled === true || o.isSettled === "true" || o.is_settled === true || o.is_settled === "true" || CLOSED_OR_ARCHIVED_STATUSES.has(status);
   };
 
-  const activeDailyCycleOrders = rawList.filter((o: any) => {
-    return isUploadedToday(o) || !isClosedOrArchived(o);
-  });
+  if (isSupplier) {
+    let total = 0;
+    let delivered = 0;
+    let returned = 0;
+    let active = 0;
+    let totalCOD = 0;
+    let todayCOD = 0;
 
-  const dailyDeliveredOrders = rawList.filter((o: any) => {
-    const status = o.status || "";
-    const isDel = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(status);
-    const dateStr = o.delivDate || o.updatedAt || "";
-    return isDel && dateStr.startsWith(todayStr);
-  });
+    for (const o of rawList || []) {
+      total += 1;
+      const status = statusOf(o);
+      const isDel = status === "تم التسليم" || status === "تم التسليم بنجاح";
+      if (isDel) {
+        delivered += 1;
+        const cod = normalizeCOD(o);
+        totalCOD += cod;
+        if (isToday(o)) todayCOD += cod;
+      }
+      if (SUPPLIER_RETURN_STATUSES.has(status)) {
+        returned += 1;
+      }
+      if (ACTIVE_ORDER_STATUSES.has(status)) {
+        active += 1;
+      }
+    }
 
-  const activeInProgressOrders = rawList.filter((o: any) => {
-    const status = o.status || "";
-    const isInField = ["قيد التنفيذ", "خارج مع المندوب", "تم الإسناد", "مسند"].includes(status);
-    return isInField && !isClosedOrArchived(o);
-  });
+    return {
+      total,
+      delivered,
+      returned,
+      active,
+      totalCOD,
+      todayCOD
+    };
+  }
 
-  const activeReturnsOrders = rawList.filter((o: any) => {
-    const status = o.status || "";
-    const isRet = ["مرتجع بالمستودع", "مرتجع بالستودع", "مرتجع", "مرتجع جديد", "مرتجع جزئي بالمستودع"].includes(status);
-    const isReturnedToVendor = ["مرتجع تم تسليمه للمورد", "تم تسليم المرتجع للمورد", "تم تسليم المرتجع للمورد وتصفية حسابه"].includes(status);
-    return isRet && !isReturnedToVendor && !isClosedOrArchived(o);
-  });
+  if (isAgent) {
+    let total = 0;
+    let delivered = 0;
+    let returned = 0;
+    let active = 0;
+    let totalCOD = 0;
+    let todayCOD = 0;
 
-  const todayCODCustodyOrders = rawList.filter((o: any) => {
-    const status = o.status || "";
-    const isDel = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(status);
-    const dateStr = o.delivDate || o.updatedAt || "";
-    const isToday = dateStr.startsWith(todayStr);
-    const isHeldByCourier = !o.isSettled && !o.isClosed && !o.isArchived && o.courier;
-    return isDel && isToday && isHeldByCourier;
-  });
+    for (const o of rawList || []) {
+      const settled = o.isSettled === true || o.isSettled === "true" || o.is_settled === true || o.is_settled === "true" || o.isClosed === true || o.isClosed === "true";
+      if (settled) continue;
+      total += 1;
+      const status = statusOf(o);
+      if (status === "تم التسليم") {
+        delivered += 1;
+        const cod = normalizeCOD(o);
+        totalCOD += cod;
+        if (isToday(o)) todayCOD += cod;
+      }
+      if (SUPPLIER_RETURN_STATUSES.has(status)) {
+        returned += 1;
+      }
+      if (ACTIVE_ORDER_STATUSES.has(status)) {
+        active += 1;
+      }
+    }
 
-  const getCODVal = (o: any) => Number(o.totalCOD || (Number(o.prodPrice || 0) + Number(o.shipPrice || 0)));
+    return {
+      total,
+      delivered,
+      returned,
+      active,
+      totalCOD,
+      todayCOD
+    };
+  }
 
-  const todayCODCustodySum = todayCODCustodyOrders.reduce((sum, o) => sum + getCODVal(o), 0);
+  let total = 0;
+  let delivered = 0;
+  let returned = 0;
+  let active = 0;
+  let todayCOD = 0;
+  let settledVaultCash = 0;
 
-  const settledVaultOrders = rawList.filter((o: any) => {
-    const status = o.status || "";
-    const isS = o.isSettled === true || o.isSettled === "true" || o.is_settled === "true" || o.is_settled === true || o.isClosed || o.isArchived;
-    const isDel = ["تم التسليم", "تم التسليم بنجاح", "تم التسليم (ناجح كاش)"].includes(status);
-    return isS && isDel;
-  });
+  for (const o of rawList || []) {
+    const status = statusOf(o);
+    const rowIsClosed = isClosedOrArchived(o);
+    const rowIsUploadedToday = (o.createdAt && o.createdAt.startsWith(todayStr)) || (o.updatedAt && o.updatedAt.startsWith(todayStr)) || (o.orderDate && o.orderDate.startsWith(todayStr));
+    if (rowIsUploadedToday || !rowIsClosed) {
+      total += 1;
+    }
 
-  const settledVaultCash = settledVaultOrders.reduce((sum, o) => sum + getCODVal(o), 0);
-  const vaultCash = (cleanRole === "مدير" || cleanRole === "محاسب") && cashboxBal > 0 ? cashboxBal : settledVaultCash;
+    if (DELIVERED_STATUSES.has(status) && isToday(o)) {
+      delivered += 1;
+    }
 
+    if (IN_PROGRESS_STATUSES.has(status) && !rowIsClosed) {
+      active += 1;
+    }
+
+    const isRet = RETURN_EXCLUDE_SETTLED_STATUSES.has(status);
+    const isReturnedToVendor = RETURNED_TO_VENDOR_STATUSES.has(status);
+    if (isRet && !isReturnedToVendor && !rowIsClosed) {
+      returned += 1;
+    }
+
+    if (DELIVERED_STATUSES.has(status) && isToday(o) && !o.isSettled && !o.isClosed && !o.isArchived && o.courier) {
+      todayCOD += normalizeCOD(o);
+    }
+
+    if (rowIsClosed && DELIVERED_STATUSES.has(status)) {
+      settledVaultCash += normalizeCOD(o);
+    }
+  }
+
+  const vaultCash = ((cleanRole === "مدير" || cleanRole === "محاسب") && cashboxBal > 0) ? cashboxBal : settledVaultCash;
   return {
-    total: activeDailyCycleOrders.length,
-    delivered: dailyDeliveredOrders.length,
-    returned: activeReturnsOrders.length,
-    active: activeInProgressOrders.length,
+    total,
+    delivered,
+    returned,
+    active,
     totalCOD: vaultCash,
-    todayCOD: todayCODCustodySum
+    todayCOD
   };
 }
 
@@ -450,55 +552,7 @@ export default function App() {
         console.warn("getOrders api failed, using local/mock fallback", err);
       }
 
-      let finalRaw = [...rawOrders];
-      let orderList = [...finalRaw];
-
-      // Strict client-side role filtering safety boundary
-      const cleanUser = (activeUser || "").toString().trim().toLowerCase();
-
-      if (isAgent) {
-        orderList = orderList.filter((o: any) => o.courier && o.courier.toString().trim().toLowerCase() === cleanUser);
-      } else if (isSupervisor) {
-        const staffCached = localStorage.getItem("fp_staff_permissions_cache");
-        let supervisedNames: string[] = [];
-        if (staffCached) {
-          try {
-            const list = JSON.parse(staffCached);
-            supervisedNames = list
-              .filter((item: any) => (item.supervisor_id || "").toString().trim().toLowerCase() === cleanUser)
-              .map((item: any) => (item.name || "").toString().trim().toLowerCase());
-          } catch (e) {
-            console.error("Error reading staff cache for supervisor filter", e);
-          }
-        }
-        orderList = orderList.filter((o: any) => {
-          const oCou = (o.courier || "").toString().trim().toLowerCase();
-          return oCou && supervisedNames.includes(oCou);
-        });
-      } else if (isSupplier) {
-        orderList = orderList.filter((o: any) => o.supplier && o.supplier.toString().trim().toLowerCase() === cleanUser);
-      } else if (isReturnsOfficer) {
-        orderList = orderList.filter((o: any) => 
-          [
-            "مرتجع",
-            "مرتجع بالمستودع",
-            "مرتجع جديد",
-            "مرتجع جاري تسليمه للمكتب",
-            "جاري الرجوع للمورد",
-            "تم تسليم المرتجع للمورد",
-            "جاهز للتسليم للمورد",
-            "مرتجع تم تسليمه للمورد",
-            "تم تسليم المرتجع للمورد وتصفية حسابه",
-            "مرتجع جزئي بالمستودع",
-            "قيد المرتجع",
-            "التسليم للمورد",
-            "جاري تجهيز المرتجع"
-          ].includes(o.status) || 
-          o.returnQueueStatus ||
-          (o.status || "").toString().includes("مرتجع") ||
-          (o.status || "").toString().includes("للمورد")
-        );
-      }
+      const orderList = filterOrdersForRole(rawOrders, activeRole, activeUser);
 
       setOrders(orderList);
       localStorage.setItem("fp_orders_cache", JSON.stringify(orderList));
@@ -522,52 +576,8 @@ export default function App() {
             });
             if (resOrdFull && resOrdFull.ok) {
               const fullRaw = resOrdFull.orders || [];
-              let fullOrderList = [...fullRaw];
-
-              if (isAgent) {
-                fullOrderList = fullOrderList.filter((o: any) => o.courier && o.courier.toString().trim().toLowerCase() === cleanUser);
-              } else if (isSupervisor) {
-                const staffCached = localStorage.getItem("fp_staff_permissions_cache");
-                let supervisedNames: string[] = [];
-                if (staffCached) {
-                  try {
-                    const list = JSON.parse(staffCached);
-                    supervisedNames = list
-                      .filter((item: any) => (item.supervisor_id || "").toString().trim().toLowerCase() === cleanUser)
-                      .map((item: any) => (item.name || "").toString().trim().toLowerCase());
-                  } catch (e) {
-                    console.error("Error reading staff cache for lazy supervisor filter", e);
-                  }
-                }
-                fullOrderList = fullOrderList.filter((o: any) => {
-                  const oCou = (o.courier || "").toString().trim().toLowerCase();
-                  return oCou && supervisedNames.includes(oCou);
-                });
-              } else if (isSupplier) {
-                fullOrderList = fullOrderList.filter((o: any) => o.supplier && o.supplier.toString().trim().toLowerCase() === cleanUser);
-              } else if (isReturnsOfficer) {
-                fullOrderList = fullOrderList.filter((o: any) => 
-                  [
-                    "مرتجع",
-                    "مرتجع بالمستودع",
-                    "مرتجع جديد",
-                    "مرتجع جاري تسليمه للمكتب",
-                    "جاري الرجوع للمورد",
-                    "تم تسليم المرتجع للمورد",
-                    "جاهز للتسليم للمورد",
-                    "مرتجع تم تسليمه للمورد",
-                    "تم تسليم المرتجع للمورد وتصفية حسابه",
-                    "مرتجع جزئي بالمستودع",
-                    "قيد المرتجع",
-                    "التسليم للمورد",
-                    "جاري تجهيز المرتجع"
-                  ].includes(o.status) || 
-                  o.returnQueueStatus ||
-                  (o.status || "").toString().includes("مرتجع") ||
-                  (o.status || "").toString().includes("للمورد")
-                );
-              }
-
+              const fullOrderList = filterOrdersForRole(fullRaw, activeRole, activeUser);
+ 
               setOrders(fullOrderList);
               localStorage.setItem("fp_orders_cache", JSON.stringify(fullOrderList));
 
@@ -844,6 +854,7 @@ export default function App() {
   const showCourierLedgerTab = isAgentState || role === "مدير" || role === "محاسب";
   const showCouriersProfileTab = role === "مدير" || role === "محاسب" || role === "مشرف";
   const showSuppliersPageTab = role === "مدير" || role === "محاسب" || role === "مشرف";
+  const showDailySummaryTab = true;
 
   return (
     <div className="min-h-screen flex flex-col font-sans bg-[#040813] text-[#e2e8f0] relative select-none antialiased">
@@ -953,6 +964,7 @@ export default function App() {
             className="w-full bg-slate-950 border border-white/10 rounded-xl px-4 py-3 text-xs font-black text-amber-500 outline-none appearance-none"
           >
             <option value="orders">🚛 الشحنات</option>
+            <option value="daily_summary">📌 ملخص اليوم</option>
             {showDashTab && <option value="dash">📊 لوحة التحكم</option>}
             {showOpsRoomTab && <option value="ops_room">⚡ غرفة العمليات وجدول المناديب اللحظي</option>}
             {showAddInputTab && <option value="inputs">➕ إضافة أوردرات</option>}
@@ -998,6 +1010,18 @@ export default function App() {
           >
             <LayoutDashboard size={14} />
             <span>لوحة التحكم</span>
+          </button>
+        )}
+
+        {showDailySummaryTab && (
+          <button
+            onClick={() => setActiveTab("daily_summary")}
+            className={`px-5 py-4 text-xs font-black cursor-pointer transition-all border-b-2 flex items-center gap-1.5 whitespace-nowrap ${
+              activeTab === "daily_summary" ? "text-amber-500 border-amber-500" : "text-slate-400 border-transparent hover:text-slate-200"
+          }`}
+          >
+            <Activity size={14} />
+            <span>ملخص اليوم</span>
           </button>
         )}
 
@@ -1151,6 +1175,19 @@ export default function App() {
             setOrders={setOrders}
             couriers={couriers}
             onRefresh={() => refreshAllData()}
+          />
+        )}
+
+        {activeTab === "daily_summary" && (
+          <DailySummary
+            orders={orders}
+            cashboxEntries={cashboxEntries}
+            expenses={expenses}
+            couriers={couriers}
+            role={role}
+            user={username}
+            onRefresh={() => refreshAllData()}
+            loading={loadingOrders}
           />
         )}
 

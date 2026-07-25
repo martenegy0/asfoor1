@@ -2733,11 +2733,6 @@ app.post("/api", async (req, res) => {
     }
     const currentUser = sess.user;
     const currentRole = sess.role;
-    const strongRole = (currentRole || "").toString().trim();
-    const isStrictAdmin = strongRole === "\u0645\u062F\u064A\u0631";
-    const isStrictSupervisor = strongRole === "\u0645\u0634\u0631\u0641";
-    const isStrictCourier = strongRole === "\u0645\u0646\u062F\u0648\u0628" || strongRole.includes("\u0645\u0646\u062F\u0648\u0628");
-    const isStrictSupplier = strongRole === "\u0645\u0648\u0631\u062F" || strongRole.includes("\u0645\u0648\u0631\u062F");
     switch (d.action) {
       // ─────────────────────────────────────────────────────────────
       // GET ORDERS
@@ -5505,36 +5500,6 @@ app.post("/api", async (req, res) => {
           msg: "\u062A\u0645 \u0625\u0646\u0634\u0627\u0621 \u0627\u0644\u062D\u0633\u0627\u0628 \u0648\u0625\u0639\u062F\u0627\u062F \u0627\u0644\u0635\u0644\u0627\u062D\u064A\u0627\u062A \u0648\u0627\u0644\u0645\u0644\u0641 \u0627\u0644\u0645\u0627\u0644\u064A \u0628\u0646\u062C\u0627\u062D"
         });
       }
-      case "toggleStaffStatus": {
-        if (currentRole !== "\u0645\u062F\u064A\u0631") {
-          return err(res, "\u0635\u0644\u0627\u062D\u064A\u0629 \u062D\u0635\u0631\u064A\u0629 \u0644\u0645\u062F\u064A\u0631 \u0627\u0644\u0646\u0638\u0627\u0645");
-        }
-        const staffName = (d.staffName || "").toString().trim();
-        const active = (d.active || "\u0646\u0639\u0645").toString().trim();
-        if (!staffName) return err(res, "\u0627\u0633\u0645 \u0627\u0644\u0645\u0648\u0638\u0641 \u0645\u0641\u0642\u0648\u062F");
-        const staffEntry = db.staffPermissions.find((item) => item.name.toString().trim() === staffName);
-        if (staffEntry) {
-          staffEntry.active = active;
-        }
-        const userEntry = db.users.find((item) => item.name.toString().trim() === staffName);
-        if (userEntry) {
-          userEntry.active = active;
-        }
-        writeDB(db);
-        return ok(res, { msg: active === "\u0646\u0639\u0645" ? "\u062A\u0645 \u062A\u0641\u0639\u064A\u0644 \u0627\u0644\u0645\u0648\u0638\u0641 \u0628\u0646\u062C\u0627\u062D" : "\u062A\u0645 \u0625\u064A\u0642\u0627\u0641 \u0627\u0644\u0645\u0648\u0638\u0641 \u0628\u0646\u062C\u0627\u062D" });
-      }
-      case "deleteStaff": {
-        if (currentRole !== "\u0645\u062F\u064A\u0631") {
-          return err(res, "\u0635\u0644\u0627\u062D\u064A\u0629 \u062D\u0635\u0631\u064A\u0629 \u0644\u0645\u062F\u064A\u0631 \u0627\u0644\u0646\u0638\u0627\u0645");
-        }
-        const staffName = (d.staffName || "").toString().trim();
-        if (!staffName) return err(res, "\u0627\u0633\u0645 \u0627\u0644\u0645\u0648\u0638\u0641 \u0645\u0641\u0642\u0648\u062F");
-        db.staffPermissions = (db.staffPermissions || []).filter((item) => item.name.toString().trim() !== staffName);
-        db.users = (db.users || []).filter((item) => item.name.toString().trim() !== staffName);
-        db.couriers = (db.couriers || []).filter((item) => item.name.toString().trim() !== staffName);
-        writeDB(db);
-        return ok(res, { msg: "\u062A\u0645 \u062D\u0630\u0641 \u0627\u0644\u0645\u0648\u0638\u0641 \u0628\u0646\u062C\u0627\u062D" });
-      }
       case "updateUser": {
         if (currentRole !== "\u0645\u062F\u064A\u0631") {
           return err(res, "\u0635\u0644\u0627\u062D\u064A\u0629 \u062D\u0635\u0631\u064A\u0629 \u0644\u0645\u062F\u064A\u0631 \u0627\u0644\u0646\u0638\u0627\u0645");
@@ -5592,7 +5557,7 @@ app.post("/api", async (req, res) => {
           name: staff.name.trim(),
           role: staff.role,
           pass: hashPassword(d.pass || "123456"),
-          active: staff.active || "\u0646\u0639\u0645",
+          active: "\u0646\u0639\u0645",
           email: staff.name.trim() + "@friendplus.com",
           perms: getPermissionsStringForStaff(staff)
         };
@@ -5600,7 +5565,6 @@ app.post("/api", async (req, res) => {
           db.users.push(userObj);
         } else {
           db.users[uIdx].role = staff.role;
-          db.users[uIdx].active = staff.active || db.users[uIdx].active || "\u0646\u0639\u0645";
           db.users[uIdx].perms = getPermissionsStringForStaff(staff);
           if (d.pass) {
             db.users[uIdx].pass = hashPassword(d.pass);
