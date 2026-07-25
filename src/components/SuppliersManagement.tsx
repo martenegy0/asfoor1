@@ -5,26 +5,7 @@ import {
   Search, Filter, Calendar, Printer, FileText, ArrowRight,
   TrendingUp, TrendingDown, Layers, Copy, Check, Info, Download
 } from "lucide-react";
-import { apiCall, normalizeDateToYMD } from "../utils";
-
-const PAYMENT_KEYWORDS = ["دفع نقدي", "سداد", "سداد مورد", "دفعة"];
-const ADJUSTMENT_KEYWORDS = ["خصم", "سحب", "تعديل", "عكسية"];
-const SETTLEMENT_KEYWORDS = [...PAYMENT_KEYWORDS, ...ADJUSTMENT_KEYWORDS];
-const RETURNED_DELIVERED_PATTERNS = [
-  "تم تسليم المرتجع للمورد",
-  "مرتجع تم تسليمه للمورد",
-  "التسليم للمورد",
-  "تم تسليم المرتجع للمورد وتصفية حسابه",
-  "تسليم المرتجع للمورد",
-  "تسليمه للمورد",
-  "تصفية حسابه",
-  "مرتجع والعميل دفع الشحن",
-  "مرتجع مدفوع الشحن"
-];
-
-function normalizeNameKey(name: string | undefined) {
-  return (name || "").toString().trim().toLowerCase();
-}
+import { apiCall } from "../utils";
 
 interface SuppliersManagementProps {
   token: string;
@@ -81,7 +62,6 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
   const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
   const [ledgerStats, setLedgerStats] = useState<any>(null);
   const [dailyLedgerData, setDailyLedgerData] = useState<any>(null);
-  const [statementCache, setStatementCache] = useState<Record<string, { entries: LedgerEntry[]; stats: any; dailyLedgerData: any }>>({});
   const [isLedgerLoading, setIsLedgerLoading] = useState(false);
   const [copiedTracking, setCopiedTracking] = useState<string | null>(null);
   const [visibleEntriesLimit, setVisibleEntriesLimit] = useState<number>(50);
@@ -141,26 +121,6 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
     return normalizeArabicText(na) === normalizeArabicText(nb);
   };
 
-  const supplierDetailsMap = useMemo(() => {
-    const map = new Map<string, any>();
-    suppliersDetails.forEach((item) => {
-      if (item && item.name) {
-        map.set(normalizeNameKey(item.name), item);
-      }
-    });
-    return map;
-  }, [suppliersDetails]);
-
-  const accountsMap = useMemo(() => {
-    const map = new Map<string, any>();
-    accounts.forEach((item) => {
-      if (item && item.name) {
-        map.set(normalizeNameKey(item.name), item);
-      }
-    });
-    return map;
-  }, [accounts]);
-
   // Calculate unique supplier names
   const uniqueSuppliersList = useMemo(() => {
     const names = new Set<string>();
@@ -183,7 +143,18 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
 
     const isReturnedDelivered = (status: string) => {
       const s = (status || "").toString().trim();
-      return RETURNED_DELIVERED_PATTERNS.some((p) => s.includes(p));
+      const patterns = [
+        "تم تسليم المرتجع للمورد",
+        "مرتجع تم تسليمه للمورد",
+        "التسليم للمورد",
+        "تم تسليم المرتجع للمورد وتصفية حسابه",
+        "تسليم المرتجع للمورد",
+        "تسليمه للمورد",
+        "تصفية حسابه",
+        "مرتجع والعميل دفع الشحن",
+        "مرتجع مدفوع الشحن"
+      ];
+      return patterns.some((p) => s.includes(p));
     };
 
     const total = supplierOrders.length;
@@ -204,24 +175,6 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
 
   // Initial bindings
   useEffect(() => {
-    const cachedAccounts = localStorage.getItem("fp_supplier_accounts_cache");
-    if (cachedAccounts) {
-      try {
-        setAccounts(JSON.parse(cachedAccounts));
-      } catch (e) {
-        console.warn("Invalid supplier accounts cache", e);
-      }
-    }
-
-    const cachedSuppliers = localStorage.getItem("fp_registered_suppliers_cache");
-    if (cachedSuppliers) {
-      try {
-        setAllRegisteredSuppliers(JSON.parse(cachedSuppliers));
-      } catch (e) {
-        console.warn("Invalid registered suppliers cache", e);
-      }
-    }
-
     initializeData();
   }, [token]);
 
@@ -264,11 +217,9 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
 
       if (resAcc.ok && resAcc.accounts) {
         setAccounts(resAcc.accounts);
-        localStorage.setItem("fp_supplier_accounts_cache", JSON.stringify(resAcc.accounts));
       }
       if (resSup.ok && resSup.suppliers) {
         setAllRegisteredSuppliers(resSup.suppliers);
-        localStorage.setItem("fp_registered_suppliers_cache", JSON.stringify(resSup.suppliers));
       }
     } catch (err: any) {
       setErrorMsg("عذراً، فشل تهيئة وإحضار بيانات الفوترة: " + err.message);
@@ -281,38 +232,14 @@ export default function SuppliersManagement({ token, role, orders = [], user = "
   async function fetchSupplierStatement(supplierName: string) {
     const targetName = supplierName || (isSupplierRole ? user : "");
     if (!targetName) return;
-    const cacheKey = normalizeNameKey(targetName);
-    const cached = statementCache[cacheKey];
-    if (cached) {
-      setLedgerEntries(cached.entries);
-      setLedgerStats(cached.stats);
-      setDailyLedgerData(cached.dailyLedgerData);
-    }
-    setIsLedgerLoading(!cached);
+    setIsLedgerLoading(true);
     setErrorMsg("");
     try {
       const res = await apiCall("getSupplierLedger", token, { supplier: targetName });
       if (res.ok) {
-        const rawEntries = res.entries || [];
-        const augmentedEntries = rawEntries.map((entry: any) => ({
-          ...entry,
-          __normalizedDateYMD: normalizeDateToYMD(entry.date || entry.createdAt || entry.orderDate || entry["تاريخ"] || ""),
-          __typeLower: (entry.type || "").toString().toLowerCase(),
-          __descLower: (entry.desc || "").toString().toLowerCase(),
-          __trackingLower: (entry.tracking || "").toString().toLowerCase()
-        }));
-
-        setLedgerEntries(augmentedEntries);
+        setLedgerEntries(res.entries || []);
         setLedgerStats(res.stats || null);
         setDailyLedgerData(res.dailyLedger || null);
-        setStatementCache(prev => ({
-          ...prev,
-          [cacheKey]: {
-            entries: augmentedEntries,
-            stats: res.stats || null,
-            dailyLedgerData: res.dailyLedger || null
-          }
-        }));
       } else {
         setErrorMsg(res.error || "خطأ أثناء تحميل كشف الحساب التفصيلي.");
       }
