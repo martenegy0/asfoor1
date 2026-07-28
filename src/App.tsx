@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { LogOut, RefreshCw, PlusCircle, LayoutDashboard, Truck, Wallet, FileText, Settings, Users, BookOpen, Layers, History, Calendar, Download, Activity } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { SpeedInsights } from '@vercel/speed-insights/react';
 import { apiCall, getMockOrders, getMockExpenses, getMockCashboxEntries, getTodayDateStr } from "./utils";
 import Login from "./components/Login";
 import Dashboard from "./components/Dashboard";
@@ -1935,7 +1934,6 @@ export default function App() {
           </AnimatePresence>
         </div>
       )}
-      <SpeedInsights />
     </div>
   );
 }
